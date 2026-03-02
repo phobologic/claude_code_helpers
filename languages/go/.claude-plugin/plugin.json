@@ -1,0 +1,6 @@
+{
+  "name": "claude-go",
+  "version": "1.0.0",
+  "description": "Go language support: goimports auto-formatting on file edits, Go coding conventions",
+  "hooks": "./hooks/hooks.json"
+}

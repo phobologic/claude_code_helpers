@@ -4,7 +4,38 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Purpose
 
-This repository contains custom slash commands and sub-agents for Claude Code, focused on **code review**. The multi-review system runs specialized agents in parallel to catch issues that a single-pass review would miss.
+This repository is the source of truth for `~/.claude/` — personal Claude Code dotfiles.
+It provides global slash commands, sub-agents for multi-agent code review, a global CLAUDE.md
+with working style rules, and per-language plugins for auto-formatting.
+
+## Repository Structure
+
+```
+commands/       Global slash commands (review, multi-review, migrate-beads)
+agents/         Sub-agents for multi-agent code review (5 specialized reviewers)
+languages/      Per-language Claude Code plugins (go, python)
+bin/            Utility scripts (tk plugins, etc.)
+docs/           Documentation and migration guides
+CLAUDE.global.md  Global CLAUDE.md — symlinked to ~/.claude/CLAUDE.md
+install.sh      Sets up ~/.claude/ symlinks from scratch
+```
+
+## Installation
+
+Run `./install.sh` to configure `~/.claude/`:
+- `~/.claude/CLAUDE.md` → `CLAUDE.global.md`
+- `~/.claude/commands/` → `commands/`
+- `~/.claude/agents/` → `agents/`
+
+To add language support to a project:
+```
+# Step 1 — add the marketplace once per machine:
+/plugin marketplace add ~/git/claude_code/languages
+
+# Step 2 — install in your project:
+/plugin install claude-go@claude-languages
+/plugin install claude-python@claude-languages
+```
 
 ## Architecture
 
@@ -16,6 +47,12 @@ This repository contains custom slash commands and sub-agents for Claude Code, f
 - Specialized review agents are stored in the `agents/` directory
 - Agents are used by the multi-review system to provide specialized code analysis
 - The review coordinator aggregates findings from all reviewers
+
+### Language Plugins
+- Each language in `languages/` is a Claude Code plugin
+- Plugins provide PostToolUse hooks for auto-formatting and coding convention rules
+- Installed per-project with `/plugin install` — no `settings.json` editing required
+- See `languages/README.md` for details
 
 ## Available Commands
 
@@ -37,9 +74,10 @@ This repository contains custom slash commands and sub-agents for Claude Code, f
 - Multi-review creates reports in `.code-review/` directory
 - Issues are rated by importance: Critical, High, Medium, Low
 - Final reports include file locations and line numbers
-- When `bd` is installed and initialized, `/multi-review` creates issues directly in bd instead of writing to `.code-review/*.md` files. An epic is created per review session with child issues for each finding. Use `bd children <epic-id>` to browse results.
+- When `tk` is installed, `/multi-review` creates tickets directly instead of writing to `.code-review/*.md` files. An epic is created per review session with child tickets for each finding. Use `tk query '.[] | select(.parent=="<epic-id>")'` to browse results.
 
 ## Important Notes
 
+- `CLAUDE.global.md` is symlinked to `~/.claude/CLAUDE.md` — it cannot be renamed to `CLAUDE.md` here because that would cause it to be loaded twice when working in this repo
 - Review reports are generated in `.code-review/` directory
 - Local settings should be in `settings.local.json` (gitignored)

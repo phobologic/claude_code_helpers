@@ -1,46 +1,58 @@
-# Claude Code Review Commands
+# Claude Code Dotfiles
 
-Custom slash commands and sub-agents for [Claude Code](https://docs.anthropic.com/en/docs/claude-code), focused on **multi-agent code review**.
+Personal Claude Code dotfiles — global slash commands, multi-agent code review, language plugins,
+and working style rules for `~/.claude/`.
 
-## Why Multi-Review?
+## What's Here
 
-Claude Code already handles planning, requirements, design, implementation, and commit messages well on its own. What it *can't* easily do in a single pass is review code from multiple specialized perspectives simultaneously.
+| Directory | Purpose |
+|-----------|---------|
+| `commands/` | Global slash commands: `/review`, `/multi-review`, `/migrate-beads` |
+| `agents/` | 5 specialized code review sub-agents |
+| `languages/` | Per-language Claude Code plugins (Go, Python) |
+| `bin/` | Utility scripts (tk plugins, etc.) |
+| `CLAUDE.global.md` | Global CLAUDE.md with personal working style rules |
+| `install.sh` | Sets up `~/.claude/` symlinks from scratch |
 
-The `/multi-review` command runs 4 specialized sub-agents in parallel — each analyzing your changes through a different lens — then aggregates and deduplicates findings into a prioritized report. This catches issues that a single review pass would miss.
-
-## Getting Started
-
-### Prerequisites
-
-You need [Claude Code installed](https://docs.anthropic.com/en/docs/claude-code/quickstart).
-
-### Installation
-
-Copy the commands and agents to your project's `.claude/` directory:
+## Installation
 
 ```bash
-# Copy to your project
-cp -r /path/to/this/repo/commands .claude/
-cp -r /path/to/this/repo/agents .claude/
+git clone https://github.com/you/claude_code ~/git/claude_code
+cd ~/git/claude_code
+./install.sh
 ```
 
-Or symlink for personal use across all projects:
+This creates:
+- `~/.claude/CLAUDE.md` → `CLAUDE.global.md`
+- `~/.claude/commands/` → `commands/`
+- `~/.claude/agents/` → `agents/`
 
-```bash
-mkdir -p ~/.claude/commands ~/.claude/agents
-ln -s /path/to/this/repo/commands/* ~/.claude/commands/
-ln -s /path/to/this/repo/agents/* ~/.claude/agents/
+## Adding Language Support to a Project
+
+The plugin system uses a two-step workflow:
+
+**Step 1 — add the marketplace once per machine:**
+```
+/plugin marketplace add ~/git/claude_code/languages
 ```
 
-## Commands
+**Step 2 — install in your project:**
+```
+/plugin install claude-go@claude-languages
+/plugin install claude-python@claude-languages
+```
+
+This activates auto-formatting hooks (goimports for Go, ruff for Python) with zero
+`settings.json` editing. Multiple languages can be active simultaneously.
+
+See [`languages/README.md`](languages/README.md) for details.
+
+## Review Commands
 
 ### `/review` — Quick Single-Pass Review
 
-Reviews all uncommitted changes and provides feedback on:
-- Code quality, correctness, and security
-- Performance concerns
-- Test coverage gaps
-- Design and modularity
+Reviews all uncommitted changes and provides feedback on code quality, correctness,
+security, performance, and test coverage.
 
 ### `/multi-review` — Parallel Multi-Agent Review
 
@@ -67,21 +79,15 @@ Issues are rated by importance: **Critical**, **High**, **Medium**, **Low**.
 
 #### Output
 
-Results go to `.code-review/final-report.md`, or directly into [bd](https://github.com/anthropics/bd) issues if `bd` is initialized.
+Results go to `.code-review/final-report.md`, or directly into [tk](https://github.com/wedow/ticket)
+tickets if `tk` is installed.
 
 See [examples/multi-review-example.md](examples/multi-review-example.md) for a sample report.
 
-## Configuration
+## Migrating from v1
 
-Claude Code uses hierarchical settings:
-
-1. **User settings** (`~/.claude/settings.json`) — All projects
-2. **Project settings** (`.claude/settings.json`) — Shared with team
-3. **Local settings** (`.claude/settings.local.json`) — Personal overrides, not committed
-
-## What About Planning, Requirements, Design, etc.?
-
-This repo previously included commands for `/requirements`, `/design`, `/plan`, `/phase`, `/feature`, `/feature-complete`, and `/commit`. These were removed because Claude Code with Opus 4.6 handles these tasks well conversationally — plan mode, in particular, makes the rigid `/plan` → `/phase` pipeline unnecessary. The multi-review system remains because parallel specialized analysis is genuinely additive over what you get from a single prompt.
+If you set up projects with the old `setup.sh`, see
+[`docs/migration-v1-to-v2.md`](docs/migration-v1-to-v2.md).
 
 ## Resources
 

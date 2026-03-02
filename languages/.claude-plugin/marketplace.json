@@ -1,0 +1,21 @@
+{
+  "name": "claude-languages",
+  "owner": {
+    "name": "mike"
+  },
+  "metadata": {
+    "description": "Per-language Claude Code plugins: auto-formatting hooks and coding conventions"
+  },
+  "plugins": [
+    {
+      "name": "claude-go",
+      "source": "./go",
+      "description": "Go language support: goimports auto-formatting on file edits, Go coding conventions"
+    },
+    {
+      "name": "claude-python",
+      "source": "./python",
+      "description": "Python language support: ruff auto-formatting and lint-fix on file edits, Python coding conventions"
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# tk-plugin: Show multiple tickets at once (space-separated IDs)
+
+TK="${TK_SCRIPT:-tk}"
+
+if [ $# -eq 0 ]; then
+    echo "Usage: tk show-multi <id> [id2 id3 ...]" >&2
+    exit 1
+fi
+
+first=true
+for id in "$@"; do
+    if [ "$first" = true ]; then
+        first=false
+    else
+        echo "---"
+    fi
+    "$TK" show "$id"
+done

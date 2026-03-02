@@ -1,0 +1,6 @@
+{
+  "name": "claude-python",
+  "version": "1.0.0",
+  "description": "Python language support: ruff auto-formatting and lint-fix on file edits, Python coding conventions",
+  "hooks": "./hooks/hooks.json"
+}
