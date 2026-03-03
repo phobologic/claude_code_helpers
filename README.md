@@ -1,7 +1,7 @@
 # Claude Code Dotfiles
 
 Personal Claude Code dotfiles — global slash commands, multi-agent code review, language plugins,
-and working style rules for `~/.claude/`.
+tool plugins, and working style rules for `~/.claude/`.
 
 ## What's Here
 
@@ -10,6 +10,7 @@ and working style rules for `~/.claude/`.
 | `commands/` | Global slash commands: `/review`, `/multi-review`, `/migrate-beads` |
 | `agents/` | 5 specialized code review sub-agents |
 | `languages/` | Per-language Claude Code plugins (Go, Python) |
+| `tools/` | Per-tool Claude Code plugins (Railway, SQLAlchemy) |
 | `bin/` | Utility scripts (tk plugins, etc.) |
 | `CLAUDE.global.md` | Global CLAUDE.md with personal working style rules |
 | `install.sh` | Sets up `~/.claude/` symlinks from scratch |
@@ -27,9 +28,14 @@ This creates:
 - `~/.claude/commands/` → `commands/`
 - `~/.claude/agents/` → `agents/`
 
-## Adding Language Support to a Project
+## Plugins
 
-The plugin system uses a two-step workflow:
+The plugin system uses a two-step workflow: add a marketplace once per machine, then install
+individual plugins per project. Multiple plugins can be active simultaneously.
+
+### Language Plugins
+
+Auto-formatting hooks and coding conventions for Go and Python.
 
 **Step 1 — add the marketplace once per machine:**
 ```
@@ -42,10 +48,26 @@ The plugin system uses a two-step workflow:
 /plugin install claude-python@claude-languages
 ```
 
-This activates auto-formatting hooks (goimports for Go, ruff for Python) with zero
-`settings.json` editing. Multiple languages can be active simultaneously.
+This activates auto-formatting (goimports for Go, ruff for Python) with zero `settings.json`
+editing. See [`languages/README.md`](languages/README.md) for details.
 
-See [`languages/README.md`](languages/README.md) for details.
+### Tool Plugins
+
+CLI reference and conventions for Railway deployment and async SQLAlchemy/Alembic.
+
+**Step 1 — add the marketplace once per machine:**
+```
+/plugin marketplace add ~/git/claude_code/tools
+```
+
+**Step 2 — install in your project:**
+```
+/plugin install claude-railway@claude-tools
+/plugin install claude-sqlalchemy@claude-tools
+```
+
+These are rules-only plugins (no hooks) — they load CLI cheat sheets and safety conventions
+automatically when active. See [`tools/README.md`](tools/README.md) for details.
 
 ## Review Commands
 

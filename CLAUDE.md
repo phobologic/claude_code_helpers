@@ -14,6 +14,7 @@ with working style rules, and per-language plugins for auto-formatting.
 commands/       Global slash commands (review, multi-review, migrate-beads)
 agents/         Sub-agents for multi-agent code review (5 specialized reviewers)
 languages/      Per-language Claude Code plugins (go, python)
+tools/          Per-tool Claude Code plugins (railway, sqlalchemy)
 bin/            Utility scripts (tk plugins, etc.)
 docs/           Documentation and migration guides
 CLAUDE.global.md  Global CLAUDE.md — symlinked to ~/.claude/CLAUDE.md
@@ -37,6 +38,16 @@ To add language support to a project:
 /plugin install claude-python@claude-languages
 ```
 
+To add tool/deployment plugins to a project:
+```
+# Step 1 — add the marketplace once per machine:
+/plugin marketplace add ~/git/claude_code/tools
+
+# Step 2 — install in your project:
+/plugin install claude-railway@claude-tools
+/plugin install claude-sqlalchemy@claude-tools
+```
+
 ## Architecture
 
 ### Slash Commands
@@ -53,6 +64,12 @@ To add language support to a project:
 - Plugins provide PostToolUse hooks for auto-formatting and coding convention rules
 - Installed per-project with `/plugin install` — no `settings.json` editing required
 - See `languages/README.md` for details
+
+### Tool Plugins
+- Each tool in `tools/` is a Claude Code plugin for deployment and database tooling
+- Plugins provide rules (CLI reference, conventions) loaded automatically when active
+- No hooks — rules-only plugins
+- See `tools/README.md` for details
 
 ## Available Commands
 

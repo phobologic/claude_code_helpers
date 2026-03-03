@@ -1,0 +1,5 @@
+{
+  "name": "claude-sqlalchemy",
+  "version": "1.0.0",
+  "description": "SQLAlchemy async patterns and Alembic migration conventions"
+}
