@@ -38,6 +38,13 @@ link "$DOTFILES/CLAUDE.global.md" "$CLAUDE/CLAUDE.md"
 link "$DOTFILES/skills"           "$CLAUDE/skills"
 link "$DOTFILES/agents"           "$CLAUDE/agents"
 
+# Symlink tk plugin scripts from bin/ into ~/.local/bin/
+mkdir -p "$HOME/.local/bin"
+for script in "$DOTFILES/bin"/tk-*; do
+  [[ -f "$script" ]] || continue
+  link "$script" "$HOME/.local/bin/$(basename "$script")"
+done
+
 mkdir -p "$CLAUDE/rules"
 link "$DOTFILES/languages/go/rules/CLAUDE.md"     "$CLAUDE/rules/go.md"
 link "$DOTFILES/languages/python/rules/CLAUDE.md" "$CLAUDE/rules/python.md"

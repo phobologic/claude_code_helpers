@@ -86,15 +86,29 @@ and any gotchas encountered.
 
 **Epics and hierarchy:**
 
-- Create epics with `-t epic` to group related work (e.g., code review
-  findings, multi-part features)
-- Attach children with `--parent <epic-id>` on `tk create` (no `=` sign)
-- Types: `bug`, `task`, `feature`, `epic`, `chore`
+Two distinct relationships — use them correctly and often together:
 
+- **`--parent <epic-id>`** = membership. This ticket *belongs to* this epic.
+  Always use when creating tickets for an epic (no `=` sign).
+- **`tk dep <blocked> <blocker>`** = ordering. The blocked ticket cannot start
+  until the blocker is done. Use for sequencing, not grouping.
+
+Use **both** when a ticket belongs to an epic and also has prerequisites:
+
+```bash
+EPIC=$(tk create "Auth system" -t epic -p 1 -d "...")
+
+# Membership: --parent adds the ticket to the epic
+T1=$(tk create "Design schema"   -t task -p 1 --parent $EPIC)
+T2=$(tk create "Implement login" -t task -p 1 --parent $EPIC)
+T3=$(tk create "Write tests"     -t task -p 2 --parent $EPIC)
+
+# Ordering: dep expresses what must finish first
+tk dep $T2 $T1    # login blocked until schema done
+tk dep $T3 $T2    # tests blocked until login done
 ```
-tk create "Improve X" -t epic -p 1 -d "..."
-tk create "Fix Y" -t bug -p 1 --parent <epic-id> -d "..."
-```
+
+Types: `bug`, `task`, `feature`, `epic`, `chore`
 
 **Querying tickets:**
 
@@ -111,7 +125,7 @@ tk query '.parent == "<epic-id>"'           # Find children of an epic
 - Priority uses integers 0-4 (0=critical, 4=backlog), not words
 - Never use `tk edit` — it opens `$EDITOR` which blocks agents
 - Use `tk add-note <id> "text"` to append context instead of editing
-- `--parent` sets a parent epic; `tk dep <child> <parent>` sets a dependency — these are different things, don't conflate them
+- Always use `--parent` to add tickets to an epic (membership). Use `tk dep` only for execution ordering. Never substitute `tk dep` for `--parent`.
 - Tickets are gitignored — no need to commit them
 
 ## Living Document

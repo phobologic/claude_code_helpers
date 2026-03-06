@@ -1,0 +1,183 @@
+#!/usr/bin/env bash
+# tk-plugin: List open epics with their child tickets grouped by priority
+
+set -euo pipefail
+
+TICKETS_DIR="${TICKETS_DIR:-$HOME/.tickets}"
+
+if [ ! -d "$TICKETS_DIR" ]; then
+    echo "No tickets directory found at $TICKETS_DIR" >&2
+    exit 1
+fi
+
+python3 - "$TICKETS_DIR" <<'EOF'
+import sys
+import os
+import re
+from collections import defaultdict, deque
+
+tickets_dir = sys.argv[1]
+PRIORITY_LABELS = {
+    "0": "P0 (critical)",
+    "1": "P1 (high)",
+    "2": "P2 (normal)",
+    "3": "P3 (low)",
+    "4": "P4 (backlog)",
+}
+MAX_PER_PRIORITY = 5
+
+def parse_ticket(path):
+    with open(path) as f:
+        content = f.read()
+
+    parts = content.split("---", 2)
+    if len(parts) < 3:
+        return None
+
+    ticket = {}
+    for line in parts[1].splitlines():
+        line = line.strip()
+        if ": " in line:
+            key, _, val = line.partition(": ")
+            ticket[key.strip()] = val.strip()
+
+    # Parse arrays like deps: [a, b]
+    for key in ("deps", "links", "tags"):
+        if key in ticket:
+            val = ticket[key].strip("[]")
+            ticket[key] = [v.strip() for v in val.split(",") if v.strip()] if val else []
+
+    body = parts[2].strip()
+    title_match = re.search(r"^#\s+(.+)$", body, re.MULTILINE)
+    ticket["title"] = title_match.group(1).strip() if title_match else "(untitled)"
+
+    if title_match:
+        after_title = body[title_match.end():].strip()
+        desc_match = re.match(r"^([^#]+)", after_title, re.DOTALL)
+        ticket["description"] = desc_match.group(1).strip() if desc_match else ""
+    else:
+        ticket["description"] = ""
+
+    ticket.setdefault("id", os.path.basename(path).replace(".md", ""))
+    ticket.setdefault("deps", [])
+    return ticket
+
+# Load all tickets
+all_tickets = []
+for fname in os.listdir(tickets_dir):
+    if not fname.endswith(".md"):
+        continue
+    t = parse_ticket(os.path.join(tickets_dir, fname))
+    if t:
+        all_tickets.append(t)
+
+by_id = {t["id"]: t for t in all_tickets}
+
+# Build parent-to-children index
+children_of = defaultdict(list)
+for t in all_tickets:
+    if "parent" in t:
+        children_of[t["parent"]].append(t["id"])
+
+def collect_epic_tickets(epic_id):
+    """BFS over parent and dep edges to find all tickets in scope of an epic.
+
+    Follows two relationships:
+    - parent: ticket.parent == current_id  (correct membership via --parent)
+    - deps:   current_ticket.deps          (may include tickets added via tk dep
+              instead of --parent, or ordering deps between children)
+
+    Does not recurse into other epics (avoids sub-epic expansion).
+    Returns all reachable non-epic tickets with status != closed.
+    """
+    visited = {epic_id}
+    queue = deque([epic_id])
+    result = []
+
+    while queue:
+        current_id = queue.popleft()
+        current = by_id.get(current_id)
+        if not current:
+            continue
+
+        # Expand via parent relationship (children of current)
+        for child_id in children_of.get(current_id, []):
+            if child_id not in visited:
+                visited.add(child_id)
+                child = by_id.get(child_id)
+                if child and child.get("type") != "epic":
+                    queue.append(child_id)
+
+        # Expand via deps (things current depends on)
+        for dep_id in current.get("deps", []):
+            if dep_id not in visited:
+                visited.add(dep_id)
+                dep = by_id.get(dep_id)
+                if dep and dep.get("type") != "epic":
+                    queue.append(dep_id)
+
+        # Collect non-epic, non-closed, non-epic-root tickets
+        if current_id != epic_id:
+            t = by_id.get(current_id)
+            if t and t.get("status", "open") != "closed":
+                result.append(t)
+
+    return result
+
+# Find open epics sorted by creation date
+open_epics = sorted(
+    [t for t in all_tickets if t.get("type") == "epic" and t.get("status", "open") != "closed"],
+    key=lambda t: t.get("created", ""),
+)
+
+if not open_epics:
+    print("No open epics.")
+    sys.exit(0)
+
+def format_date(iso):
+    return iso[:10] if iso else "?"
+
+def priority_sort_key(t):
+    return (int(t.get("priority", "2")), t.get("created", ""))
+
+for epic in open_epics:
+    eid = epic["id"]
+    status = epic.get("status", "open")
+    print(f"{'='*60}")
+    print(f"Epic: {epic['title']}  [{eid}]  ({status})")
+    print(f"Created: {format_date(epic.get('created', ''))}")
+    if epic.get("description"):
+        print(f"Description: {epic['description']}")
+
+    tickets = collect_epic_tickets(eid)
+    if not tickets:
+        print("  (no open tickets)")
+        print()
+        continue
+
+    by_priority = defaultdict(list)
+    for t in tickets:
+        by_priority[t.get("priority", "2")].append(t)
+
+    print()
+    for prio in sorted(by_priority.keys(), key=lambda p: int(p)):
+        label = PRIORITY_LABELS.get(prio, f"P{prio}")
+        sorted_tickets = sorted(by_priority[prio], key=priority_sort_key)
+        total = len(sorted_tickets)
+        shown = sorted_tickets[:MAX_PER_PRIORITY]
+
+        print(f"  {label}:")
+        for t in shown:
+            note = ""
+            if not t.get("parent"):
+                note = "  [via dep]"
+            print(f"    [{t['id']}] ({t.get('type', 'task')}, {t.get('status', 'open')}) {t['title']}{note}")
+
+        if total > MAX_PER_PRIORITY:
+            remaining = total - MAX_PER_PRIORITY
+            print(f"    ... and {remaining} more open ticket{'s' if remaining > 1 else ''}")
+        print()
+
+print(f"{'='*60}")
+print(f"Total open epics: {len(open_epics)}")
+EOF
