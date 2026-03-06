@@ -73,19 +73,24 @@ for fname in os.listdir(tickets_dir):
 
 by_id = {t["id"]: t for t in all_tickets}
 
-# Build parent-to-children index
-children_of = defaultdict(list)
+# Build indexes for both traversal directions
+children_of = defaultdict(list)   # parent_id -> [child_id, ...]
+rdeps_of = defaultdict(list)       # dep_id -> [tickets that depend on dep_id]
 for t in all_tickets:
     if "parent" in t:
         children_of[t["parent"]].append(t["id"])
+    for dep_id in t.get("deps", []):
+        rdeps_of[dep_id].append(t["id"])
 
 def collect_epic_tickets(epic_id):
-    """BFS over parent and dep edges to find all tickets in scope of an epic.
+    """BFS over all three ticket relationships to find tickets in scope of an epic.
 
-    Follows two relationships:
-    - parent: ticket.parent == current_id  (correct membership via --parent)
-    - deps:   current_ticket.deps          (may include tickets added via tk dep
-              instead of --parent, or ordering deps between children)
+    Follows:
+    - parent:    ticket.parent == current_id       (correct membership via --parent)
+    - deps out:  current_ticket.deps               (epic depends on tickets — agent
+                 may use this instead of --parent, or for ordering between children)
+    - deps in:   tickets whose deps include current (ticket depends on epic — common
+                 when bugs/tasks are linked to an epic as their blocking context)
 
     Does not recurse into other epics (avoids sub-epic expansion).
     Returns all reachable non-epic tickets with status != closed.
@@ -100,23 +105,25 @@ def collect_epic_tickets(epic_id):
         if not current:
             continue
 
-        # Expand via parent relationship (children of current)
+        def enqueue(tid):
+            if tid not in visited:
+                visited.add(tid)
+                t = by_id.get(tid)
+                if t and t.get("type") != "epic":
+                    queue.append(tid)
+
+        # Children via parent field
         for child_id in children_of.get(current_id, []):
-            if child_id not in visited:
-                visited.add(child_id)
-                child = by_id.get(child_id)
-                if child and child.get("type") != "epic":
-                    queue.append(child_id)
+            enqueue(child_id)
 
-        # Expand via deps (things current depends on)
+        # Things current depends on (outbound deps)
         for dep_id in current.get("deps", []):
-            if dep_id not in visited:
-                visited.add(dep_id)
-                dep = by_id.get(dep_id)
-                if dep and dep.get("type") != "epic":
-                    queue.append(dep_id)
+            enqueue(dep_id)
 
-        # Collect non-epic, non-closed, non-epic-root tickets
+        # Things that depend on current (inbound deps)
+        for rdep_id in rdeps_of.get(current_id, []):
+            enqueue(rdep_id)
+
         if current_id != epic_id:
             t = by_id.get(current_id)
             if t and t.get("status", "open") != "closed":

@@ -126,6 +126,7 @@ tk query '.parent == "<epic-id>"'           # Find children of an epic
 - Never use `tk edit` — it opens `$EDITOR` which blocks agents
 - Use `tk add-note <id> "text"` to append context instead of editing
 - Always use `--parent` to add tickets to an epic (membership). Use `tk dep` only for execution ordering. Never substitute `tk dep` for `--parent`.
+- `tk dep A B` means "A is blocked until B is done" — it does NOT mean "A belongs to B" or "A was found during B". When in doubt, use `--parent`.
 - Tickets are gitignored — no need to commit them
 
 ## Living Document
