@@ -45,7 +45,30 @@ Parse `$ARGUMENTS` to determine what to review. Set two variables: the file list
 
 It's CRUCIAL that reviewers ONLY analyze files listed in .code-review/changed-files.txt and NOTHING ELSE.
 
-## Step 3: tk mode setup
+## Step 3: Collect CLAUDE.md context
+
+Collect CLAUDE.md files from the project root and from directories containing changed files. This content is passed to reviewers so they can check for project convention violations.
+
+Run this to build `.code-review/claude-md-context.txt`:
+```bash
+> .code-review/claude-md-context.txt
+[ -f CLAUDE.md ] && { echo "=== CLAUDE.md (root) ==="; cat CLAUDE.md; echo; } >> .code-review/claude-md-context.txt
+while IFS= read -r file; do
+  dir=$(dirname "$file")
+  if [ "$dir" != "." ] && [ -f "$dir/CLAUDE.md" ]; then
+    echo "=== CLAUDE.md ($dir) ===" >> .code-review/claude-md-context.txt
+    cat "$dir/CLAUDE.md" >> .code-review/claude-md-context.txt
+    echo >> .code-review/claude-md-context.txt
+  fi
+done < .code-review/changed-files.txt
+```
+
+If the resulting file is empty (no CLAUDE.md files found), delete it so reviewers know there is no context:
+```bash
+[ ! -s .code-review/claude-md-context.txt ] && rm -f .code-review/claude-md-context.txt
+```
+
+## Step 4: tk mode setup (if TK_AVAILABLE)
 
 If `TK_AVAILABLE` is true:
 
@@ -56,7 +79,7 @@ EPIC_ID=$(tk create "<generated title> (<YYYY-MM-DD HH:MM>)" -t epic -p 2 --tags
 ```
 3. Note the `EPIC_ID` for passing to sub-agents.
 
-## Step 4: Launch reviewers
+## Step 5: Launch reviewers
 
 If there are files to review, use the Task tool to invoke these specialized reviewers in parallel.
 
@@ -126,7 +149,7 @@ Prompt: REVIEW_CMD=<review_cmd> -- Review ONLY files in .code-review/changed-fil
 SubagentType: security-reviewer
 ```
 
-## Step 5: Coordination
+## Step 6: Coordination
 
 After all reviewers complete their analysis, invoke the review-coordinator sub-agent:
 
@@ -144,7 +167,7 @@ Prompt: Combine all reviewer findings, combine duplicates, and write the final r
 SubagentType: review-coordinator
 ```
 
-## Step 6: Completion
+## Step 7: Completion
 
 ### tk mode
 When complete, inform the user that the review is finished and provide the epic ID. Tell them they can browse tickets with:

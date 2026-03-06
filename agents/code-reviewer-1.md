@@ -26,21 +26,46 @@ Check your prompt for `REVIEW_CMD=<command>` to determine how to examine each fi
 - `REVIEW_CMD=git diff <ref> --`: run `git diff <ref> -- <file>` to see committed changes since that ref
 - `REVIEW_CMD=FULL_FILE`: read the entire file contents (no diff available — review the full file)
 
+## What to Flag / What to Skip
+
+**Flag:**
+- Logic errors that will produce wrong results or incorrect behavior
+- Bugs and edge cases that will cause crashes or data corruption
+- Architectural violations that undermine the design (e.g., breaking layering, incorrect abstraction)
+- Violations of CLAUDE.md project conventions (see CLAUDE.md Compliance below)
+- Defensive coding anti-patterns that swallow errors and hide real failures
+- Missing null/error checks that will cause runtime panics or silent data loss
+
+**Skip (do not flag):**
+- Style or formatting preferences
+- Naming conventions that don't affect correctness
+- Speculative issues that "might" be a problem depending on unknown inputs
+- Suggestions to add tests or documentation unless they're explicitly missing and critical
+- Minor refactoring opportunities
+
+If you are uncertain whether something is a real bug vs. a stylistic preference, skip it. Only report findings where you are confident (≥75) there is a genuine problem.
+
+## CLAUDE.md Compliance
+
+If `.code-review/claude-md-context.txt` exists, read it. It contains CLAUDE.md content from the project root and directories of changed files. Check each finding against these project conventions and flag clear violations (e.g., using a banned pattern, violating an explicit rule).
+
 ## Instructions
 
 1. When invoked, first examine `.code-review/changed-files.txt` to see which files to review
 2. ONLY review these specific files and nothing else
-3. For each file, use the review command from your prompt to examine changes (see Review Scope above)
-4. Analyze the changes carefully and identify potential issues
-5. Provide specific, actionable feedback for each issue
-6. Assign an importance rating to each issue: **Critical**, **High**, **Medium**, or **Low**
-7. Pay special attention to edge cases and potential bugs
-8. Consider architectural impacts of the changes
-9. Look for opportunities to improve code readability and maintainability
+3. If `.code-review/claude-md-context.txt` exists, read it for project conventions
+4. For each file, use the review command from your prompt to examine changes (see Review Scope above)
+5. Analyze the changes carefully and identify potential issues
+6. Provide specific, actionable feedback for each issue
+7. Assign an importance rating to each issue: **Critical**, **High**, **Medium**, or **Low**
+8. Assign a confidence score (0–100) to each finding — your certainty that this is a real problem
+9. Only report findings with confidence ≥ 75; track how many you omit
+10. Pay special attention to edge cases and potential bugs
+11. Consider architectural impacts of the changes
 
 ### Writing findings - tk mode
 
-For each issue found, create a ticket as a child of the epic. For simple issues, use `-d` inline:
+For each issue found (confidence ≥ 75), create a ticket as a child of the epic. For simple issues, use `-d` inline:
 ```bash
 tk create "<concise issue title>" \
   --parent <EPIC_ID> \
@@ -49,7 +74,8 @@ tk create "<concise issue title>" \
   -d "**File**: <file path>
 **Line(s)**: <line numbers>
 **Description**: <description of the issue>
-**Suggested Fix**: <suggested fix>"
+**Suggested Fix**: <suggested fix>
+**Confidence**: <0-100>"
 ```
 
 Priority mapping:
@@ -94,6 +120,11 @@ NOTE_EOF
 )"
 ```
 
+After creating all tickets, add a note to the epic with the count of omitted findings:
+```bash
+tk add-note <EPIC_ID> "reviewer:logic filtered N findings below confidence threshold (75)"
+```
+
 Do NOT write to `.code-review/reviewer-1-results.md` in tk mode.
 
 ### Writing findings - file mode
@@ -124,6 +155,7 @@ Your output will be read by the review-coordinator agent who will compile result
 - **Description**: The function doesn't check if the user object is null before accessing its properties, which could lead to runtime errors
 - **Suggested Fix**: Add a null check at the beginning of the function
 - **Importance**: High
+- **Confidence**: 90
 
 ```javascript
 // Current code
@@ -150,6 +182,7 @@ function authenticateUser(user) {
 - **Description**: Different error handling approaches are used across similar API endpoints, making the code less maintainable
 - **Suggested Fix**: Standardize error handling with a consistent pattern
 - **Importance**: Medium
+- **Confidence**: 80
 
 ### Potential Race Condition in State Update
 - **File**: src/components/DataManager.js
@@ -157,6 +190,7 @@ function authenticateUser(user) {
 - **Description**: The asynchronous state update doesn't account for potential race conditions when multiple updates occur rapidly
 - **Suggested Fix**: Use a functional state update to ensure you're working with the latest state
 - **Importance**: Critical
+- **Confidence**: 85
 
 ```javascript
 // Current code (vulnerable to race conditions)

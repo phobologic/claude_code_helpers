@@ -31,9 +31,18 @@ tk query '.[] | select(.parent=="<EPIC_ID>")'
 tk show <id>
 ```
 
-3. Identify duplicates: two tickets are duplicates if they refer to the same underlying problem, even if described differently by different reviewers. Compare file paths, line ranges, and the core issue described.
+3. **Confidence filtering**: Check each ticket's description for a `**Confidence**:` field. Close any ticket with confidence < 75, adding a note:
+```bash
+tk close <low-confidence-id>
+tk add-note <low-confidence-id> "Filtered: confidence below threshold (75)"
+```
+Count these as low-confidence filtered items for the summary.
 
-4. For each duplicate, close it, link it to the canonical ticket, and add a note:
+4. Also check the epic's notes for any "reviewer:X filtered N findings" messages from the individual reviewers. Sum these up for the total filtered count.
+
+5. Identify duplicates among the remaining tickets: two tickets are duplicates if they refer to the same underlying problem, even if described differently by different reviewers. Compare file paths, line ranges, and the core issue described.
+
+6. For each duplicate, close it, link it to the canonical ticket, and add a note:
 ```bash
 tk close <duplicate-id>
 tk link <duplicate-id> <canonical-id>
@@ -41,7 +50,7 @@ tk add-note <duplicate-id> "Duplicate of <canonical-id>"
 ```
 Keep the ticket with the most complete description as the canonical one.
 
-5. Present an inline summary to the user organized by priority. Do NOT write to any `.code-review/` files. Format the summary as:
+7. Present an inline summary to the user organized by priority. Do NOT write to any `.code-review/` files. Format the summary as:
 
 ```
 ## Code Review Summary
@@ -53,6 +62,7 @@ Analyzed X files. Found:
 - N P2 (Medium) issues
 - N P3 (Low) issues
 - N duplicates identified and linked
+- N low-confidence findings filtered (below threshold 75)
 
 ### P0 - Critical Issues
 - **<tk-id>** [reviewer:label] <title> — <file>:<lines>
@@ -80,7 +90,9 @@ Use tk's native IDs, priority field, and reviewer labels. Do NOT use the `CRIT-S
 
 3. Combine all feedback into a single, well-organized report
 
-4. Organize findings into categories based on the importance/severity ratings provided by each reviewer:
+4. **Confidence filtering**: For each finding, check if it has a `**Confidence**:` field. Drop any finding with confidence < 75 and count them for the summary. If no confidence field is present, include the finding.
+
+5. Organize the remaining findings into categories based on importance/severity:
    - **Critical Issues** (must be fixed immediately)
    - **High Priority Issues** (should be fixed soon)
    - **Medium Priority Issues** (should be addressed when possible)
@@ -88,10 +100,10 @@ Use tk's native IDs, priority field, and reviewer labels. Do NOT use the `CRIT-S
 
    Note: Security issues should be highlighted separately within each priority level
 
-5. For each issue:
+6. For each issue:
    - Assign a unique ID with format: [PRIORITY]-[TYPE]-[000] where:
      * PRIORITY is: CRIT, HIGH, MED, or LOW
-     * TYPE is based on reviewer: LOGIC (code-reviewer-1), PERF (code-reviewer-2), READ (code-reviewer-3), or SEC (security-reviewer)
+     * TYPE is based on reviewer: LOGIC (code-reviewer-1), PERF (code-reviewer-2), STRUCT (code-reviewer-3), or SEC (security-reviewer)
      * 000 is a zero-padded 3-digit sequence number (reset for each priority-type combination)
    - Provide a clear description
    - Include the specific code location
@@ -99,13 +111,13 @@ Use tk's native IDs, priority field, and reviewer labels. Do NOT use the `CRIT-S
    - Maintain the importance rating (Critical, High, Medium, or Low)
    - Include the suggested fix if available
 
-6. Format the report in Markdown for readability
+7. Format the report in Markdown for readability
 
-7. Include a high-level summary at the top of the report
+8. Include a high-level summary at the top of the report that includes the count of low-confidence findings filtered
 
-8. Write the final report to `.code-review/final-report.md`
+9. Write the final report to `.code-review/final-report.md`
 
-9. Present the final report to the user with clear, actionable information
+10. Present the final report to the user with clear, actionable information
 
 Your goal is to help the user understand all the important feedback about their code without overwhelming them with duplicate or disorganized information.
 
@@ -121,6 +133,7 @@ This review analyzed uncommitted changes across X files with Y lines of code. Fo
 - 3 High priority improvements recommended
 - 5 Medium priority suggestions
 - 4 Low priority enhancements
+- 6 low-confidence findings filtered (below threshold 75)
 
 ## Critical Issues
 

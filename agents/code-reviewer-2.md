@@ -25,6 +25,22 @@ Check your prompt for `REVIEW_CMD=<command>` to determine how to examine each fi
 - `REVIEW_CMD=git diff <ref> --`: run `git diff <ref> -- <file>` to see committed changes since that ref
 - `REVIEW_CMD=FULL_FILE`: read the entire file contents (no diff available — review the full file)
 
+## What to Flag / What to Skip
+
+**Flag:**
+- Measurable performance regressions: O(n²) where O(n) or O(n log n) is straightforward, N+1 query patterns, unbounded memory growth
+- Resource leaks: file handles, connections, goroutines, event listeners never cleaned up
+- Operations that will block the event loop / main thread with large inputs
+- Redundant I/O: reading the same file or making the same network call multiple times in a loop
+
+**Skip (do not flag):**
+- Micro-optimizations (e.g., `i++` vs `i += 1`, minor string concatenation)
+- Algorithmic improvements where the current data size makes the difference irrelevant in practice
+- Speculative future scaling concerns with no evidence the code will reach that scale
+- Stylistic preferences about how performance is implemented
+
+If you cannot quantify why the issue will matter in practice, skip it. Only report findings where you are confident (≥75) there is a genuine performance or resource problem.
+
 ## Instructions
 
 1. When invoked, first examine `.code-review/changed-files.txt` to see which files to review
@@ -33,13 +49,15 @@ Check your prompt for `REVIEW_CMD=<command>` to determine how to examine each fi
 4. Analyze the changes with a focus on performance and efficiency
 5. Provide specific, actionable feedback for performance improvements
 6. Assign an importance rating to each issue: **Critical**, **High**, **Medium**, or **Low**
-7. Identify potential bottlenecks or scalability issues
-8. Suggest optimizations with clear examples
-9. Consider both time and space complexity of algorithms
+7. Assign a confidence score (0–100) to each finding — your certainty that this is a real problem
+8. Only report findings with confidence ≥ 75; track how many you omit
+9. Identify potential bottlenecks or scalability issues
+10. Suggest optimizations with clear examples
+11. Consider both time and space complexity of algorithms
 
 ### Writing findings - tk mode
 
-For each issue found, create a ticket as a child of the epic. For simple issues, use `-d` inline:
+For each issue found (confidence ≥ 75), create a ticket as a child of the epic. For simple issues, use `-d` inline:
 ```bash
 tk create "<concise issue title>" \
   --parent <EPIC_ID> \
@@ -48,7 +66,8 @@ tk create "<concise issue title>" \
   -d "**File**: <file path>
 **Line(s)**: <line numbers>
 **Description**: <description of the issue>
-**Suggested Fix**: <suggested fix>"
+**Suggested Fix**: <suggested fix>
+**Confidence**: <0-100>"
 ```
 
 Priority mapping:
@@ -101,6 +120,11 @@ function findDuplicates(array) {
 ```
 NOTE_EOF
 )"
+```
+
+After creating all tickets, add a note to the epic with the count of omitted findings:
+```bash
+tk add-note <EPIC_ID> "reviewer:perf filtered N findings below confidence threshold (75)"
 ```
 
 Do NOT write to `.code-review/reviewer-2-results.md` in tk mode.

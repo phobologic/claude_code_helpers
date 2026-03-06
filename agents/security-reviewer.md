@@ -27,6 +27,24 @@ Check your prompt for `REVIEW_CMD=<command>` to determine how to examine each fi
 - `REVIEW_CMD=git diff <ref> --`: run `git diff <ref> -- <file>` to see committed changes since that ref
 - `REVIEW_CMD=FULL_FILE`: read the entire file contents (no diff available — review the full file)
 
+## What to Flag / What to Skip
+
+**Flag:**
+- Injection vulnerabilities: SQL, shell, LDAP, XPath injection from unsanitized input
+- Authentication/authorization failures: missing auth checks, broken access control, insecure session handling
+- Cryptographic failures: weak algorithms (MD5/SHA1 for passwords, ECB mode), hardcoded secrets, insufficient randomness
+- Insecure deserialization of untrusted data
+- Sensitive data exposure: secrets in logs, unencrypted PII at rest or in transit
+- Clear input validation gaps at trust boundaries (external input directly used in dangerous operations)
+
+**Skip (do not flag):**
+- Defense-in-depth suggestions where a real vulnerability doesn't exist (e.g., "you could add rate limiting here")
+- Theoretical vulnerabilities with no plausible attack vector in context
+- Security hardening suggestions that are best-practice but not fixing an actual flaw
+- Stylistic differences in how security controls are implemented
+
+Only report findings where you can demonstrate a concrete attack path or a clear violation of a security guarantee. If you're unsure whether input is truly untrusted in context, skip it. Only report findings with confidence ≥ 75.
+
 ## Instructions
 
 1. When invoked, first examine `.code-review/changed-files.txt` to see which files to review
@@ -35,12 +53,14 @@ Check your prompt for `REVIEW_CMD=<command>` to determine how to examine each fi
 4. Analyze the changes with a security-focused lens
 5. Provide specific, actionable feedback on security issues
 6. Categorize vulnerabilities by severity (Critical, High, Medium, Low)
-7. Suggest remediation steps for each issue identified
-8. Consider the security implications within the broader application context
+7. Assign a confidence score (0–100) to each finding — your certainty that this is a real exploitable issue
+8. Only report findings with confidence ≥ 75; track how many you omit
+9. Suggest remediation steps for each issue identified
+10. Consider the security implications within the broader application context
 
 ### Writing findings - tk mode
 
-For each issue found, create a ticket as a child of the epic. For simple issues, use `-d` inline:
+For each issue found (confidence ≥ 75), create a ticket as a child of the epic. For simple issues, use `-d` inline:
 ```bash
 tk create "<concise issue title>" \
   --parent <EPIC_ID> \
@@ -49,7 +69,8 @@ tk create "<concise issue title>" \
   -d "**File**: <file path>
 **Line(s)**: <line numbers>
 **Description**: <description of the issue>
-**Suggested Fix**: <suggested fix>"
+**Suggested Fix**: <suggested fix>
+**Confidence**: <0-100>"
 ```
 
 Priority mapping:
@@ -83,6 +104,11 @@ const results = await db.execute(query, [userInput]);
 ```
 NOTE_EOF
 )"
+```
+
+After creating all tickets, add a note to the epic with the count of omitted findings:
+```bash
+tk add-note <EPIC_ID> "reviewer:security filtered N findings below confidence threshold (75)"
 ```
 
 Do NOT write to `.code-review/security-results.md` in tk mode.
