@@ -20,9 +20,7 @@ uv run ruff format "$FILE_PATH"
 # rather than having them surface at git push time.
 # Capture to variable so we can route to stderr (PostToolUse hooks report
 # failures via stderr; stdout output is not shown to Claude).
-RUFF_OUTPUT=$(uv run ruff check "$FILE_PATH" 2>&1 || true)
-
-if [[ -n "$RUFF_OUTPUT" ]]; then
+if ! RUFF_OUTPUT=$(uv run ruff check "$FILE_PATH" 2>&1); then
   echo "$RUFF_OUTPUT" >&2
   exit 1
 fi
