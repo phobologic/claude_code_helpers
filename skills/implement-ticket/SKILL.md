@@ -84,7 +84,7 @@ Run `tk start <id>` to claim the ticket, then implement according to the approve
 
 ## Phase 7 — Self-review
 
-Before committing, use the Skill tool to invoke the `review` skill. Read its output and triage findings:
+Before committing, use the Skill tool to invoke the `review` skill — call `Skill(skill="review")` exactly. This is the single-agent adversarial review (one `code-critic` agent). Do NOT invoke `multi-review`, and do NOT launch reviewer agents (code-reviewer-1, code-reviewer-2, etc.) directly. Let the skill handle everything. Read its output and triage findings:
 
 - **Critical issues found**: present them to the user, fix them, then repeat Phase 7 until the review is clean
 - **High issues found**: present them to the user and ask — fix now, or create a ticket and proceed?
