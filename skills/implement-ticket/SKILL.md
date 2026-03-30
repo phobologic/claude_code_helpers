@@ -20,6 +20,14 @@ Parse `$ARGUMENTS`:
 
 **If ticket IDs were provided**: run `tk show-multi <ids>` to load full context.
 
+**If any loaded ticket has `type == "epic"`**:
+1. Run `tk query '.parent == "<epic-id>"'` to find its child tickets
+2. Filter to only eligible children (status is not `closed` or `in-progress`)
+3. If no eligible children remain, inform the user the epic is fully complete or all work is in-progress, and stop
+4. Present suggested next tickets with reasoning (same UX as the no-args path: 2–3 picks + full list)
+5. Ask the user which child ticket(s) to proceed with
+6. Continue the rest of the skill with those child IDs — never implement the epic itself
+
 **If no IDs provided**:
 1. Run `tk ready` to get unblocked work
 2. Read each ticket's description to understand scope and context
