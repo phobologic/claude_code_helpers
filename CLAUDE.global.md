@@ -40,6 +40,19 @@ two sentences on what the command accomplishes, not a line-by-line breakdown.
 
 - **Never run `git push`**. The user will push manually.
 
+## Hooks
+
+A non-zero PostToolUse hook exit is a blocker — treat it like a failing test, not a warning.
+
+When a hook fails:
+
+1. **Stop immediately.** Do not make any further edits to other files.
+2. **Read the full stderr output.** Do not skip or skim it — the error message is the diagnosis.
+3. **Fix the issue** in the file that triggered the hook.
+4. **Verify the hook passes** before resuming work.
+
+Never accumulate edits across multiple files while hook failures are pending. Every unresolved hook failure is a broken file that compounds the problem.
+
 ## Testing
 
 - **Never hit real external APIs in tests.** Always mock AI clients, payment providers,
