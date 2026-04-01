@@ -37,6 +37,7 @@ Cover these five angles, but only ask what isn't already clear from the idea:
 **Goals and success**
 - What does "done" look like? What specific outcome would tell you this shipped successfully?
 - Who is the primary user of this feature or system?
+- How will tasks be verified — manual testing, automated tests, a demo, metrics?
 
 **Scope and non-goals**
 - What's explicitly out of scope for this iteration?
@@ -72,6 +73,13 @@ If no follow-up is needed, say "That's enough context — let me put together a 
 move directly to Phase 3.
 
 **Hard cap: 2 rounds of Q&A.** After two rounds, proceed regardless.
+
+**Mid-plan pause:** While drafting the plan in Phase 3, if you reach a task and cannot
+write concrete acceptance criteria for it — meaning you don't know what verifiable behavior
+to test — treat that as a gap that Q&A missed. Pause, present what you have, and ask the
+targeted questions needed to fill the gap. Do not invent AC for tasks you don't understand.
+This is a hard rule: every task in the plan must have at least one concrete, testable AC
+before tickets can be created.
 
 ## Phase 3 — Draft plan
 
@@ -123,27 +131,62 @@ Phases 2 and 3 can be picked up simultaneously after Phase 1 ships.
 ### Phase 1: [Name]  [SERIAL — must complete first]
 *Objective: what this phase accomplishes and why it gates everything else*
 
-- [ ] Task 1.1: [Imperative title] — [one-line description]
-- [ ] Task 1.2: [Imperative title] — [one-line description]
+- [ ] Task 1.1: [Imperative title]
+  *[Two to three sentence description of the work — enough context to implement without reading other tickets.]*
+  **AC:**
+  - When [trigger], the system shall [behavior]
+  - The [component] shall [property]
+
+- [ ] Task 1.2: [Imperative title]
+  *[Description]*
+  **AC:**
+  - When [trigger], the system shall [behavior]
+  - If [condition], the system shall [response]
 
 ### Phase 2: [Name]  [parallel with Phase 3, starts after Phase 1]
 *Objective: ...*
 
 - [ ] Task 2.1: ...
-- [ ] Task 2.2: ...
+  *[Description]*
+  **AC:**
+  - ...
 
 ### Phase 3: [Name]  [parallel with Phase 2, starts after Phase 1]
 *Objective: ...*
 
 - [ ] Task 3.1: ...
+  *[Description]*
+  **AC:**
+  - ...
 
 ### Phase 4: [Name]  [fan-in: requires Phase 2 + Phase 3]
 *Objective: integration and validation, blocked until prior phases finish*
 
 - [ ] Task 4.1: ...
+  *[Description]*
+  **AC:**
+  - ...
 
 **Open risks / spikes noted:** [list any unresolved uncertainties worth tracking]
 ```
+
+### Acceptance criteria format (EARS)
+
+Write each AC using EARS (Easy Approach to Requirements Syntax) patterns:
+
+| Pattern | Template | Use when |
+|---|---|---|
+| Event-driven | `When [trigger], the [system] shall [behavior]` | User actions, API calls, async events |
+| State-driven | `While [state], the [system] shall [behavior]` | Modes, ongoing conditions |
+| Conditional | `If [condition], the [system] shall [response]` | Error cases, optional features |
+| Unwanted behavior | `If [bad input/state], the [system] shall [safe handling]` | Validation, error handling |
+| Ubiquitous | `The [component] shall [property]` | Always-true constraints, invariants |
+
+**Rules:**
+- Each AC must be independently verifiable — a developer should be able to write a test case for it
+- Cover the happy path, key error cases, and any performance or security constraints
+- Aim for 2–4 ACs per task. Fewer means underspecified; more means the task should be split
+- If you cannot write even one concrete, testable AC for a task, that task is not understood well enough to ticket — pause and ask
 
 ### Structural guidelines
 
@@ -196,20 +239,37 @@ P3=$(tk create "Phase 3: <name>" -t epic -p 2 --parent $TOP -d "<phase objective
 
 Print: `"Creating task tickets..."`
 
-Work through phases in order. Capture each ID.
+Work through phases in order. Capture each ID. Use heredoc syntax to include the full
+description and EARS acceptance criteria — never truncate to a one-liner.
 
 ```bash
 # Phase 1
-T1_1=$(tk create "<Task 1.1 title>" -t task -p 2 --parent $P1 -d "<description>")
-T1_2=$(tk create "<Task 1.2 title>" -t task -p 2 --parent $P1 -d "<description>")
-T1_3=$(tk create "<Task 1.3 title>" -t task -p 2 --parent $P1 -d "<description>")
+T1_1=$(tk create "<Task 1.1 title>" -t task -p 2 --parent $P1 -d "$(cat <<'EOF'
+<Two to three sentence description of the work, enough to implement without reading other tickets.>
+
+## Acceptance Criteria
+- When <trigger>, the system shall <behavior>
+- The <component> shall <property>
+EOF
+)")
+
+T1_2=$(tk create "<Task 1.2 title>" -t task -p 2 --parent $P1 -d "$(cat <<'EOF'
+<Description>
+
+## Acceptance Criteria
+- When <trigger>, the system shall <behavior>
+- If <condition>, the system shall <response>
+EOF
+)")
 
 # Phase 2
-T2_1=$(tk create "<Task 2.1 title>" -t task -p 2 --parent $P2 -d "<description>")
-T2_2=$(tk create "<Task 2.2 title>" -t task -p 2 --parent $P2 -d "<description>")
+T2_1=$(tk create "<Task 2.1 title>" -t task -p 2 --parent $P2 -d "$(cat <<'EOF'
+<Description>
 
-# Phase 3
-T3_1=$(tk create "<Task 3.1 title>" -t task -p 2 --parent $P3 -d "<description>")
+## Acceptance Criteria
+- <EARS statement>
+EOF
+)")
 
 # ... etc
 ```
