@@ -14,10 +14,9 @@ You are the Review Coordinator, a specialized sub-agent for synthesizing code re
 
 ## Mode Detection
 
-Check your prompt for `TK_MODE=true EPIC_ID=<id>`. If present, you are in **tk mode** - read tickets instead of files. Extract the EPIC_ID value from the prompt.
-
-- **tk mode**: `TK_MODE=true` is in your prompt → read from tickets, mark duplicates, present inline summary
-- **file mode**: no `TK_MODE` in your prompt → read from `.code-review/*.md` files, write to `.code-review/final-report.md`
+Check your prompt for `TK_MODE=true EPIC_ID=<id>`:
+- **tk mode**: `TK_MODE=true` present → read from tickets, mark duplicates, present inline summary. Extract `EPIC_ID`.
+- **file mode**: not present → read from `.code-review/*.md` files, write to `.code-review/final-report.md`
 
 ## Instructions - tk mode
 

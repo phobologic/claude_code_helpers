@@ -7,43 +7,19 @@ You are orchestrating a fast pre-merge code review. A dedicated adversarial sub-
 
 ## Step 1: Collect context
 
-Run in a single Bash call:
+Run:
 
 ```bash
-mkdir -p .code-review
-rm -f .code-review/changed-files.txt .code-review/claude-md-context.txt
-git status --porcelain | awk '{print $NF}' > .code-review/changed-files.txt
-TK_AVAILABLE=false
-command -v tk >/dev/null 2>&1 && TK_AVAILABLE=true
-SESSION_TAG="review-$(date +%Y%m%d-%H%M)"
-echo "TK_AVAILABLE=$TK_AVAILABLE"
-echo "SESSION_TAG=$SESSION_TAG"
-echo "--- Files to review ---"
-cat .code-review/changed-files.txt
+review-setup
 ```
 
-## Step 2: Collect CLAUDE.md context
+Capture `TK_AVAILABLE`, `REVIEW_CMD`, and `FILES_COUNT` from the output. Also generate a session tag: `SESSION_TAG=review-$(date +%Y%m%d-%H%M)`.
 
-Run this to give the critic project convention awareness:
+## Step 2: Guard
 
-```bash
-[ -f CLAUDE.md ] && { echo "=== CLAUDE.md (root) ==="; cat CLAUDE.md; echo; } > .code-review/claude-md-context.txt
-while IFS= read -r file; do
-  dir=$(dirname "$file")
-  if [ "$dir" != "." ] && [ -f "$dir/CLAUDE.md" ]; then
-    echo "=== CLAUDE.md ($dir) ===" >> .code-review/claude-md-context.txt
-    cat "$dir/CLAUDE.md" >> .code-review/claude-md-context.txt
-    echo >> .code-review/claude-md-context.txt
-  fi
-done < .code-review/changed-files.txt
-[ ! -s .code-review/claude-md-context.txt ] && rm -f .code-review/claude-md-context.txt
-```
+If `FILES_COUNT` is 0, tell the user there are no uncommitted changes to review and stop.
 
-## Step 3: Guard
-
-If `.code-review/changed-files.txt` is empty, tell the user there are no uncommitted changes to review and stop.
-
-## Step 4: Launch the code-critic sub-agent
+## Step 3: Launch the code-critic sub-agent
 
 Use the Task tool to invoke the `code-critic` sub-agent. Pass `REVIEW_CMD`, and tk parameters when available.
 
@@ -51,7 +27,7 @@ Use the Task tool to invoke the `code-critic` sub-agent. Pass `REVIEW_CMD`, and 
 
 ```
 Task: Adversarial code review
-Prompt: TK_MODE=true SESSION_TAG=<session_tag> REVIEW_CMD=git diff HEAD -- Review ONLY the files listed in .code-review/changed-files.txt and nothing else
+Prompt: TK_MODE=true SESSION_TAG=<session_tag> REVIEW_CMD=<review_cmd> Review ONLY the files listed in .code-review/changed-files.txt and nothing else
 SubagentType: code-critic
 ```
 
@@ -59,11 +35,11 @@ SubagentType: code-critic
 
 ```
 Task: Adversarial code review
-Prompt: REVIEW_CMD=git diff HEAD -- Review ONLY the files listed in .code-review/changed-files.txt and nothing else
+Prompt: REVIEW_CMD=<review_cmd> Review ONLY the files listed in .code-review/changed-files.txt and nothing else
 SubagentType: code-critic
 ```
 
-## Step 5: Present results
+## Step 4: Present results
 
 The critic's output is the review. Display it.
 

@@ -8,67 +8,19 @@ disable-model-invocation: true
 
 This command performs a comprehensive code review using specialized sub-agents.
 
-## Step 1: Setup and detect tk
+## Step 1: Setup and collect context
 
-Run these commands sequentially in a **single Bash call** to prepare the environment and detect tk:
-```bash
-mkdir -p .code-review
-rm -f .code-review/*.md
-touch .code-review/changed-files.txt
-TK_AVAILABLE=false
-if command -v tk >/dev/null 2>&1; then
-  TK_AVAILABLE=true
-fi
-echo "TK_AVAILABLE=$TK_AVAILABLE"
-```
+Parse `$ARGUMENTS` to determine scope, then run the setup script in a **single Bash call**:
 
-## Step 2: Determine review scope
+- **No arguments** (default — uncommitted changes): `review-setup`
+- **Commit references** (e.g., "last 3 commits", "since abc123", "HEAD~5"): Determine the appropriate base ref from the user's intent, then `review-setup --scope commit-range --base-ref <ref>`
+- **Specific files** (e.g., "Review src/auth.py src/models.py"): `review-setup --scope files --files src/auth.py src/models.py`
 
-Parse `$ARGUMENTS` to determine what to review. Set two variables: the file list in `.code-review/changed-files.txt` and `REVIEW_CMD` (passed to reviewers).
+Capture `TK_AVAILABLE`, `REVIEW_CMD`, and `FILES_COUNT` from the output.
 
-- **No arguments** (default): Review uncommitted changes
-  ```bash
-  git status --porcelain | awk '{print $NF}' > .code-review/changed-files.txt
-  ```
-  `REVIEW_CMD=git diff`
+If `FILES_COUNT` is 0, tell the user there are no files to review and stop.
 
-- **Commit references** (e.g., "last 3 commits", "since abc123", "HEAD~5"):
-  Determine the appropriate base ref from the user's intent, then:
-  ```bash
-  git diff --name-only <base-ref> > .code-review/changed-files.txt
-  ```
-  `REVIEW_CMD=git diff <base-ref> --`
-
-- **Specific files** (e.g., "Review src/auth.py src/models.py"):
-  Write the specified file paths to `.code-review/changed-files.txt` (one per line).
-  `REVIEW_CMD=FULL_FILE`
-
-It's CRUCIAL that reviewers ONLY analyze files listed in .code-review/changed-files.txt and NOTHING ELSE.
-
-## Step 3: Collect CLAUDE.md context
-
-Collect CLAUDE.md files from the project root and from directories containing changed files. This content is passed to reviewers so they can check for project convention violations.
-
-Run this to build `.code-review/claude-md-context.txt`:
-```bash
-> .code-review/claude-md-context.txt
-[ -f CLAUDE.md ] && { echo "=== CLAUDE.md (root) ==="; cat CLAUDE.md; echo; } >> .code-review/claude-md-context.txt
-while IFS= read -r file; do
-  dir=$(dirname "$file")
-  if [ "$dir" != "." ] && [ -f "$dir/CLAUDE.md" ]; then
-    echo "=== CLAUDE.md ($dir) ===" >> .code-review/claude-md-context.txt
-    cat "$dir/CLAUDE.md" >> .code-review/claude-md-context.txt
-    echo >> .code-review/claude-md-context.txt
-  fi
-done < .code-review/changed-files.txt
-```
-
-If the resulting file is empty (no CLAUDE.md files found), delete it so reviewers know there is no context:
-```bash
-[ ! -s .code-review/claude-md-context.txt ] && rm -f .code-review/claude-md-context.txt
-```
-
-## Step 4: tk mode setup (if TK_AVAILABLE)
+## Step 2: tk mode setup (if TK_AVAILABLE)
 
 If `TK_AVAILABLE` is true:
 
@@ -79,9 +31,9 @@ EPIC_ID=$(tk create "<generated title> (<YYYY-MM-DD HH:MM>)" -t epic -p 2 --tags
 ```
 3. Note the `EPIC_ID` for passing to sub-agents.
 
-## Step 5: Launch reviewers
+## Step 3: Launch reviewers
 
-If there are files to review, use the Task tool to invoke these specialized reviewers in parallel.
+Use the Task tool to invoke these specialized reviewers in parallel.
 
 Include `REVIEW_CMD=<command>` in each prompt so reviewers know how to examine files.
 
@@ -149,7 +101,7 @@ Prompt: REVIEW_CMD=<review_cmd> -- Review ONLY files in .code-review/changed-fil
 SubagentType: security-reviewer
 ```
 
-## Step 6: Coordination
+## Step 4: Coordination
 
 After all reviewers complete their analysis, invoke the review-coordinator sub-agent:
 
@@ -167,7 +119,7 @@ Prompt: Combine all reviewer findings, combine duplicates, and write the final r
 SubagentType: review-coordinator
 ```
 
-## Step 7: Completion
+## Step 5: Completion
 
 ### tk mode
 When complete, inform the user that the review is finished and provide the epic ID. Tell them they can browse tickets with:

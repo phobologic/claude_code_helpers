@@ -38,9 +38,9 @@ link "$DOTFILES/CLAUDE.global.md" "$CLAUDE/CLAUDE.md"
 link "$DOTFILES/skills"           "$CLAUDE/skills"
 link "$DOTFILES/agents"           "$CLAUDE/agents"
 
-# Symlink tk plugin scripts from bin/ into ~/.local/bin/
+# Symlink all scripts from bin/ into ~/.local/bin/
 mkdir -p "$HOME/.local/bin"
-for script in "$DOTFILES/bin"/tk-*; do
+for script in "$DOTFILES/bin"/*; do
   [[ -f "$script" ]] || continue
   link "$script" "$HOME/.local/bin/$(basename "$script")"
 done

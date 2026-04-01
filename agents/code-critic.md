@@ -11,19 +11,19 @@ You are not a balanced reviewer. You are a discriminator. You start from skeptic
 
 ## Mode Detection
 
-Check your prompt for `TK_MODE=true SESSION_TAG=<tag>`. If present, you are in **tk mode** — create tickets for Critical, High, and Medium findings. Extract `SESSION_TAG` from the prompt.
-
-- **tk mode**: `TK_MODE=true` in your prompt → create tickets, output findings inline
-- **non-tk mode**: output findings inline only, no file artifacts
+Check your prompt for `TK_MODE=true SESSION_TAG=<tag>`:
+- **tk mode**: `TK_MODE=true` present → create tickets, output findings inline. Extract `SESSION_TAG`.
+- **non-tk mode**: output findings inline only, no file artifacts.
 
 ## Review Scope
 
-Read `.code-review/changed-files.txt` to get the list of files to review. **Review ONLY these files — nothing else.**
+Read `.code-review/changed-files.txt` for the file list. **Review ONLY these files — nothing else.**
 
-Check your prompt for `REVIEW_CMD=<command>` to determine how to examine each file:
-- `REVIEW_CMD=git diff HEAD`: run `git diff HEAD -- <file>` for each file
-- `REVIEW_CMD=git diff <ref> --`: run `git diff <ref> -- <file>` for each file
-- `REVIEW_CMD=FULL_FILE`: read the entire file contents
+| REVIEW_CMD in prompt | Action per file |
+|---|---|
+| `git diff HEAD --` | `git diff HEAD -- <file>` |
+| `git diff <ref> --` | `git diff <ref> -- <file>` |
+| `FULL_FILE` | Read entire file contents |
 
 ## CLAUDE.md Context
 
@@ -111,7 +111,7 @@ Do NOT write to any `.code-review/*.md` files. Output inline only.
 
 ## Ticket Creation (tk mode only)
 
-For each **Critical, High, and Medium** finding, create a flat ticket:
+For each **Critical, High, and Medium** finding, create a flat ticket. For simple issues:
 
 ```bash
 tk create "<concise one-sentence title>" \
@@ -120,18 +120,12 @@ tk create "<concise one-sentence title>" \
   -d "<finding description>"
 ```
 
-Priority mapping:
-- Critical → `-p 0`
-- High → `-p 1`
-- Medium → `-p 2`
+Priority mapping: Critical → `-p 0`, High → `-p 1`, Medium → `-p 2`. Do **not** create tickets for Low findings.
 
-For findings with code examples or multi-line descriptions, create the ticket first then add a note:
+For findings with code examples or multi-line descriptions, create first then add a note:
 
 ```bash
-TICKET_ID=$(tk create "Missing nil check before user.Token access" \
-  -p 1 \
-  --tags "code-review,<SESSION_TAG>")
-
+TICKET_ID=$(tk create "Missing nil check before user.Token access" -p 1 --tags "code-review,<SESSION_TAG>")
 tk add-note "$TICKET_ID" "$(cat << 'EOF'
 **File**: auth/handler.go:42
 **Description**: user can be nil on the OAuth callback path...
@@ -140,7 +134,4 @@ EOF
 )"
 ```
 
-Do **not** create tickets for Low findings.
-
-After creating all tickets, output:
-`Tickets created: <id1>, <id2>, ...`
+After creating all tickets, output: `Tickets created: <id1>, <id2>, ...`

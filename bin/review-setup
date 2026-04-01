@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# review-setup — prepare .code-review/ for a /review or /multi-review run
+#
+# Usage:
+#   bin/review-setup                                        # uncommitted changes (default)
+#   bin/review-setup --scope commit-range --base-ref REF   # changes since a commit ref
+#   bin/review-setup --scope files --files file1 file2 ... # specific files
+#
+# Outputs (to stdout, for eval):
+#   TK_AVAILABLE=true|false
+#   REVIEW_CMD=<command prefix>
+#   FILES_COUNT=N
+#   CONTEXT_FOUND=true|false
+# Followed by a separator and the file list.
+
+set -euo pipefail
+
+SCOPE="uncommitted"
+BASE_REF=""
+FILES=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --scope)    SCOPE="$2"; shift 2 ;;
+    --base-ref) BASE_REF="$2"; shift 2 ;;
+    --files)    shift; while [[ $# -gt 0 && "${1:-}" != --* ]]; do FILES+=("$1"); shift; done ;;
+    *) echo "Unknown argument: $1" >&2; exit 1 ;;
+  esac
+done
+
+# Setup directory, clean old artifacts
+mkdir -p .code-review
+rm -f .code-review/*.md .code-review/*.txt
+
+# Detect tk
+TK_AVAILABLE=false
+command -v tk >/dev/null 2>&1 && TK_AVAILABLE=true
+
+# Collect changed files and set REVIEW_CMD
+case "$SCOPE" in
+  uncommitted)
+    git status --porcelain | awk '{print $NF}' > .code-review/changed-files.txt
+    REVIEW_CMD="git diff HEAD --"
+    ;;
+  commit-range)
+    if [[ -z "$BASE_REF" ]]; then
+      echo "Error: --base-ref required for --scope commit-range" >&2
+      exit 1
+    fi
+    git diff --name-only "$BASE_REF" > .code-review/changed-files.txt
+    REVIEW_CMD="git diff $BASE_REF --"
+    ;;
+  files)
+    if [[ ${#FILES[@]} -eq 0 ]]; then
+      echo "Error: --files requires at least one file path" >&2
+      exit 1
+    fi
+    printf '%s\n' "${FILES[@]}" > .code-review/changed-files.txt
+    REVIEW_CMD="FULL_FILE"
+    ;;
+  *)
+    echo "Error: unknown --scope value '$SCOPE' (expected: uncommitted, commit-range, files)" >&2
+    exit 1
+    ;;
+esac
+
+FILES_COUNT=$(wc -l < .code-review/changed-files.txt | tr -d ' ')
+
+# Collect CLAUDE.md context from root and directories of changed files
+> .code-review/claude-md-context.txt
+[ -f CLAUDE.md ] && { echo "=== CLAUDE.md (root) ==="; cat CLAUDE.md; echo; } >> .code-review/claude-md-context.txt
+while IFS= read -r file; do
+  dir=$(dirname "$file")
+  if [ "$dir" != "." ] && [ -f "$dir/CLAUDE.md" ]; then
+    echo "=== CLAUDE.md ($dir) ===" >> .code-review/claude-md-context.txt
+    cat "$dir/CLAUDE.md" >> .code-review/claude-md-context.txt
+    echo >> .code-review/claude-md-context.txt
+  fi
+done < .code-review/changed-files.txt
+
+CONTEXT_FOUND=true
+[ ! -s .code-review/claude-md-context.txt ] && { rm -f .code-review/claude-md-context.txt; CONTEXT_FOUND=false; }
+
+# Output variables for the caller
+echo "TK_AVAILABLE=$TK_AVAILABLE"
+echo "REVIEW_CMD=$REVIEW_CMD"
+echo "FILES_COUNT=$FILES_COUNT"
+echo "CONTEXT_FOUND=$CONTEXT_FOUND"
+echo "--- Files to review ---"
+cat .code-review/changed-files.txt
