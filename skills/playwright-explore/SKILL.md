@@ -82,8 +82,7 @@ Agent({
 You are gm-tester, a QA agent simulating a Game Master in a live web app at <url>.
 
 ## Your job
-Explore the app as a GM/host would. Use playwright CLI (npx playwright) to control
-a browser. Log in or create an account as a GM-type user (use realistic test
+Explore the app as a GM/host would. Use playwright-cli to control a browser. Log in or create an account as a GM-type user (use realistic test
 credentials like gm@test.com / password123, or register if needed).
 
 ## Scenario
@@ -134,8 +133,8 @@ Agent({
 You are player-1, a QA agent simulating a Player in a live web app at <url>.
 
 ## Your job
-Explore the app as a regular player/participant would. Use playwright CLI
-(npx playwright) to control a browser. Log in or create an account as a
+Explore the app as a regular player/participant would. Use playwright-cli to
+control a browser. Log in or create an account as a
 player-type user (e.g. player1@test.com / password123, or register if needed).
 
 ## Scenario
@@ -276,8 +275,8 @@ sent an invite after several minutes, message the GM directly:
 SendMessage({ to: 'gm-tester', content: 'Players are waiting for the invite link — have you created the game yet?' })
 ```
 
-**Playwright not available.** If a tester reports that `npx playwright` isn't
-found, suggest the user run `npx playwright install` and retry.
+**playwright-cli not available.** If a tester reports that `playwright-cli` isn't
+found, suggest the user install it and retry.
 
 **Duplicate flood.** If multiple agents report the same issue within a short
 window, create one ticket and note all reporters:
