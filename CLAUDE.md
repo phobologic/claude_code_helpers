@@ -82,6 +82,9 @@ To add language auto-formatting hooks to a project:
 - `/implement-ticket [id ...] [-- extra instructions]` - Pick up and implement tk tickets (serial)
 - `/fix-tickets <id> [id ...] | <epic-id>` - Implement a set of tickets in parallel with quality review; designed for multi-review fix batches
 
+### Exploratory Testing
+- `/playwright-explore <url> [-- scenario]` - Spawn GM + player agents to explore a running app, with the team lead creating deduplicated tk tickets from their findings
+
 ### Tool Setup
 - `/use-railway` - Symlink Railway CLI rules into this project's `.claude/rules/`
 - `/use-sqlalchemy` - Symlink SQLAlchemy/Alembic rules into this project's `.claude/rules/`
