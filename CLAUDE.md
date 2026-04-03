@@ -79,7 +79,8 @@ To add language auto-formatting hooks to a project:
 - `/multi-review` - Coordinate parallel reviews from 5 specialized agents
 
 ### Ticket Workflow
-- `/implement-ticket [id ...] [-- extra instructions]` - Pick up and implement tk tickets
+- `/implement-ticket [id ...] [-- extra instructions]` - Pick up and implement tk tickets (serial)
+- `/fix-tickets <id> [id ...] | <epic-id>` - Implement a set of tickets in parallel with quality review; designed for multi-review fix batches
 
 ### Tool Setup
 - `/use-railway` - Symlink Railway CLI rules into this project's `.claude/rules/`
@@ -87,12 +88,14 @@ To add language auto-formatting hooks to a project:
 
 ## Execution Agent Team
 
-Used by `/run-epic` to implement epics in parallel with validation:
+Used by `/run-epic` and `/fix-tickets` to implement tickets in parallel with validation:
 
 1. **implementer**: Reads ticket, implements, tests, commits — runs in isolated worktree (opus)
-2. **ac-verifier**: Binary PASS/FAIL check against EARS acceptance criteria (sonnet)
+2. **ac-verifier**: Binary PASS/FAIL check against EARS acceptance criteria (sonnet) — used by `/run-epic` only
 3. **quality-reviewer**: Adversarial review — correctness, security, reliability, perf; creates `tk` finding tickets (sonnet)
 4. **spec-critic**: Adversarial plan review used by `/spec` before presenting to user (sonnet)
+
+`/fix-tickets` uses implementer + quality-reviewer only (no ac-verifier) since multi-review tickets don't have formal acceptance criteria.
 
 ## Multi-Review Agent Specializations
 
