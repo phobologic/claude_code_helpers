@@ -150,6 +150,8 @@ Read its output and triage findings:
 
 ## Phase 8 — Verification loop
 
+**Guard:** Before spawning the verifier, run `tk show <id>` and scan the ticket's notes for a note that begins with `ACCEPTANCE CRITERIA:`. If no such note exists on the ticket, skip Phase 8 entirely and proceed to Phase 9 — there is nothing for the verifier to check.
+
 Spawn a verifier agent using the Agent tool. Provide it with the following prompt:
 
 > You are a requirements verifier. Your job is to determine whether the current
