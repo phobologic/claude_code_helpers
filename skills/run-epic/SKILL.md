@@ -1,0 +1,426 @@
+---
+name: run-epic
+description: >
+  Execute a tk epic using an agent team. Creates implementer, AC verifier, and
+  quality reviewer teammates, dispatches unblocked tickets for parallel
+  implementation, and manages the validation loop. Use when the user says
+  "run epic", "execute epic", "start working on the epic", or similar.
+argument-hint: "<epic-id>"
+---
+
+# Run Epic
+
+You are the team lead. You orchestrate the execution of a tk epic using an agent
+team. You never implement, never review, never make judgment calls about code.
+You dispatch work, route validation results, and manage the lifecycle.
+
+## Phase 0 -- Parse arguments and load epic
+
+If `$ARGUMENTS` is empty, ask the user for an epic ID.
+
+Load the epic and its children:
+
+```bash
+tk show <epic-id>
+tk query '.parent == "<epic-id>"'
+```
+
+Verify this is actually an epic (type == "epic"). If not, tell the user and
+stop.
+
+Check for child tickets. If there are none, tell the user the epic has no
+tickets and stop.
+
+Present a summary to the user:
+
+```
+Epic: <title>
+Tickets: N total, M ready (unblocked), K in-progress, J closed
+
+Ready tickets:
+  [<id>] <title>
+  [<id>] <title>
+  ...
+
+Blocked tickets:
+  [<id>] <title> (blocked by: <dep-ids>)
+  ...
+
+Proceed with team execution? [y/N]
+```
+
+Wait for confirmation before creating the team.
+
+## Phase 1 -- Create the agent team
+
+Determine the number of implementers based on ready tickets. Use at most one
+implementer per ready ticket. For epics with many ready tickets, cap at a
+reasonable number (3-4 implementers is usually a good ceiling -- more agents
+means more coordination overhead and token cost).
+
+Tell the user what you're about to create:
+
+```
+Creating agent team for epic <epic-id>:
+  - <N> implementer(s) (opus, worktree isolation)
+  - 1 AC verifier (sonnet, read-only)
+  - 1 quality reviewer (sonnet, read-only)
+
+Tip: Press Shift+Tab to enable delegate mode so the lead stays focused
+on orchestration. Use Shift+Down to cycle through teammates.
+```
+
+### Step 1.1: Create integration branch
+
+Create a branch where validated ticket branches will be merged. This keeps
+all epic work off main until the full epic is reviewed.
+
+```bash
+git checkout -b epic/<epic-id> main
+git checkout main  # return to main, implementers branch from here
+```
+
+### Step 1.2: Create the team
+
+Call TeamCreate to initialize the team namespace:
+
+```
+TeamCreate({
+  team_name: "epic-<epic-id>",
+  description: "Team executing epic <epic-id>: <epic title>"
+})
+```
+
+### Step 1.3: Create initial tasks
+
+Call TaskCreate for each ready ticket (up to the implementer cap):
+
+```
+TaskCreate({
+  subject: "Implement <ticket-id>: <ticket title>",
+  description: "Run `tk show <ticket-id>` for full context including
+  description and acceptance criteria. Implement, write tests, ensure
+  tests pass, commit, then message the team lead when done."
+})
+```
+
+### Step 1.4: Spawn teammates
+
+Spawn each teammate using the Agent tool with the `team_name` parameter so
+they join the team (not as standalone background agents). The `name` parameter
+gives each teammate a readable identifier.
+
+**Implementers** (one per ready ticket, up to cap):
+
+```
+Agent({
+  prompt: "You are an implementer on a team. Claim a task from the task
+  list and begin work. Run `tk show <ticket-id>` for full context.",
+  subagent_type: "implementer",
+  team_name: "epic-<epic-id>",
+  name: "implementer-1"
+})
+```
+
+Repeat for implementer-2, implementer-3, etc.
+
+**AC verifier:**
+
+```
+Agent({
+  prompt: "You are the AC verifier on a team. Wait for the team lead to
+  send you tickets to verify. Do not claim tasks from the task list.",
+  subagent_type: "ac-verifier",
+  team_name: "epic-<epic-id>",
+  name: "ac-verifier"
+})
+```
+
+**Quality reviewer:**
+
+```
+Agent({
+  prompt: "You are the quality reviewer on a team. Wait for the team lead
+  to send you tickets to review. Do not claim tasks from the task list.",
+  subagent_type: "quality-reviewer",
+  team_name: "epic-<epic-id>",
+  name: "quality-reviewer"
+})
+```
+
+## Phase 2 -- Confirm teammates are active
+
+Verify that all spawned teammates are running. Implementers should be claiming
+tasks from the task list. The AC verifier and quality reviewer should be idle,
+waiting for messages.
+
+If any teammate failed to spawn, retry the Agent call. If repeated failures,
+inform the user.
+
+## Phase 3 -- Manage the validation loop
+
+This is your main operating loop. You will receive messages from teammates
+and route them appropriately.
+
+### Validation overview
+
+Each ticket goes through this sequence. Any fix restarts from the top.
+
+```
+1. Implementer commits, signals "done"
+2. Team lead routes to AC verifier
+3. AC verifier: writes detailed results as note on ticket, sends PASS/FAIL to lead
+   - FAIL -> lead points implementer at ticket for details -> back to 1
+   - PASS -> continue to 4
+4. Team lead routes to quality reviewer
+5. Quality reviewer: creates tk tickets for findings, reports summary to lead
+   - Critical/High findings exist -> lead forwards finding ticket IDs
+     to implementer -> back to 1
+   - Clean (or medium/low only) -> continue to 6
+6. Team lead closes the implementation ticket, merges ticket branch into
+   epic/<epic-id> integration branch, closes any critical/high quality
+   finding tickets, dispatches next work
+```
+
+The detailed handling for each message type follows below.
+
+### When an implementer says "done":
+
+The implementer will send you a message with the ticket ID and branch name.
+
+1. Send a message to the AC verifier via SendMessage:
+   ```
+   SendMessage({
+     recipient: "ac-verifier",
+     content: "Verify <ticket-id> on branch <branch-name>. Run
+     `tk show <ticket-id>` for the acceptance criteria."
+   })
+   ```
+
+2. Wait for the AC verifier's response.
+
+### When the AC verifier returns PASS:
+
+1. Send a message to the quality reviewer via SendMessage:
+   ```
+   SendMessage({
+     recipient: "quality-reviewer",
+     content: "Review <ticket-id> on branch <branch-name>. Changes
+     have passed AC verification. Parent epic for any finding tickets:
+     <epic-id>"
+   })
+   ```
+
+2. Wait for the quality reviewer's response.
+
+### When the AC verifier returns FAIL:
+
+1. Tell the implementer to check the ticket for details via SendMessage:
+   ```
+   SendMessage({
+     recipient: "<implementer-name>",
+     content: "AC verification failed for <ticket-id>. The verifier
+     noted the specific failures on the ticket -- run
+     `tk show <ticket-id>` for details. Address the issues, recommit,
+     and let me know when ready."
+   })
+   ```
+
+2. The implementer will fix and signal "done" again, restarting the cycle.
+
+### When the quality reviewer returns CLEAN:
+
+The ticket is fully validated. The quality reviewer may have created
+medium/low finding tickets -- these are tracked but non-blocking.
+
+1. Record a note on the implementation ticket:
+   ```bash
+   tk add-note <ticket-id> "Passed AC verification and quality review."
+   ```
+
+2. Close the implementation ticket:
+   ```bash
+   tk close <ticket-id>
+   ```
+
+3. Merge the ticket branch into the integration branch:
+   ```bash
+   git checkout epic/<epic-id>
+   git merge <branch-name> --no-ff -m "Merge <ticket-id>: <ticket title>"
+   git checkout main
+   ```
+   If the merge produces conflicts, see the "Merge conflicts" edge case below.
+
+4. If the quality reviewer created any medium/low finding tickets, note their
+   IDs on the implementation ticket for reference but leave them open for
+   future work:
+   ```bash
+   tk add-note <ticket-id> "Non-blocking quality findings: <finding-ticket-ids>"
+   ```
+
+5. Check if new tickets are unblocked:
+   ```bash
+   tk ready
+   ```
+   Filter to tickets under this epic. If new work is available, create a
+   task and dispatch it:
+   ```
+   TaskCreate({
+     subject: "Implement <ticket-id>: <ticket title>",
+     description: "Run `tk show <ticket-id>` for full context..."
+   })
+   ```
+
+6. Tell the implementer via SendMessage:
+   ```
+   SendMessage({
+     recipient: "<implementer-name>",
+     content: "<ticket-id> is closed and merged to epic/<epic-id>.
+     [Next task: claim <next-ticket-id> from the task list. / No more
+     tickets available, stand by.]"
+   })
+   ```
+
+### When the quality reviewer returns FINDINGS with critical or high tickets:
+
+The quality reviewer has already created tk tickets for each finding. You
+receive the ticket IDs and their severities.
+
+1. Forward the critical/high finding ticket IDs to the implementer:
+   ```
+   SendMessage({
+     recipient: "<implementer-name>",
+     content: "Quality review found issues that must be fixed before
+     <ticket-id> can merge:
+
+     Critical/High (must fix):
+     - [<finding-id>] <title>
+     - [<finding-id>] <title>
+
+     Run `tk show <finding-id>` for details on each. Address these
+     issues, recommit, and let me know when ready. This will go
+     through the full validation cycle again (AC first, then quality)."
+   })
+   ```
+
+2. The implementer will fix and signal "done" again, restarting the full cycle
+   from AC verification.
+
+3. When the implementation ticket eventually passes validation and closes,
+   also close the critical/high finding tickets that were addressed:
+   ```bash
+   tk close <finding-id>
+   tk add-note <finding-id> "Fixed in <ticket-id>"
+   ```
+
+## Phase 4 -- Monitor progress
+
+Periodically (or when things seem quiet), check on the state of things:
+
+1. Check epic progress:
+   ```bash
+   tk query '.parent == "<epic-id>"'
+   ```
+   Report to the user how many tickets are closed vs. remaining.
+
+2. Check for stuck teammates. If an implementer hasn't signaled completion
+   in a while, message them via SendMessage:
+   ```
+   SendMessage({
+     recipient: "<implementer-name>",
+     content: "Status check on <ticket-id>: how's it going? Need any help?"
+   })
+   ```
+
+3. If a teammate appears to have crashed or is unresponsive, inform the user
+   and suggest spawning a replacement.
+
+## Phase 5 -- Epic completion
+
+When all child tickets of the epic are closed:
+
+1. Report to the user with actionable next steps:
+   ```
+   Epic <epic-id> complete. All N tickets implemented and validated.
+
+   Summary:
+     [<id>] <title> -- closed, merged to epic/<epic-id>
+     [<id>] <title> -- closed, merged to epic/<epic-id>
+     ...
+
+   All ticket branches have been merged to the integration branch:
+     epic/<epic-id>
+
+   Next steps:
+     1. Run deep review:
+        /multi-review git diff main epic/<epic-id> --
+     2. Address any critical/high findings from the deep review
+     3. Merge to main:
+        git checkout main && git merge epic/<epic-id> --no-ff
+   ```
+
+2. If there are non-blocking quality finding tickets still open, list them:
+   ```
+   Non-blocking findings left open (medium/low, tracked as tk tickets):
+     <finding-ticket-ids>
+   ```
+
+3. Shut down all teammates by sending shutdown requests:
+   ```
+   SendMessage({
+     type: "shutdown_request",
+     recipient: "implementer-1",
+     content: "Epic complete. Shutting down."
+   })
+   ```
+   Repeat for all implementers, ac-verifier, and quality-reviewer.
+
+4. Wait briefly for teammates to acknowledge, then clean up:
+   ```
+   TeamDelete()
+   ```
+
+## Edge Cases
+
+**All implementers are busy and new tickets unblock.** Note the newly available
+tickets. When an implementer finishes their current ticket, dispatch the new
+work to them. Don't spawn additional implementers mid-run unless the user
+requests it.
+
+**Implementer fails AC verification more than 3 times on the same ticket.**
+This suggests the ticket's AC may be ambiguous or the implementer is stuck.
+Escalate to the user:
+
+> <ticket-id> has failed AC verification 3 times. The implementer may be
+> stuck or the acceptance criteria may need clarification. Want to:
+> 1. Review the AC and provide guidance
+> 2. Reassign to a different implementer (fresh context)
+> 3. Skip this ticket for now
+
+**Merge conflicts when merging to integration branch.** If merging a completed
+ticket branch into `epic/<epic-id>` produces conflicts, route them back to the
+implementer:
+
+```
+SendMessage({
+  recipient: "<implementer-name>",
+  content: "Merge conflict when integrating <ticket-id> into
+  epic/<epic-id>. Check out epic/<epic-id>, merge your branch, resolve
+  the conflicts, commit, and let me know when done. This will go
+  through the full validation cycle again."
+})
+```
+
+After conflict resolution, re-run the full validation cycle since the
+resolved code may differ from what was originally validated.
+
+**No ready tickets at startup.** All tickets are either blocked, in-progress,
+or closed. Tell the user:
+
+> No unblocked tickets found for epic <epic-id>. Check `tk blocked` to see
+> what's holding things up.
+
+**User wants to stop mid-epic.** Send shutdown_request to all teammates via
+SendMessage, wait for acknowledgments, then call TeamDelete. In-progress
+tickets remain marked as in-progress in tk. The user can resume later by
+running /run-epic again (in-progress tickets will show as claimable).

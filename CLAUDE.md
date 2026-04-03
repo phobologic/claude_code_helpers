@@ -70,6 +70,10 @@ To add language auto-formatting hooks to a project:
 
 ## Available Skills
 
+### Spec and Execution
+- `/spec [idea]` - Turn a rough idea into a phased plan with EARS ACs, adversarial review via spec-critic, and `tk` tickets
+- `/run-epic <epic-id>` - Execute a `tk` epic with an agent team (implementers + ac-verifier + quality-reviewer)
+
 ### Review
 - `/review` - Perform standard code review of uncommitted changes
 - `/multi-review` - Coordinate parallel reviews from 5 specialized agents
@@ -80,6 +84,15 @@ To add language auto-formatting hooks to a project:
 ### Tool Setup
 - `/use-railway` - Symlink Railway CLI rules into this project's `.claude/rules/`
 - `/use-sqlalchemy` - Symlink SQLAlchemy/Alembic rules into this project's `.claude/rules/`
+
+## Execution Agent Team
+
+Used by `/run-epic` to implement epics in parallel with validation:
+
+1. **implementer**: Reads ticket, implements, tests, commits — runs in isolated worktree (opus)
+2. **ac-verifier**: Binary PASS/FAIL check against EARS acceptance criteria (sonnet)
+3. **quality-reviewer**: Adversarial review — correctness, security, reliability, perf; creates `tk` finding tickets (sonnet)
+4. **spec-critic**: Adversarial plan review used by `/spec` before presenting to user (sonnet)
 
 ## Multi-Review Agent Specializations
 
