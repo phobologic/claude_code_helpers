@@ -87,11 +87,13 @@ Always print findings inline. Omit sections with no findings. Lead with the wors
 
 ### <Short title> — `path/to/file.ext:line`
 <What the problem is and why it matters. Include a code snippet when it clarifies the issue.>
+**Confidence**: <score 0–100>
 
 ## High Priority Issues
 
 ### <Short title> — `path/to/file.ext:line`
 <Description>
+**Confidence**: <score 0–100>
 
 ## Summary
 
@@ -101,6 +103,7 @@ Always print findings inline. Omit sections with no findings. Lead with the wors
 
 ### <Short title> — `path/to/file.ext:line`
 <Description>
+**Confidence**: <score 0–100>
 
 ## Low / Nits
 
