@@ -2,12 +2,11 @@
 name: playwright-explore
 description: >
   Spawn a team of Playwright-driven agents to explore a running web app as
-  simulated users. A GM agent sets up a game/session and shares state with
-  player agents via messaging; all agents report findings back to the team
-  lead, who deduplicates and creates tk tickets. Use when the user says
-  "explore the app", "test the app with playwright", "simulate users", or
+  simulated users. Roles are configurable; all agents report findings back to
+  the team lead, who deduplicates and creates tk tickets. Use when the user
+  says "explore the app", "test the app with playwright", "simulate users", or
   similar.
-argument-hint: "<url> [-- <scenario description>]"
+argument-hint: "<url> [roles:role1,role2,role3] [-- <scenario description>]"
 ---
 
 # Playwright Explore
@@ -19,26 +18,29 @@ create tk tickets from what the testers discover.
 
 ## Phase 0 — Parse arguments and confirm
 
-Parse `$ARGUMENTS`:
-- First token is the app URL (required). If missing, ask the user.
-- Everything after `--` is a free-form scenario description. Use it to
-  customize what the agents explore. Default scenario: "Set up a game as the
-  GM, have players join and interact, and explore the app as real users would."
+Parse `$ARGUMENTS` in this order:
 
-Identify the roles from the scenario. By default use three agents:
-- `gm-tester`: logs in as the Game Master / host / organizer
-- `player-1`: logs in as the first player / participant
-- `player-2`: logs in as the second player / participant
+1. **URL** — first token (required). If missing, ask the user.
+2. **Roles** — look for a `roles:` token (e.g. `roles:gm,player1,player2`).
+   Split on commas to get the role list.
+   - If `roles:` is absent, default to: `participant-1,participant-2,participant-3`
+   - The **first role** is always the session initiator — it sets up the
+     session and shares any join links or state with the other roles.
+   - Remaining roles are joiners — they wait for the initiator's signal,
+     then proceed.
+3. **Scenario** — everything after `--` is a free-form description of what to
+   explore. Default: "Explore the app as real users would, exercising the core
+   flows end-to-end."
 
-If the scenario implies different roles (e.g., admin + customer, or just two
-players with no GM), adjust accordingly and explain the roster to the user.
+Derive agent names from the roles (e.g. role `gm` → agent name `gm`,
+role `participant-1` → agent name `participant-1`).
 
 Present a short plan and wait for confirmation:
 
 ```
 App:      <url>
+Roles:    <role-1> (initiator), <role-2>, <role-3>  [sonnet each]
 Scenario: <scenario>
-Agents:   gm-tester (sonnet), player-1 (sonnet), player-2 (sonnet)
 Epic:     will be created now
 
 Proceed? [y/N]
@@ -50,7 +52,7 @@ Proceed? [y/N]
 EPIC_ID=$(tk create "Playwright explore: <url> (<YYYY-MM-DD HH:MM>)" \
   -t epic -p 2 \
   --tags "playwright,exploratory-testing" \
-  -d "Live exploratory test of <url>. Agents simulate <roles> and report UX issues, broken flows, and missing features.")
+  -d "Live exploratory test of <url>. Roles: <role list>. Scenario: <scenario>")
 echo $EPIC_ID
 ```
 
@@ -65,36 +67,37 @@ TeamCreate({
 })
 ```
 
-Note the `team_name` — pass it to every Agent call so teammates can message
-each other and the team lead.
+Note the `team_name` — pass it to every Agent call.
 
 ## Phase 3 — Spawn the testers
 
-Spawn all three testers in parallel. Each is a general-purpose agent using
-**sonnet** model. Give each a focused brief — they don't need to know about
-the ticket system.
+Spawn all agents in parallel. Each uses **sonnet** model. Construct each
+agent's prompt from the role name, the role's position (initiator vs. joiner),
+and the scenario.
 
-### GM tester
+### Initiator agent (first role)
 
 ```
 Agent({
   prompt: "
-You are gm-tester, a QA agent simulating a Game Master in a live web app at <url>.
+You are <role-1>, a QA agent exploring a live web app at <url>.
 
 ## Your job
-Explore the app as a GM/host would. Use playwright-cli to control a browser. Log in or create an account as a GM-type user (use realistic test
-credentials like gm@test.com / password123, or register if needed).
+You are the session initiator. Use playwright-cli to control a browser.
+Log in or create an account using realistic test credentials for your role
+(e.g. <role-1>@test.com / password123, or register if needed).
 
 ## Scenario
 <scenario>
 
 ## Coordination protocol
-You will need to cooperate with player agents. When you have information they
-need to proceed (invite links, game IDs, join codes, URLs), send it to them:
-  SendMessage({ to: 'player-1', content: '<the info>' })
-  SendMessage({ to: 'player-2', content: '<the info>' })
-Wait for players to confirm they've joined before continuing if the scenario
-requires it. Players will message you when they've completed a coordination step.
+You go first. Once you have set up the session and have information the other
+agents need to join or participate (invite links, join codes, session IDs,
+URLs, etc.), send it to each of them:
+  SendMessage({ to: '<role-2>', content: '<the info>' })
+  SendMessage({ to: '<role-3>', content: '<the info>' })
+Wait for them to confirm before continuing steps that require their presence.
+They will message you when they've completed a coordination step.
 
 ## Reporting findings
 Whenever you notice something broken, confusing, missing, or worth improving,
@@ -105,47 +108,47 @@ send a structured finding to the team lead:
       title: '<short title>',
       description: '<what happened, what you expected, steps to reproduce>',
       severity: 'critical | high | medium | low',
-      confidence: 0.0-1.0,  // how sure are you this is a real issue vs. user error?
+      confidence: 0.0-1.0,
       tags: ['<tag>', ...]
     })
   })
 
-Send findings as you discover them — don't batch them at the end.
-When you are done exploring, send: SendMessage({ to: 'team-lead', content: 'DONE' })
+Send findings as you discover them — don't batch at the end.
+When done, send: SendMessage({ to: 'team-lead', content: 'DONE' })
   ",
   subagent_type: "general-purpose",
   model: "sonnet",
   team_name: "<team_name>",
-  name: "gm-tester",
+  name: "<role-1>",
   run_in_background: true
 })
 ```
 
-### Player testers
+### Joiner agents (remaining roles)
 
-Spawn player-1 and player-2 in parallel. The prompt is the same structure;
-customize the role name and coordination direction (players wait for GM, then
-confirm back).
+Spawn all remaining roles in parallel. The prompt is the same structure with
+the role's position flipped — they wait for the initiator's signal, then
+confirm back.
 
 ```
 Agent({
   prompt: "
-You are player-1, a QA agent simulating a Player in a live web app at <url>.
+You are <role-N>, a QA agent exploring a live web app at <url>.
 
 ## Your job
-Explore the app as a regular player/participant would. Use playwright-cli to
-control a browser. Log in or create an account as a
-player-type user (e.g. player1@test.com / password123, or register if needed).
+Use playwright-cli to control a browser. Log in or create an account using
+realistic test credentials for your role (e.g. <role-N>@test.com / password123,
+or register if needed).
 
 ## Scenario
 <scenario>
 
 ## Coordination protocol
-Wait for the GM to send you the information you need to join (invite link, game
-ID, etc.). You will receive a message from gm-tester — use that info to
-join the session. Once you've joined, confirm back:
-  SendMessage({ to: 'gm-tester', content: 'player-1 joined' })
-Then continue exploring as a player would.
+Wait for <role-1> to send you the information you need to join the session
+(invite link, join code, session ID, etc.). Once you have it, use it to join.
+Then confirm back:
+  SendMessage({ to: '<role-1>', content: '<role-N> joined' })
+Then continue exploring from your role's perspective.
 
 ## Reporting findings
 Whenever you notice something broken, confusing, missing, or worth improving,
@@ -162,18 +165,15 @@ send a structured finding to the team lead:
   })
 
 Send findings as you discover them.
-When you are done exploring, send: SendMessage({ to: 'team-lead', content: 'DONE' })
+When done, send: SendMessage({ to: 'team-lead', content: 'DONE' })
   ",
   subagent_type: "general-purpose",
   model: "sonnet",
   team_name: "<team_name>",
-  name: "player-1",
+  name: "<role-N>",
   run_in_background: true
 })
 ```
-
-Spawn player-2 identically with name `player-2` and credentials
-`player2@test.com`.
 
 ## Phase 4 — Coordination loop
 
@@ -185,7 +185,7 @@ Parse the finding. Before creating a ticket, check whether it duplicates an
 existing one:
 
 ```bash
-tk query  # scan open tickets in the epic for similar titles/descriptions
+tk query '.parent == "<epic-id>"'
 ```
 
 **If it's a new issue**, create a ticket:
@@ -193,7 +193,7 @@ tk query  # scan open tickets in the epic for similar titles/descriptions
 ```bash
 tk create "<title>" \
   -t bug \
-  -p <priority>  \  # 0=critical, 1=high, 2=medium, 3=low, 4=backlog
+  -p <priority> \  # 0=critical, 1=high, 2=medium, 3=low, 4=backlog
   --parent $EPIC_ID \
   --tags "<tags from finding, plus 'playwright'>" \
   -d "<description>
@@ -215,22 +215,17 @@ Reported by: <agent-name>
 tk add-note <existing-id> "Additional report from <agent>: <description>"
 ```
 
-Acknowledge the finding back to the tester so they know it was received
-(one-line SendMessage is fine; keeps their context clean).
+Acknowledge the finding back to the tester (one-line SendMessage is fine).
 
 ### When you receive `DONE` from an agent:
 
-Note that the agent has finished. When all agents have sent `DONE`, proceed to
-Phase 5.
+Note it. When all agents have sent `DONE`, proceed to Phase 5.
 
 ### While waiting:
 
-Periodically check in with agents that haven't sent a finding or status in a
-while. If an agent appears stuck, ask for a status update.
+Periodically check in with agents that haven't sent anything in a while.
 
 ## Phase 5 — Completion
-
-When all agents have sent `DONE`:
 
 1. Summarize the epic:
 
@@ -254,32 +249,31 @@ Suggested next steps:
   tk show <id>                      # review individual tickets
 ```
 
-3. Shut down the team:
+3. Shut down the team (send to each role by name, then delete):
 
 ```
-SendMessage({ to: 'gm-tester',  content: 'Session complete. Shutting down.' })
-SendMessage({ to: 'player-1',   content: 'Session complete. Shutting down.' })
-SendMessage({ to: 'player-2',   content: 'Session complete. Shutting down.' })
+SendMessage({ to: '<role-1>', content: 'Session complete. Shutting down.' })
+SendMessage({ to: '<role-2>', content: 'Session complete. Shutting down.' })
+...
 TeamDelete()
 ```
 
 ## Edge Cases
 
-**Agent can't connect to the app.** If a tester reports that `<url>` is
-unreachable, stop immediately and tell the user the app doesn't appear to be
-running.
+**Agent can't connect to the app.** Stop immediately and tell the user the
+app doesn't appear to be running at `<url>`.
 
-**Coordination stall.** If players are waiting for the GM and the GM hasn't
-sent an invite after several minutes, message the GM directly:
+**Coordination stall.** If joiners are waiting and the initiator hasn't sent
+anything, prompt it directly:
 ```
-SendMessage({ to: 'gm-tester', content: 'Players are waiting for the invite link — have you created the game yet?' })
+SendMessage({ to: '<role-1>', content: 'Other agents are waiting — have you set up the session yet?' })
 ```
 
-**playwright-cli not available.** If a tester reports that `playwright-cli` isn't
+**playwright-cli not available.** If a tester reports `playwright-cli` isn't
 found, suggest the user install it and retry.
 
-**Duplicate flood.** If multiple agents report the same issue within a short
-window, create one ticket and note all reporters:
+**Duplicate flood.** If multiple agents report the same issue, create one
+ticket and note all reporters:
 ```bash
 tk add-note <id> "Also observed by <agent>: <their description>"
 ```
