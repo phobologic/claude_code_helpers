@@ -27,7 +27,7 @@ acceptance criteria. Focus on code quality.
 ### Step 1: Read the changes
 
 ```bash
-git diff main..<branch-name>
+git diff main...<branch-name>
 ```
 
 For larger changes, also examine full file context:

@@ -38,7 +38,7 @@ return:
 Review the diff on the specified branch:
 
 ```bash
-git diff main..<branch-name>
+git diff main...<branch-name>
 ```
 
 If the diff is large, also look at specific files:
