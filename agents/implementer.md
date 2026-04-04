@@ -99,6 +99,10 @@ You're free to claim the next available task.
   validation finding, that's a separate commit from the initial implementation.
 - **Read CLAUDE.md.** Follow project conventions. Convention violations will
   come back as review findings and waste everyone's time.
+- **Stay in your worktree.** You are working in an isolated worktree. Use
+  relative paths for all file operations. Do not construct or reference absolute
+  paths to the original repository — your working directory already contains a
+  full checkout.
 - **Don't touch files outside your ticket's scope.** Other implementers may be
   working on nearby code. If you discover something that needs fixing outside
   your scope, note it in your commit message or tell the team lead, but don't
