@@ -96,16 +96,36 @@ TeamCreate({
 })
 ```
 
-### Step 2.3: Spawn the quality reviewer
+### Step 2.3: Spawn quality reviewers
 
-Spawn one quality reviewer. It will be reused across all waves.
+Spawn two quality reviewers. They are reused across all waves and load-balance
+review work between them.
 
 ```
 Agent({
   subagent_type: "quality-reviewer",
   team_name: "fix-<stamp>",
-  name: "quality-reviewer",
-  prompt: "You are the quality reviewer on a fix team. Wait for the team lead to
+  name: "quality-reviewer-1",
+  prompt: "You are quality-reviewer-1 on a fix team. Wait for the team lead to
+  route tickets to you via SendMessage. For each ticket routed:
+
+  1. Read `tk show <ticket-id>` to understand what was being fixed
+  2. Read the diff on the branch provided
+  3. Create tk tickets for any Critical, High, or Medium findings (standalone, no
+     parent required)
+  4. Report back to the team lead with one of:
+     - CLEAN — no critical or high findings (note any medium/low ticket IDs created)
+     - FINDINGS — list each critical/high finding ticket ID and its title
+
+  Process tickets in the order received. Do not start the next review until you have
+  reported results for the current one."
+})
+
+Agent({
+  subagent_type: "quality-reviewer",
+  team_name: "fix-<stamp>",
+  name: "quality-reviewer-2",
+  prompt: "You are quality-reviewer-2 on a fix team. Wait for the team lead to
   route tickets to you via SendMessage. For each ticket routed:
 
   1. Read `tk show <ticket-id>` to understand what was being fixed
@@ -167,19 +187,20 @@ Wave <N>: <M> implementers running in parallel on: <ticket-ids>
 
 As implementers complete and send `DONE <ticket-id> <branch>`:
 
-**Immediately route to the quality reviewer** — don't wait for other implementers
+**Immediately route to a quality reviewer** — don't wait for other implementers
 in the wave. Start review the moment any ticket is ready.
+
+Route to whichever reviewer is currently idle. If both are idle, prefer
+`quality-reviewer-1`. If both are busy, queue the ticket and send it to
+whichever reviewer reports back first.
 
 ```
 SendMessage({
-  recipient: "quality-reviewer",
+  recipient: "quality-reviewer-1",  // or quality-reviewer-2
   content: "Review <ticket-id> on branch <branch-name>. Run `tk show <ticket-id>`
   for context on what was being fixed."
 })
 ```
-
-If the quality reviewer is currently busy (processing a previous ticket), queue this
-message and send it as soon as the reviewer reports back.
 
 ---
 
@@ -210,7 +231,8 @@ message and send it as soon as the reviewer reports back.
    TaskCreate({ subject: "Fix <next-id>: <title>", description: "..." })
    ```
 
-4. If the quality reviewer has queued tickets waiting, send the next one now.
+4. If there are queued tickets waiting for review, send the next one to this
+   now-free reviewer.
 
 ---
 
@@ -301,8 +323,9 @@ Next steps:
 
 Shut down all teammates:
 ```
-SendMessage({ recipient: "quality-reviewer", content: "Batch complete. Shutting down." })
-SendMessage({ recipient: "implementer-1",    content: "Batch complete. Shutting down." })
+SendMessage({ recipient: "quality-reviewer-1", content: "Batch complete. Shutting down." })
+SendMessage({ recipient: "quality-reviewer-2", content: "Batch complete. Shutting down." })
+SendMessage({ recipient: "implementer-1",       content: "Batch complete. Shutting down." })
 # ... all implementers
 ```
 
