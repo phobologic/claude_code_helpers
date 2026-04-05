@@ -1,0 +1,5 @@
+{
+  "name": "claude-worktree",
+  "version": "1.0.0",
+  "description": "Git worktree management: symlink shared state (e.g. .tickets/) across worktrees via .worktreelinks, copy per-worktree files via .worktreeinclude"
+}

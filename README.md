@@ -10,6 +10,7 @@ language plugins, tool rules, and working style rules for `~/.claude/`.
 | `skills/` | Global skills: `/spec`, `/run-epic`, `/review`, `/multi-review`, `/implement-ticket`, `/use-railway`, `/use-sqlalchemy`, `/migrate-beads` |
 | `agents/` | Sub-agents: 4 ticket-execution agents (implementer, ac-verifier, quality-reviewer, spec-critic) + 5 code review agents |
 | `languages/` | Per-language Claude Code plugins (Go, Python) — auto-formatting hooks + coding rules |
+| `plugins/` | General-purpose Claude Code plugins — workflow automation and tool integrations |
 | `tools/` | Per-tool rule files (Railway, SQLAlchemy) — loaded via `.claude/rules/` symlinks |
 | `bin/` | Utility scripts: tk plugins (`tk-show-multi`, `tk-epic-status`) and `git-auto-commit.sh` |
 | `CLAUDE.global.md` | Global CLAUDE.md with personal working style rules |
@@ -200,6 +201,33 @@ To activate formatting hooks in a specific project:
 ```
 
 See [`languages/README.md`](languages/README.md) for plugin structure details.
+
+## General Plugins
+
+General-purpose workflow plugins live in `plugins/`. Each is installed per-project from the `phobos-plugins` marketplace.
+
+**Step 1 — add the marketplace once per machine:**
+```
+/plugin marketplace add ~/git/claude_code/plugins
+```
+
+**Step 2 — install in your project:**
+```
+/plugin install claude-worktree@phobos-plugins
+```
+
+### `claude-worktree`
+
+Improves git worktree behavior by replacing Claude Code's default worktree creation with one that supports two files:
+
+- **`.worktreelinks`** — paths that are **symlinked** into each worktree (shared state: changes anywhere are visible everywhere). Use for `.tickets/`, shared config.
+- **`.worktreeinclude`** — paths that are **copied** into each worktree (independent per-worktree snapshot). Use for `.env`, per-worktree overrides.
+
+On first session after install, if `.worktreeinclude` exists but `.worktreelinks` doesn't, Claude will walk you through migrating entries to the right file.
+
+The `SessionStart` hook also acts as a safety net: for any worktree created before the plugin was installed, it retroactively symlinks all `.worktreelinks` entries.
+
+See [`plugins/README.md`](plugins/README.md) for plugin structure details.
 
 ## Tool Rules
 

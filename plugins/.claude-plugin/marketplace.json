@@ -1,0 +1,16 @@
+{
+  "name": "phobos-plugins",
+  "owner": {
+    "name": "mike"
+  },
+  "metadata": {
+    "description": "General-purpose Claude Code plugins: workflow automation and tool integrations"
+  },
+  "plugins": [
+    {
+      "name": "claude-worktree",
+      "source": "./worktree",
+      "description": "Git worktree management: symlink shared state across worktrees via .worktreelinks, with backward-compatible .worktreeinclude copy support"
+    }
+  ]
+}
