@@ -41,6 +41,8 @@ $ENTRY_LIST
 
 Walk the user through each entry NOW, before doing anything else. For each one, ask whether it should be symlinked (shared state -> .worktreelinks) or copied (per-worktree -> stays in .worktreeinclude). Examples that should almost always be symlinked: .tickets/, shared config. Examples that should stay copied: .env files, per-worktree overrides.
 
+For any directories moved to .worktreelinks (e.g. .tickets/), also check .gitignore: trailing-slash patterns like '.tickets/' match real directories but NOT symlinks, so the symlink will appear as untracked in worktrees. Ensure .gitignore has BOTH the trailing-slash form (for real directories) and the bare form without slash (for symlinks). Point this out to the user for each directory entry they move.
+
 IMPORTANT: When you are done discussing ALL entries, you MUST write .worktreelinks to disk — even if it is completely empty. This file's existence is what prevents this prompt from appearing on every session start. Do NOT skip writing the file under any circumstances, even if the user says they don't want to move anything to .worktreelinks."
     fi
   fi
@@ -73,4 +75,13 @@ while IFS= read -r entry || [[ -n "$entry" ]]; do
 
   mkdir -p "$(dirname "$dst")"
   ln -sf "$src" "$dst"
+
+  # Warn if .gitignore only has a trailing-slash pattern — those match real
+  # directories but not symlinks, causing the symlink to appear as untracked.
+  if [[ -d "$src" && -f "$REPO_ROOT/.gitignore" ]]; then
+    if ! grep -qxF "$entry" "$REPO_ROOT/.gitignore" 2>/dev/null && \
+         grep -qxF "${entry}/" "$REPO_ROOT/.gitignore" 2>/dev/null; then
+      echo "claude-worktree: '$entry' is a directory symlink but .gitignore only has '${entry}/' — trailing-slash patterns don't match symlinks. Add '$entry' (without trailing slash) to .gitignore to prevent it appearing as untracked in this worktree."
+    fi
+  fi
 done < "$WORKTREELINKS"

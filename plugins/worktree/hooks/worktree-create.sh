@@ -46,6 +46,14 @@ if [[ -f "$CWD/.worktreelinks" ]]; then
     [[ -e "$src" ]] || mkdir -p "$src"
     mkdir -p "$(dirname "$dst")"
     ln -sf "$src" "$dst"
+    # Warn if .gitignore only has a trailing-slash pattern — those match real
+    # directories but not symlinks, causing the symlink to appear as untracked.
+    if [[ -d "$src" && -f "$WORKTREE_PATH/.gitignore" ]]; then
+      if ! grep -qxF "$entry" "$WORKTREE_PATH/.gitignore" 2>/dev/null && \
+           grep -qxF "${entry}/" "$WORKTREE_PATH/.gitignore" 2>/dev/null; then
+        echo "claude-worktree: '$entry' is a directory symlink but .gitignore only has '${entry}/' — trailing-slash patterns don't match symlinks. Add '$entry' (without trailing slash) to .gitignore to prevent it appearing as untracked in worktrees." >&2
+      fi
+    fi
   done < "$CWD/.worktreelinks"
 fi
 
