@@ -218,14 +218,35 @@ General-purpose workflow plugins live in `plugins/`. Each is installed per-proje
 
 ### `claude-worktree`
 
-Improves git worktree behavior by replacing Claude Code's default worktree creation with one that supports two files:
+Improves git worktree behavior by replacing Claude Code's default worktree creation with one that supports two config files:
 
 - **`.worktreelinks`** — paths that are **symlinked** into each worktree (shared state: changes anywhere are visible everywhere). Use for `.tickets/`, shared config.
 - **`.worktreeinclude`** — paths that are **copied** into each worktree (independent per-worktree snapshot). Use for `.env`, per-worktree overrides.
 
-On first session after install, if `.worktreeinclude` exists but `.worktreelinks` doesn't, Claude will walk you through migrating entries to the right file.
+Both files are newline-delimited lists of repo-relative paths. Lines starting with `#` are treated as comments. Trailing slashes are stripped automatically.
 
-The `SessionStart` hook also acts as a safety net: for any worktree created before the plugin was installed, it retroactively symlinks all `.worktreelinks` entries.
+```
+# .worktreelinks — shared across all worktrees
+.tickets/
+.claude/rules/
+
+# .worktreeinclude — per-worktree copies
+.env
+.claude/settings.local.json
+```
+
+**First-time setup:** on the first message after installing the plugin in a repo that has `.worktreeinclude` but no `.worktreelinks`, Claude will walk you through migrating entries to the right file. Once `.worktreelinks` exists (even empty) the prompt won't appear again.
+
+**Safety net:** the `SessionStart` hook retroactively symlinks `.worktreelinks` entries in worktrees created before the plugin was installed.
+
+**`.gitignore` note:** git's trailing-slash patterns (e.g. `.tickets/`) match real directories but not symlinks. For any directory entry in `.worktreelinks`, add both forms to `.gitignore`:
+
+```
+.tickets/   # matches the real directory in the main repo
+.tickets    # matches the symlink in worktrees
+```
+
+The plugin warns automatically when it detects a missing bare entry.
 
 See [`plugins/README.md`](plugins/README.md) for plugin structure details.
 
