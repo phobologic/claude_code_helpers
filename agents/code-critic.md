@@ -19,10 +19,9 @@ Check your prompt for `TK_MODE=true SESSION_TAG=<tag>`:
 
 Read `.code-review/changed-files.txt` for the file list. **Review ONLY these files — nothing else.**
 
-| REVIEW_CMD in prompt | Action per file |
+| REVIEW_CMD in prompt | Action |
 |---|---|
-| `git diff HEAD --` | `git diff HEAD -- <file>` |
-| `git diff <ref> --` | `git diff <ref> -- <file>` |
+| `DIFF_FILE` | Read `.code-review/diff.patch` for all changes; read individual files for broader context |
 | `FULL_FILE` | Read entire file contents |
 
 ## CLAUDE.md Context

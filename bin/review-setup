@@ -30,7 +30,7 @@ done
 
 # Setup directory, clean old artifacts
 mkdir -p .code-review
-rm -f .code-review/*.md .code-review/*.txt
+rm -f .code-review/*.md .code-review/*.txt .code-review/*.patch
 
 # Detect tk
 TK_AVAILABLE=false
@@ -40,7 +40,8 @@ command -v tk >/dev/null 2>&1 && TK_AVAILABLE=true
 case "$SCOPE" in
   uncommitted)
     git status --porcelain | awk '{print $NF}' > .code-review/changed-files.txt
-    REVIEW_CMD="git diff HEAD --"
+    git diff HEAD > .code-review/diff.patch
+    REVIEW_CMD="DIFF_FILE"
     ;;
   commit-range)
     if [[ -z "$BASE_REF" ]]; then
@@ -48,7 +49,8 @@ case "$SCOPE" in
       exit 1
     fi
     git diff --name-only "$BASE_REF" > .code-review/changed-files.txt
-    REVIEW_CMD="git diff $BASE_REF --"
+    git diff "$BASE_REF" > .code-review/diff.patch
+    REVIEW_CMD="DIFF_FILE"
     ;;
   files)
     if [[ ${#FILES[@]} -eq 0 ]]; then

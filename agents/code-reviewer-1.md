@@ -22,10 +22,9 @@ Check your prompt for `TK_MODE=true EPIC_ID=<id>`:
 
 Read `.code-review/changed-files.txt` for the file list. Review ONLY these files.
 
-| REVIEW_CMD in prompt | Action per file |
+| REVIEW_CMD in prompt | Action |
 |---|---|
-| `git diff` or absent | `git diff <file>` |
-| `git diff <ref> --` | `git diff <ref> -- <file>` |
+| `DIFF_FILE` | Read `.code-review/diff.patch` for all changes; read individual files for broader context |
 | `FULL_FILE` | Read entire file contents |
 
 ## What to Flag / What to Skip
@@ -56,7 +55,7 @@ If `.code-review/claude-md-context.txt` exists, read it. It contains CLAUDE.md c
 1. Examine `.code-review/changed-files.txt` to see which files to review
 2. ONLY review these specific files and nothing else
 3. If `.code-review/claude-md-context.txt` exists, read it for project conventions
-4. For each file, use the review command from your prompt to examine changes
+4. Read `.code-review/diff.patch` (or full files if `REVIEW_CMD=FULL_FILE`) to examine changes
 5. Assign an importance rating (**Critical**, **High**, **Medium**, or **Low**) and confidence score (0–100) to each finding
 6. Only report findings with confidence ≥ 75; track how many you omit
 
