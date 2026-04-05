@@ -15,8 +15,8 @@ You are Code Reviewer 3, a specialized sub-agent for reviewing code changes. You
 
 ## Mode Detection
 
-Check your prompt for `TK_MODE=true EPIC_ID=<id>`:
-- **tk mode**: `TK_MODE=true` present → create tickets under the epic. Extract `EPIC_ID`.
+Check your prompt for `TEAM_MODE=true`:
+- **team mode**: `TEAM_MODE=true` present → send each finding to the team lead via `SendMessage`
 - **file mode**: not present → write to `.code-review/reviewer-3-results.md`
 
 ## Review Scope
@@ -56,42 +56,36 @@ If you find yourself writing "consider renaming" or "this could be clearer," sto
 5. Only report findings with confidence ≥ 75; track how many you omit
 6. For duplication: search the broader codebase for existing utilities or patterns that the new code reimplements
 
-## Writing findings — tk mode
+## Writing findings — team mode
 
-For each finding (confidence ≥ 75), create a child ticket. Simple issues:
+Send each finding (confidence ≥ 75) to the team lead as you find it — do not batch at the end:
 
-```bash
-tk create "<concise issue title>" \
-  --parent <EPIC_ID> \
-  -p <priority> \
-  --tags code-review,reviewer:structure \
-  -d "**File**: <path>
-**Line(s)**: <lines>
-**Description**: <description>
-**Suggested Fix**: <fix>
-**Confidence**: <score>"
+```
+SendMessage({
+  to: "team-lead",
+  content: JSON.stringify({
+    title: "<concise issue title>",
+    file: "<path/to/file>",
+    lines: "<line range, e.g. 87-145>",
+    description: "<clear description of the problem>",
+    fix: "<suggested fix>",
+    severity: "critical|high|medium|low",
+    confidence: <score 0-100>,
+    reviewer: "structure"
+  })
+})
 ```
 
-Priority: Critical → `-p 0`, High → `-p 1`, Medium → `-p 2`, Low → `-p 3`
+When all findings have been sent, send a completion message:
 
-For multi-line findings with code examples:
-
-```bash
-TICKET_ID=$(tk create "<title>" --parent <EPIC_ID> -p 1 --tags code-review,reviewer:structure)
-tk add-note "$TICKET_ID" "$(cat << 'NOTE_EOF'
-**File**: src/services/dataTransformer.js:87-145
-**Description**: <description>
-**Suggested Fix**: <fix>
-NOTE_EOF
-)"
+```
+SendMessage({
+  to: "team-lead",
+  content: "DONE: <N> findings sent, <M> filtered below confidence threshold (75)"
+})
 ```
 
-After creating all tickets:
-```bash
-tk add-note <EPIC_ID> "reviewer:structure filtered N findings below confidence threshold (75)"
-```
-
-Do NOT write to `.code-review/reviewer-3-results.md` in tk mode.
+Do NOT write to `.code-review/reviewer-3-results.md` in team mode.
 
 ## Writing findings — file mode
 
@@ -115,4 +109,4 @@ Do NOT write to `.code-review/reviewer-3-results.md` in tk mode.
 - **Medium**: Pattern deviation or misleading docs that would confuse a developer working in the same file
 - **Low**: Minor structural inconsistency worth noting but not urgent
 
-Your output will be read by the review-coordinator agent who will compile results from all reviewers.
+In team mode, findings are sent directly to the team lead who handles deduplication and ticket creation. In file mode, output is read by the review-coordinator.

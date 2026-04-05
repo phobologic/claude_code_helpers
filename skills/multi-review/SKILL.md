@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Multiple Code Reviewers
 
-This command performs a comprehensive code review using specialized sub-agents.
+You are the **team lead** for a parallel code review. Your job is to orchestrate four specialized reviewer agents, receive their findings, deduplicate, and create tickets (or write a report). You never review code yourself — that's the reviewers' job.
 
 ## Step 1: Setup and collect context
 
@@ -20,7 +20,7 @@ Capture `TK_AVAILABLE`, `REVIEW_CMD`, and `FILES_COUNT` from the output.
 
 If `FILES_COUNT` is 0, tell the user there are no files to review and stop.
 
-## Step 2: tk mode setup (if TK_AVAILABLE)
+## Step 2: Create the epic (if TK_AVAILABLE)
 
 If `TK_AVAILABLE` is true:
 
@@ -29,102 +29,176 @@ If `TK_AVAILABLE` is true:
 ```bash
 EPIC_ID=$(tk create "<generated title> (<YYYY-MM-DD HH:MM>)" -t epic -p 2 --tags code-review -d "<brief summary of changes being reviewed>")
 ```
-3. Note the `EPIC_ID` for passing to sub-agents.
+3. Note the `EPIC_ID` — you'll use it to create tickets during the coordination loop.
 
-## Step 3: Launch reviewers
+## Step 3: Create the team
 
-Use the Task tool to invoke these specialized reviewers in parallel.
-
-Include `REVIEW_CMD=<command>` in each prompt so reviewers know how to examine files.
-
-### tk mode (TK_AVAILABLE=true)
-
-Pass the epic ID and review command to each sub-agent via the prompt string:
-
-1. Invoke the code-reviewer-1 sub-agent:
 ```
-Task: Review code for logical correctness
-Prompt: TK_MODE=true EPIC_ID=<epic_id> REVIEW_CMD=<review_cmd> -- Review ONLY files in .code-review/changed-files.txt - do NOT examine any other files
-SubagentType: code-reviewer-1
+TeamCreate({
+  team_name: "review-<YYYYMMDD-HHMM>",
+  description: "Code review team"
+})
 ```
 
-2. Invoke the code-reviewer-2 sub-agent:
+Note the `team_name` — pass it to every Agent call.
+
+## Step 4: Spawn reviewers
+
+Spawn all four reviewers in parallel as **background agents**. Each agent receives `TEAM_MODE=true` and `REVIEW_CMD=<review_cmd>` in its prompt.
+
 ```
-Task: Review code for performance
-Prompt: TK_MODE=true EPIC_ID=<epic_id> REVIEW_CMD=<review_cmd> -- Review ONLY files in .code-review/changed-files.txt - do NOT examine any other files
-SubagentType: code-reviewer-2
+Agent({
+  prompt: "TEAM_MODE=true REVIEW_CMD=<review_cmd> -- Review ONLY files in .code-review/changed-files.txt",
+  subagent_type: "code-reviewer-1",
+  model: "sonnet",
+  team_name: "<team_name>",
+  name: "reviewer-logic",
+  run_in_background: true
+})
+
+Agent({
+  prompt: "TEAM_MODE=true REVIEW_CMD=<review_cmd> -- Review ONLY files in .code-review/changed-files.txt",
+  subagent_type: "code-reviewer-2",
+  model: "sonnet",
+  team_name: "<team_name>",
+  name: "reviewer-perf",
+  run_in_background: true
+})
+
+Agent({
+  prompt: "TEAM_MODE=true REVIEW_CMD=<review_cmd> -- Review ONLY files in .code-review/changed-files.txt",
+  subagent_type: "code-reviewer-3",
+  model: "sonnet",
+  team_name: "<team_name>",
+  name: "reviewer-structure",
+  run_in_background: true
+})
+
+Agent({
+  prompt: "TEAM_MODE=true REVIEW_CMD=<review_cmd> -- Review ONLY files in .code-review/changed-files.txt",
+  subagent_type: "security-reviewer",
+  model: "sonnet",
+  team_name: "<team_name>",
+  name: "reviewer-security",
+  run_in_background: true
+})
 ```
 
-3. Invoke the code-reviewer-3 sub-agent:
+## Step 5: Coordination loop
+
+This is your main loop. Track how many DONE messages you've received (target: 4). In file mode, accumulate findings in an in-memory list.
+
+### When you receive a JSON finding from any reviewer:
+
+Parse the JSON payload. Fields: `title`, `file`, `lines`, `description`, `fix`, `severity`, `confidence`, `reviewer`.
+
+**Check for duplicates before acting:**
+
+- **TK mode**: Query existing tickets under the epic:
+  ```bash
+  tk query '.[] | select(.parent=="<epic_id>")'
+  ```
+  Two findings are duplicates if they reference the same `file`, overlapping `lines`, and describe the same core problem.
+
+- **File mode**: Compare against your in-memory list of accumulated findings.
+
+**If it's a new finding:**
+
+- **TK mode**: Create a ticket:
+  ```bash
+  tk create "<title>" \
+    --parent <EPIC_ID> \
+    -p <priority> \
+    --tags "code-review,reviewer:<reviewer>" \
+    -d "**File**: <file>:<lines>
+  **Description**: <description>
+  **Suggested Fix**: <fix>
+  **Confidence**: <confidence>"
+  ```
+  Priority mapping: `critical` → `-p 0`, `high` → `-p 1`, `medium` → `-p 2`, `low` → `-p 3`
+
+- **File mode**: Append to your in-memory findings list.
+
+**If it duplicates an existing finding:**
+
+- **TK mode**:
+  ```bash
+  tk add-note <existing-id> "Also reported by reviewer:<reviewer> — <description>"
+  ```
+- **File mode**: Note the duplicate reviewer in your in-memory list entry.
+
+Acknowledge the finding back to the reviewer with a brief SendMessage (one line is fine).
+
+### When you receive `DONE` from a reviewer:
+
+Note it. When all 4 reviewers have sent `DONE`, proceed to Step 6.
+
+## Step 6: Cleanup and summary
+
+### Shut down the team
+
 ```
-Task: Review code for readability
-Prompt: TK_MODE=true EPIC_ID=<epic_id> REVIEW_CMD=<review_cmd> -- Review ONLY files in .code-review/changed-files.txt - do NOT examine any other files
-SubagentType: code-reviewer-3
+TeamDelete({ team_name: "<team_name>" })
 ```
 
-4. Invoke the security-reviewer sub-agent:
-```
-Task: Review code for security issues
-Prompt: TK_MODE=true EPIC_ID=<epic_id> REVIEW_CMD=<review_cmd> -- Review ONLY files in .code-review/changed-files.txt - do NOT examine any other files
-SubagentType: security-reviewer
+### TK mode — present summary
+
+```bash
+tk query '.[] | select(.parent=="<epic_id>")'
 ```
 
-### File mode (TK_AVAILABLE=false)
+Present an inline summary:
 
-Pass the review command without tk parameters:
+```
+## Code Review Summary
 
-1. Invoke the code-reviewer-1 sub-agent:
-```
-Task: Review code for logical correctness
-Prompt: REVIEW_CMD=<review_cmd> -- Review ONLY files in .code-review/changed-files.txt - do NOT examine any other files
-SubagentType: code-reviewer-1
-```
+Epic: <epic_id>
 
-2. Invoke the code-reviewer-2 sub-agent:
-```
-Task: Review code for performance
-Prompt: REVIEW_CMD=<review_cmd> -- Review ONLY files in .code-review/changed-files.txt - do NOT examine any other files
-SubagentType: code-reviewer-2
-```
+### Overview
+Analyzed X files. Found:
+- N P0 (Critical) issues
+- N P1 (High) issues
+- N P2 (Medium) issues
+- N P3 (Low) issues
+- N duplicates merged
 
-3. Invoke the code-reviewer-3 sub-agent:
-```
-Task: Review code for readability
-Prompt: REVIEW_CMD=<review_cmd> -- Review ONLY files in .code-review/changed-files.txt - do NOT examine any other files
-SubagentType: code-reviewer-3
-```
+### P0 - Critical Issues
+- **<tk-id>** [reviewer:<label>] <title> — <file>:<lines>
 
-4. Invoke the security-reviewer sub-agent:
-```
-Task: Review code for security issues
-Prompt: REVIEW_CMD=<review_cmd> -- Review ONLY files in .code-review/changed-files.txt - do NOT examine any other files
-SubagentType: security-reviewer
+### P1 - High Priority Issues
+- **<tk-id>** [reviewer:<label>] <title> — <file>:<lines>
+
+### P2 - Medium Priority Issues
+- **<tk-id>** [reviewer:<label>] <title> — <file>:<lines>
+
+### P3 - Low Priority Issues
+- **<tk-id>** [reviewer:<label>] <title> — <file>:<lines>
 ```
 
-## Step 4: Coordination
+Tell the user they can browse tickets with:
+- `tk show <id>` — view a specific ticket
+- `tk query '.[] | select(.parent=="<epic_id>")'` — list all review tickets
 
-After all reviewers complete their analysis, invoke the review-coordinator sub-agent:
+### File mode — write and present report
 
-### tk mode
+Organize accumulated findings by severity (critical → high → medium → low). Deduplicate anything that slipped through. Write to `.code-review/final-report.md` using this format:
+
+```markdown
+# Code Review Summary
+
+## Overview
+Analyzed X files. Found N issues across Y reviewers.
+
+## Critical Issues
+### <Title>
+- **Reviewer**: <reviewer>
+- **File**: <file>:<lines>
+- **Description**: <description>
+- **Suggested Fix**: <fix>
+- **Confidence**: <score>
+
+## High Priority Issues
+...
 ```
-Task: Compile review findings
-Prompt: TK_MODE=true EPIC_ID=<epic_id> -- Aggregate review findings, deduplicate, and present summary
-SubagentType: review-coordinator
-```
 
-### File mode
-```
-Task: Compile review findings
-Prompt: Combine all reviewer findings, combine duplicates, and write the final report to .code-review/final-report.md
-SubagentType: review-coordinator
-```
-
-## Step 5: Completion
-
-### tk mode
-When complete, inform the user that the review is finished and provide the epic ID. Tell them they can browse tickets with:
-- `tk show <id>` - View details of a specific ticket
-- `tk query '.[] | select(.parent=="<epic_id>")'` - List all review tickets
-
-### File mode
-When complete, inform the user that the review is finished and present the final report from .code-review/final-report.md.
+Then present the report to the user.
