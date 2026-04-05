@@ -58,12 +58,12 @@ If you find yourself writing "consider renaming" or "this could be clearer," sto
 
 ## Writing findings — team mode
 
-Send each finding (confidence ≥ 75) to the team lead as you find it — do not batch at the end. The `message` field must be a plain JSON string — serialize it yourself, do not pass an object:
+Send each finding (confidence ≥ 75) to the team lead as you find it — do not batch at the end. Use this plain-text format — do NOT use JSON:
 
 ```
 SendMessage({
   to: "team-lead",
-  message: "{\"title\": \"<concise issue title>\", \"file\": \"<path/to/file>\", \"lines\": \"<e.g. 87-145>\", \"description\": \"<clear description of the problem>\", \"fix\": \"<suggested fix>\", \"severity\": \"critical|high|medium|low\", \"confidence\": <score 0-100>, \"reviewer\": \"structure\"}"
+  message: "FINDING\nreviewer: structure\nseverity: <critical|high|medium|low>\nconfidence: <0-100>\nfile: <path/to/file>\nlines: <e.g. 87-145>\ntitle: <concise issue title>\ndescription: <clear description of the problem>\nfix: <suggested fix>"
 })
 ```
 

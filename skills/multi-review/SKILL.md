@@ -88,9 +88,9 @@ Agent({
 
 This is your main loop. Track how many DONE messages you've received (target: 4). In file mode, accumulate findings in an in-memory list.
 
-### When you receive a JSON finding from any reviewer:
+### When you receive a finding from any reviewer:
 
-Parse the JSON payload. Fields: `title`, `file`, `lines`, `description`, `fix`, `severity`, `confidence`, `reviewer`.
+Findings arrive as plain-text messages starting with `FINDING`. Parse the `key: value` lines to extract: `title`, `file`, `lines`, `description`, `fix`, `severity`, `confidence`, `reviewer`.
 
 **Check for duplicates before acting:**
 
