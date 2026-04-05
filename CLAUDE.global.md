@@ -53,6 +53,22 @@ When a hook fails:
 
 Never accumulate edits across multiple files while hook failures are pending. Every unresolved hook failure is a broken file that compounds the problem.
 
+## Agent Teams
+
+When coordinating a team of agents (`TeamCreate` → spawn → coordinate → cleanup):
+
+**Shutdown before delete.** Always send a shutdown request to all teammates before
+calling `TeamDelete`. Skipping this leaves agents without a graceful exit signal.
+
+```
+SendMessage({ to: "*", message: "type: shutdown_request" })
+// wait for shutdown_response from each teammate, then:
+TeamDelete()
+```
+
+The full teardown sequence is: all work complete → broadcast `shutdown_request` →
+receive `shutdown_response` from each teammate → `TeamDelete`.
+
 ## Testing
 
 - **Never hit real external APIs in tests.** Always mock AI clients, payment providers,
