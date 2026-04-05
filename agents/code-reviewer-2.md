@@ -52,21 +52,12 @@ If you cannot quantify why the issue will matter in practice, skip it. Only repo
 
 ## Writing findings — team mode
 
-Send each finding (confidence ≥ 75) to the team lead as you find it — do not batch at the end:
+Send each finding (confidence ≥ 75) to the team lead as you find it — do not batch at the end. The `message` field must be a plain JSON string — serialize it yourself, do not pass an object:
 
 ```
 SendMessage({
   to: "team-lead",
-  content: JSON.stringify({
-    title: "<concise issue title>",
-    file: "<path/to/file>",
-    lines: "<line range, e.g. 105-130>",
-    description: "<clear description of the problem>",
-    fix: "<suggested fix>",
-    severity: "critical|high|medium|low",
-    confidence: <score 0-100>,
-    reviewer: "perf"
-  })
+  message: "{\"title\": \"<concise issue title>\", \"file\": \"<path/to/file>\", \"lines\": \"<e.g. 105-130>\", \"description\": \"<clear description of the problem>\", \"fix\": \"<suggested fix>\", \"severity\": \"critical|high|medium|low\", \"confidence\": <score 0-100>, \"reviewer\": \"perf\"}"
 })
 ```
 
@@ -75,7 +66,7 @@ When all findings have been sent, send a completion message:
 ```
 SendMessage({
   to: "team-lead",
-  content: "DONE: <N> findings sent, <M> filtered below confidence threshold (75)"
+  message: "DONE: <N> findings sent, <M> filtered below confidence threshold (75)"
 })
 ```
 

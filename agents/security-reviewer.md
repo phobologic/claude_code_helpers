@@ -56,21 +56,12 @@ Only report findings where you can demonstrate a concrete attack path or a clear
 
 ## Writing findings — team mode
 
-Send each finding (confidence ≥ 75) to the team lead as you find it — do not batch at the end:
+Send each finding (confidence ≥ 75) to the team lead as you find it — do not batch at the end. The `message` field must be a plain JSON string — serialize it yourself, do not pass an object:
 
 ```
 SendMessage({
   to: "team-lead",
-  content: JSON.stringify({
-    title: "<concise issue title>",
-    file: "<path/to/file>",
-    lines: "<line range, e.g. 27-29>",
-    description: "<clear description of the vulnerability>",
-    fix: "<suggested fix>",
-    severity: "critical|high|medium|low",
-    confidence: <score 0-100>,
-    reviewer: "security"
-  })
+  message: "{\"title\": \"<concise issue title>\", \"file\": \"<path/to/file>\", \"lines\": \"<e.g. 27-29>\", \"description\": \"<clear description of the vulnerability>\", \"fix\": \"<suggested fix>\", \"severity\": \"critical|high|medium|low\", \"confidence\": <score 0-100>, \"reviewer\": \"security\"}"
 })
 ```
 
@@ -79,7 +70,7 @@ When all findings have been sent, send a completion message:
 ```
 SendMessage({
   to: "team-lead",
-  content: "DONE: <N> findings sent, <M> filtered below confidence threshold (75)"
+  message: "DONE: <N> findings sent, <M> filtered below confidence threshold (75)"
 })
 ```
 
