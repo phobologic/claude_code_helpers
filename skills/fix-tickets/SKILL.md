@@ -84,10 +84,12 @@ STAMP=$(date +%Y%m%d-%H%M%S)
 REPO_ROOT=$(pwd)
 git checkout -b fix/batch-$STAMP main
 git checkout main
+git worktree add .worktrees/fix-batch-$STAMP fix/batch-$STAMP
 ```
 
-Record both values — you'll need the integration branch name and `REPO_ROOT`
-throughout (for worktree paths in spawn prompts).
+Record `STAMP` and `REPO_ROOT` — you'll need them throughout. The integration
+worktree at `.worktrees/fix-batch-$STAMP` is where all merges happen, keeping
+the main repo on `main` so quality reviewers can read from it safely.
 
 ### Step 2.2: Create the team
 
@@ -233,11 +235,10 @@ SendMessage({
 
 **When quality reviewer returns CLEAN:**
 
-1. Merge to integration branch:
+1. Merge to integration branch (in the integration worktree — never
+   checkout the integration branch in the main repo):
    ```bash
-   git checkout fix/batch-<stamp>
-   git merge fix/<ticket-id> --no-ff -m "Fix <ticket-id>: <title>"
-   git checkout main
+   cd .worktrees/fix-batch-<stamp> && git merge fix/<ticket-id> --no-ff -m "Fix <ticket-id>: <title>"
    ```
 
 2. Close the ticket:
@@ -300,9 +301,10 @@ tk add-note <finding-id> "Fixed as part of <ticket-id>"
 SendMessage({
   recipient: "<implementer-name>",
   content: "Merge conflict integrating <ticket-id> into fix/batch-<stamp>.
-  Check out fix/batch-<stamp>, merge your branch, resolve conflicts, and commit.
-  Signal DONE with fix/<ticket-id> when ready — this will go through quality
-  review again since the resolved code may differ."
+  In the integration worktree at .worktrees/fix-batch-<stamp>, merge your
+  branch, resolve conflicts, and commit. Signal DONE with fix/<ticket-id>
+  when ready — this will go through quality review again since the resolved
+  code may differ."
 })
 ```
 
@@ -362,11 +364,12 @@ SendMessage({ recipient: "implementer-1",       content: "Batch complete. Shutti
 # ... all implementers
 ```
 
-Clean up implementer worktrees:
+Clean up worktrees:
 ```bash
 for N in 1 2 3 4; do  # adjust to match implementer count
   git worktree remove .worktrees/implementer-$N --force 2>/dev/null || true
 done
+git worktree remove .worktrees/fix-batch-<stamp> --force 2>/dev/null || true
 ```
 
 Then:
