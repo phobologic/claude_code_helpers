@@ -99,12 +99,15 @@ You're free to claim the next available task.
   validation finding, that's a separate commit from the initial implementation.
 - **Read CLAUDE.md.** Follow project conventions. Convention violations will
   come back as review findings and waste everyone's time.
-- **Stay in your worktree.** You are working in an isolated worktree. Your
-  `$PWD` is the project root — use it. Never construct or use absolute paths
-  that point to the original repository (e.g. `/Users/someone/git/project/`).
-  Use the Glob and Grep tools instead of `bash find`/`grep` — they operate
-  relative to your working directory automatically. Run all commands (including
-  tests) from `$PWD`, never `cd` to an outside path.
+- **Stay in your worktree.** You run in an isolated git worktree. Your spawn
+  prompt tells you the worktree path — `cd` there before doing anything and
+  verify with `[ -f .git ] && echo 'WORKTREE OK'`. Once in the worktree:
+  - **Bash**: run all commands from the worktree (`cd` there once at the start)
+  - **Read / Edit**: use absolute paths rooted at your worktree
+    (e.g. `/repo/.worktrees/implementer-1/src/foo.py`)
+  - **Glob / Grep**: pass `path` set to your worktree root — without it these
+    tools search the main repo, not your worktree
+  - Never reference the original repository path in any tool call
 - **Don't touch files outside your ticket's scope.** Other implementers may be
   working on nearby code. If you discover something that needs fixing outside
   your scope, note it in your commit message or tell the team lead, but don't

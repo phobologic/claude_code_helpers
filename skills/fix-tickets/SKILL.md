@@ -77,15 +77,17 @@ Wait for confirmation before creating anything.
 
 ## Phase 2 — Create team infrastructure
 
-### Step 2.1: Integration branch
+### Step 2.1: Integration branch and repo root
 
 ```bash
 STAMP=$(date +%Y%m%d-%H%M%S)
+REPO_ROOT=$(pwd)
 git checkout -b fix/batch-$STAMP main
 git checkout main
 ```
 
-Record the integration branch name — you'll need it throughout.
+Record both values — you'll need the integration branch name and `REPO_ROOT`
+throughout (for worktree paths in spawn prompts).
 
 ### Step 2.2: Create the team
 
@@ -140,27 +142,27 @@ Agent({
   team_name: "fix-<stamp>",
   name: "implementer-<N>",
   isolation: "worktree",
-  prompt: "You are implementer-<N> on a fix team running in an isolated git
-  worktree. Your current $PWD is the project root for this worktree — treat it
-  as the repo root and never navigate away from it.
+  prompt: "You are implementer-<N> on a fix team.
 
-  First, verify your isolation before doing anything else:
-    [ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: in main repo'
-  Report the result to the team lead immediately via SendMessage, then wait for
-  ticket assignments.
+  WORKTREE: <REPO_ROOT>/.worktrees/implementer-<N>
 
-  For each assignment:
+  Before doing anything else:
+  1. cd <REPO_ROOT>/.worktrees/implementer-<N>
+  2. [ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: not in worktree'
+  3. Report the result to the team lead via SendMessage, then wait.
 
-  1. Run `tk show <ticket-id>` for full context — these are typically code quality
-     or bug findings from a code review
-  2. Implement the fix in your worktree
-  3. Run tests from $PWD — never `cd` to another directory
+  All tool calls MUST target your worktree, not the main repo:
+  - Bash: cd to your worktree first (or run from it)
+  - Read/Edit: absolute paths starting with <REPO_ROOT>/.worktrees/implementer-<N>/
+  - Glob/Grep: pass path=<REPO_ROOT>/.worktrees/implementer-<N>
+  Never reference <REPO_ROOT> without the .worktrees/implementer-<N> suffix.
+
+  For each ticket assignment:
+  1. Run `tk show <ticket-id>` for full context
+  2. Implement the fix
+  3. Run tests from your worktree
   4. Commit to a branch named fix/<ticket-id>
   5. Message the team lead: DONE <ticket-id> fix/<ticket-id>
-
-  Worktree rules: $PWD is the project root. Never use absolute paths like
-  /Users/.../project/ in any command. Use relative paths and the Glob/Grep
-  tools instead of bash find/grep.
 
   Then wait for your next assignment. When you receive a shutdown message, stop."
 })
@@ -358,6 +360,13 @@ SendMessage({ recipient: "quality-reviewer-1", content: "Batch complete. Shuttin
 SendMessage({ recipient: "quality-reviewer-2", content: "Batch complete. Shutting down." })
 SendMessage({ recipient: "implementer-1",       content: "Batch complete. Shutting down." })
 # ... all implementers
+```
+
+Clean up implementer worktrees:
+```bash
+for N in 1 2 3 4; do  # adjust to match implementer count
+  git worktree remove .worktrees/implementer-$N --force 2>/dev/null || true
+done
 ```
 
 Then:

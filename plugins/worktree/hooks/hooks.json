@@ -1,5 +1,17 @@
 {
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/agent-worktree-guard.sh\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
     "WorktreeCreate": [
       {
         "hooks": [

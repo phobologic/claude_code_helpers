@@ -70,15 +70,18 @@ Tip: Press Shift+Tab to enable delegate mode so the lead stays focused
 on orchestration. Use Shift+Down to cycle through teammates.
 ```
 
-### Step 1.1: Create integration branch
+### Step 1.1: Create integration branch and capture repo root
 
 Create a branch where validated ticket branches will be merged. This keeps
 all epic work off main until the full epic is reviewed.
 
 ```bash
+REPO_ROOT=$(pwd)
 git checkout -b epic/<epic-id> main
 git checkout main  # return to main, implementers branch from here
 ```
+
+Record `REPO_ROOT` — you'll use it in worktree paths for implementer prompts.
 
 ### Step 1.2: Create the team
 
@@ -114,11 +117,26 @@ gives each teammate a readable identifier.
 
 ```
 Agent({
-  prompt: "You are an implementer on a team. Claim a task from the task
-  list and begin work. Run `tk show <ticket-id>` for full context.",
+  prompt: "You are an implementer on a team.
+
+  WORKTREE: <REPO_ROOT>/.worktrees/implementer-1
+
+  Before doing anything else:
+  1. cd <REPO_ROOT>/.worktrees/implementer-1
+  2. [ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: not in worktree'
+  3. Report the result to the team lead via SendMessage.
+
+  All tool calls MUST target your worktree, not the main repo:
+  - Bash: cd to your worktree first
+  - Read/Edit: absolute paths starting with <REPO_ROOT>/.worktrees/implementer-1/
+  - Glob/Grep: pass path=<REPO_ROOT>/.worktrees/implementer-1
+
+  Then claim a task from the task list. Run `tk show <ticket-id>` for
+  full context.",
   subagent_type: "implementer",
   team_name: "epic-<epic-id>",
-  name: "implementer-1"
+  name: "implementer-1",
+  isolation: "worktree"
 })
 ```
 
@@ -375,7 +393,14 @@ When all child tickets of the epic are closed:
    ```
    Repeat for all implementers, ac-verifier, and quality-reviewer.
 
-4. Wait briefly for teammates to acknowledge, then clean up:
+4. Wait briefly for teammates to acknowledge, then clean up worktrees
+   and the team:
+   ```bash
+   # Clean up implementer worktrees (adjust count to match)
+   for N in 1 2 3; do
+     git worktree remove .worktrees/implementer-$N --force 2>/dev/null || true
+   done
+   ```
    ```
    TeamDelete()
    ```
