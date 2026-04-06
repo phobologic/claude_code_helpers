@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
-# WorktreeCreate hook — replaces default Claude Code worktree creation.
-# Implements both .worktreeinclude (copy) and .worktreelinks (symlink) behavior.
+# WorktreeCreate hook — handles both pre-creation (replacement) and
+# post-creation (notification) invocation modes.
+#
+# Claude Code may fire this hook AFTER already creating the worktree, in which
+# case `git worktree add` would fail with "already exists". We detect that case
+# and skip creation, but always run the .worktreelinks and .worktreeinclude setup.
 set -euo pipefail
 
 INPUT=$(cat)
 WORKTREE_NAME=$(echo "$INPUT" | jq -r '.worktree_name // empty')
 BRANCH=$(echo "$INPUT" | jq -r '.branch // empty')
 CWD=$(echo "$INPUT" | jq -r '.cwd')
+
+# cd to the project root so git commands target the right repo
+cd "$CWD"
 
 # Fall back to branch name or timestamp if worktree_name is missing
 if [[ -z "$WORKTREE_NAME" ]]; then
@@ -15,11 +22,15 @@ fi
 
 WORKTREE_PATH="$CWD/.worktrees/$WORKTREE_NAME"
 
-# Create the worktree — redirect to stderr so only the final path goes to stdout
-if [[ -n "$BRANCH" ]]; then
-  git worktree add "$WORKTREE_PATH" "$BRANCH" >&2
-else
-  git worktree add "$WORKTREE_PATH" >&2
+# Create the worktree only if it doesn't already exist.
+# Claude Code may create the worktree before firing this hook; if so, skip
+# the git command and proceed directly to the symlink/copy setup below.
+if [[ ! -d "$WORKTREE_PATH" ]]; then
+  if [[ -n "$BRANCH" ]]; then
+    git worktree add "$WORKTREE_PATH" "$BRANCH" >&2
+  else
+    git worktree add "$WORKTREE_PATH" >&2
+  fi
 fi
 
 # .worktreeinclude — copy files/dirs into the worktree (per-worktree independent copies)
@@ -45,7 +56,7 @@ if [[ -f "$CWD/.worktreelinks" ]]; then
     # Ensure the source exists in the main repo before linking
     [[ -e "$src" ]] || mkdir -p "$src"
     mkdir -p "$(dirname "$dst")"
-    ln -sf "$src" "$dst"
+    ln -sfn "$src" "$dst"
     # Warn if .gitignore only has a trailing-slash pattern — those match real
     # directories but not symlinks, causing the symlink to appear as untracked.
     if [[ -d "$src" && -f "$WORKTREE_PATH/.gitignore" ]]; then
