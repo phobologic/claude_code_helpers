@@ -140,8 +140,14 @@ Agent({
   team_name: "fix-<stamp>",
   name: "implementer-<N>",
   isolation: "worktree",
-  prompt: "You are implementer-<N> on a fix team. Wait for the team lead to assign
-  tickets to you via SendMessage. For each assignment:
+  prompt: "You are implementer-<N> on a fix team.
+
+  First, verify your isolation before doing anything else:
+    [ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: in main repo'
+  Report the result to the team lead immediately via SendMessage, then wait for
+  ticket assignments.
+
+  For each assignment:
 
   1. Run `tk show <ticket-id>` for full context — these are typically code quality
      or bug findings from a code review
@@ -157,6 +163,15 @@ Agent({
   Then wait for your next assignment. When you receive a shutdown message, stop."
 })
 ```
+
+After spawning all implementers, wait for their isolation check results. Each
+implementer will report back `WORKTREE OK` or `WARNING: in main repo`.
+
+- If **all report `WORKTREE OK`**: proceed to Phase 3.
+- If **any report `WARNING: in main repo`**: stop immediately and tell the user:
+  > Worktree isolation failed — implementers are running in the main repo.
+  > This will cause parallel agents to conflict. Aborting.
+  Then shut down all teammates and call `TeamDelete()`.
 
 Track implementer state throughout the run:
 - **idle**: waiting for work (all start idle)
