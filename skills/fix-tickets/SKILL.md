@@ -140,7 +140,9 @@ Agent({
   team_name: "fix-<stamp>",
   name: "implementer-<N>",
   isolation: "worktree",
-  prompt: "You are implementer-<N> on a fix team.
+  prompt: "You are implementer-<N> on a fix team running in an isolated git
+  worktree. Your current $PWD is the project root for this worktree — treat it
+  as the repo root and never navigate away from it.
 
   First, verify your isolation before doing anything else:
     [ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: in main repo'
