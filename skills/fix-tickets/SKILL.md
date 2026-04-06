@@ -96,10 +96,12 @@ TeamCreate({
 })
 ```
 
-### Step 2.3: Spawn quality reviewers
+### Step 2.3: Spawn quality reviewers and implementers
 
-Spawn two quality reviewers. They are reused across all waves and load-balance
-review work between them.
+Spawn two quality reviewers and up to 4 implementers. All are reused across every
+wave — never spawn additional agents later.
+
+**Quality reviewers** load-balance review work across all waves:
 
 ```
 Agent({
@@ -118,69 +120,71 @@ Agent({
      - FINDINGS — list each critical/high finding ticket ID and its title
 
   Process tickets in the order received. Do not start the next review until you have
-  reported results for the current one."
+  reported results for the current one. When you receive a shutdown message, stop."
 })
 
 Agent({
   subagent_type: "quality-reviewer",
   team_name: "fix-<stamp>",
   name: "quality-reviewer-2",
-  prompt: "You are quality-reviewer-2 on a fix team. Wait for the team lead to
-  route tickets to you via SendMessage. For each ticket routed:
-
-  1. Read `tk show <ticket-id>` to understand what was being fixed
-  2. Read the diff on the branch provided
-  3. Create tk tickets for any Critical, High, or Medium findings (standalone, no
-     parent required)
-  4. Report back to the team lead with one of:
-     - CLEAN — no critical or high findings (note any medium/low ticket IDs created)
-     - FINDINGS — list each critical/high finding ticket ID and its title
-
-  Process tickets in the order received. Do not start the next review until you have
-  reported results for the current one."
+  // same prompt as quality-reviewer-1
 })
 ```
 
-## Phase 3 — Execute waves
+**Implementers** — spawn `min(4, total_ticket_count)` now. They wait for assignments
+via `SendMessage` and are reused across all waves:
 
-Repeat for each wave in order. A wave is complete only when all its tickets are closed
-and merged into the integration branch.
-
-### Step 3.1: Spawn implementers for this wave
-
-Cap at 4 implementers per wave. For waves larger than 4 tickets, assign the first 4
-and dispatch remaining tickets to implementers as they free up.
-
-For each ticket assigned (up to 4):
-
-**Create a task:**
-```
-TaskCreate({
-  subject: "Fix <ticket-id>: <title>",
-  description: "Run `tk show <ticket-id>` for full context on what needs to be fixed.
-  Implement the fix, run tests, commit to branch fix/<ticket-id>.
-  When done, message the team lead: DONE <ticket-id> fix/<ticket-id>"
-})
-```
-
-**Spawn the implementer:**
 ```
 Agent({
   subagent_type: "implementer",
   team_name: "fix-<stamp>",
   name: "implementer-<N>",
   isolation: "worktree",
-  prompt: "You are an implementer on a fix team. Claim a task from the task list and
-  implement the fix. Run `tk show <ticket-id>` for full context — these are typically
-  code quality or bug findings from a code review. Work in your isolated worktree.
-  Run tests after making changes. Commit to a branch named fix/<ticket-id>.
-  When done, message the team lead: DONE <ticket-id> fix/<ticket-id>"
+  prompt: "You are implementer-<N> on a fix team. Wait for the team lead to assign
+  tickets to you via SendMessage. For each assignment:
+
+  1. Run `tk show <ticket-id>` for full context — these are typically code quality
+     or bug findings from a code review
+  2. Implement the fix in your worktree
+  3. Run tests after making changes
+  4. Commit to a branch named fix/<ticket-id>
+  5. Message the team lead: DONE <ticket-id> fix/<ticket-id>
+
+  Then wait for your next assignment. When you receive a shutdown message, stop."
 })
 ```
 
-Announce to the user:
+Track implementer state throughout the run:
+- **idle**: waiting for work (all start idle)
+- **busy**: working on a ticket (map: implementer-name → ticket-id)
+
+## Phase 3 — Execute waves
+
+Repeat for each wave in order. A wave is complete only when all its tickets are closed
+and merged into the integration branch.
+
+### Step 3.1: Dispatch tickets for this wave
+
+Do NOT spawn new implementers. Dispatch tickets to existing idle implementers via
+`SendMessage`. Cap in-flight work at 4 tickets at a time; queue the rest and dispatch
+as implementers free up.
+
+For each ticket to dispatch (up to the number of idle implementers):
+
 ```
-Wave <N>: <M> implementers running in parallel on: <ticket-ids>
+SendMessage({
+  to: "<idle-implementer-name>",
+  message: "ticket: <ticket-id>
+title: <title>
+Run `tk show <ticket-id>` for full context. Implement the fix, run tests, commit to
+fix/<ticket-id>, then message the team lead: DONE <ticket-id> fix/<ticket-id>"
+})
+```
+
+Mark that implementer as busy. Announce to the user:
+
+```
+Wave <N>: dispatching <M> tickets to implementers: <ticket-ids>
 ```
 
 ### Step 3.2: Validation loop
@@ -220,16 +224,20 @@ SendMessage({
    tk close <ticket-id>
    ```
 
-3. If there are remaining unassigned tickets in this wave, dispatch to the
-   now-free implementer:
+3. If there are remaining unassigned tickets in this wave (or queued from a
+   future wave), dispatch the next one to this now-free implementer. Do NOT
+   spawn a new implementer — send the assignment to the existing one:
    ```
    SendMessage({
-     recipient: "<implementer-name>",
-     content: "<ticket-id> is done. Next: claim task for <next-ticket-id> from
-     the task list."
+     to: "<implementer-name>",
+     message: "ticket: <next-ticket-id>
+   title: <title>
+   Run `tk show <next-ticket-id>` for full context. Implement the fix, run tests,
+   commit to fix/<next-ticket-id>, then message the team lead:
+   DONE <next-ticket-id> fix/<next-ticket-id>"
    })
-   TaskCreate({ subject: "Fix <next-id>: <title>", description: "..." })
    ```
+   Mark that implementer busy again.
 
 4. If there are queued tickets waiting for review, send the next one to this
    now-free reviewer.
@@ -296,7 +304,9 @@ Wave <N> complete: <M> tickets merged to fix/batch-<stamp>
 Remaining waves: <W-N>
 ```
 
-Then proceed to the next wave (Step 3.1).
+**Do NOT spawn new implementers for the next wave.** The same implementer pool
+is reused for the entire batch. All implementers are currently idle at this point —
+proceed to Step 3.1 and dispatch the next wave's tickets to them via `SendMessage`.
 
 ## Phase 4 — Completion
 
