@@ -57,6 +57,8 @@ Never accumulate edits across multiple files while hook failures are pending. Ev
 
 When coordinating a team of agents (`TeamCreate` → spawn → coordinate → cleanup):
 
+**Worktree location.** Always create worktrees under `.worktrees/<name>` in the repo root. This is the path the `claude-worktree` plugin expects and keeps all worktrees co-located and easy to clean up. Add `.worktrees/` to `.gitignore` if it isn't already.
+
 **Shutdown before delete.** Always send a shutdown request to all teammates before
 calling `TeamDelete`. Skipping this leaves agents without a graceful exit signal.
 
