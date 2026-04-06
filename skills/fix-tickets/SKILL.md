@@ -146,9 +146,13 @@ Agent({
   1. Run `tk show <ticket-id>` for full context — these are typically code quality
      or bug findings from a code review
   2. Implement the fix in your worktree
-  3. Run tests after making changes
+  3. Run tests from $PWD — never `cd` to another directory
   4. Commit to a branch named fix/<ticket-id>
   5. Message the team lead: DONE <ticket-id> fix/<ticket-id>
+
+  Worktree rules: $PWD is the project root. Never use absolute paths like
+  /Users/.../project/ in any command. Use relative paths and the Glob/Grep
+  tools instead of bash find/grep.
 
   Then wait for your next assignment. When you receive a shutdown message, stop."
 })
