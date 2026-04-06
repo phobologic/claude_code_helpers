@@ -44,9 +44,13 @@ are available globally:
 |-------|-------------|
 | `/spec [idea]` | Turn a rough idea into a phased plan with EARS ACs, adversarial review, and `tk` tickets |
 | `/run-epic <epic-id>` | Execute a `tk` epic with an agent team (implementers + AC verifier + quality reviewer) |
+| `/fix-tickets <id> [id ...] \| <epic-id>` | Implement a set of tickets in parallel — designed for multi-review fix batches |
 | `/review` | Code review of all uncommitted changes |
 | `/multi-review` | Parallel review by 5 specialized agents |
 | `/implement-ticket [id ...]` | Pick up and implement one or more `tk` tickets |
+| `/design-sprint [--scan] [-- guidance]` | Multi-agent GAN-style design sprint producing a frontend spec |
+| `/playwright-explore <url> [-- scenario]` | Spawn simulated users to explore a running app and file `tk` tickets |
+| `/setup-python-project [name]` | Scaffold a new Python project with uv, ruff, pytest, and GitHub Actions CI |
 | `/use-railway` | Symlink Railway CLI rules into the current project |
 | `/use-sqlalchemy` | Symlink SQLAlchemy/Alembic rules into the current project |
 | `/migrate-beads` | Migrate a project's issue tracking from `bd` (beads) to `tk` |
@@ -116,6 +120,38 @@ works in its own copy of the repo.
 | **quality-reviewer** | Adversarial review, creates `tk` finding tickets | sonnet | none |
 | **spec-critic** | Adversarial plan review (used by `/spec` before you see the plan) | sonnet | none |
 
+## Fix Tickets
+
+`/fix-tickets` is the companion to `/run-epic` for ad-hoc parallel implementation —
+primarily designed for acting on a batch of findings from `/multi-review`.
+
+**Key difference from `/run-epic`:** tickets don't need formal EARS acceptance criteria.
+There's no AC verifier in the loop — just implementers and quality reviewers.
+
+```bash
+/fix-tickets 42 43 44          # fix specific tickets
+/fix-tickets <epic-id>         # fix all open tickets in an epic
+```
+
+### How it works
+
+1. Loads tickets, filters out already-closed or in-progress ones
+2. Analyzes for file-level conflicts and groups into minimum waves (bias toward parallelism)
+3. Presents the grouping for your approval before doing anything
+4. Spawns up to 4 implementers + 2 quality reviewers — **all reused across every wave**
+5. Dispatches tickets to implementers via `SendMessage`; routes completions to reviewers
+6. Merges clean tickets to an integration branch (`fix/batch-<stamp>`); routes findings back
+7. On completion, suggests `git diff` and `/multi-review` before merging to main
+
+### When to use `/fix-tickets` vs `/run-epic`
+
+| | `/run-epic` | `/fix-tickets` |
+|---|---|---|
+| Tickets have | Formal EARS ACs | Prose descriptions |
+| Validation | AC verifier + quality reviewer | Quality reviewer only |
+| Source | `/spec`-generated epics | `/multi-review` findings, ad-hoc lists |
+| Input | Single epic ID | Multiple ticket IDs or an epic ID |
+
 ## Review Skills
 
 ### `/review` — Quick Single-Pass Review
@@ -181,6 +217,70 @@ The `/implement-ticket` skill automates the full ticket lifecycle:
 /implement-ticket 42 43        # implement multiple tickets sequentially
 /implement-ticket 42 -- skip the migration, just update the model
 ```
+
+## Design Sprint
+
+`/design-sprint` runs a multi-agent GAN-style design process to produce a frontend
+design specification. Three independent designer agents propose across three rounds
+of increasing concreteness; a persistent evaluator scores each round and issues a
+shared brief; the team lead synthesises the final spec.
+
+```bash
+/design-sprint                              # spec for current codebase
+/design-sprint --scan                       # screenshot running app first (via playwright-cli)
+/design-sprint --output docs/my-spec.md    # custom output path (default: docs/design-spec.md)
+/design-sprint -- dark theme, brutalist     # free-form guidance passed to all designers
+/design-sprint --scan -- mobile-first       # combine flags
+```
+
+### How it works
+
+```
+Round 1: three designers propose independently (high-level direction)
+          ↓ evaluator scores, issues shared brief
+Round 2: three designers refine (layout + component detail)
+          ↓ evaluator scores, issues shared brief
+Round 3: three designers detail (spacing, type, color, states)
+          ↓ evaluator synthesises → team lead writes final spec
+```
+
+Scoring weights: Design Quality 35% · Originality 30% · Functionality 25% · Craft 10%
+
+Output is a markdown spec at `docs/design-spec.md` (or `--output` path) ready to hand
+to an implementer or use as a prompt for `/run-epic`.
+
+## Playwright Explore
+
+`/playwright-explore` spawns a team of Playwright-driven agents to explore a running
+web app as simulated users. Each agent operates the browser independently; findings
+are reported back to the team lead, deduplicated, and filed as `tk` tickets.
+
+```bash
+/playwright-explore http://localhost:3000
+/playwright-explore http://localhost:3000 -- focus on the checkout flow
+/playwright-explore http://localhost:3000 roles:host,player1,player2
+/playwright-explore http://localhost:3000 roles:host,player1 -- multiplayer session setup
+```
+
+**Roles** control what each agent is trying to do. The first role is always the
+session initiator (sets up state, shares join links). Remaining roles are joiners.
+Default roles: `participant-1, participant-2, participant-3`.
+
+Findings are filed as `tk` tickets with reproduction steps. Run after major feature
+work or before a release to catch UX issues and broken flows.
+
+## Setup Python Project
+
+`/setup-python-project` scaffolds a new Python project with opinionated defaults.
+Run it in an empty directory or pass a project name.
+
+```bash
+/setup-python-project              # uses current directory name
+/setup-python-project my-api       # creates my-api/ with full scaffold
+```
+
+Scaffold includes: `uv` for package management, `ruff` for linting + formatting,
+`pytest` for testing, and a GitHub Actions CI workflow.
 
 ## Language Plugins
 
