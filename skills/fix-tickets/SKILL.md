@@ -91,7 +91,22 @@ Record `STAMP` and `REPO_ROOT` — you'll need them throughout. The integration
 worktree at `.worktrees/fix-batch-$STAMP` is where all merges happen, keeping
 the main repo on `main` so quality reviewers can read from it safely.
 
-### Step 2.2: Create the team
+### Step 2.2: Pre-create implementer worktrees
+
+Create worktrees for all implementers now, before spawning any agents. Do not rely
+on the `isolation: "worktree"` parameter to create them — that hook only fires
+reliably in the main session, not from sub-agent contexts.
+
+```bash
+# Create one worktree per implementer (min(4, total_ticket_count))
+git worktree add .worktrees/implementer-1-$STAMP
+git worktree add .worktrees/implementer-2-$STAMP
+# ... repeat for each implementer up to the cap
+```
+
+Verify each was created: `ls .worktrees/` should show all implementer dirs.
+
+### Step 2.3: Create the team
 
 ```
 TeamCreate({
@@ -100,7 +115,7 @@ TeamCreate({
 })
 ```
 
-### Step 2.3: Spawn quality reviewers and implementers
+### Step 2.4: Spawn quality reviewers and implementers
 
 Spawn two quality reviewers and up to 4 implementers. All are reused across every
 wave — never spawn additional agents later.
