@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+# tk-plugin: Set one or more attributes on a ticket (priority, type, status, assignee, parent, tags)
+
+import os
+import sys
+import re
+import argparse
+
+TICKETS_DIR = os.environ.get('TICKETS_DIR', '.tickets')
+
+
+def find_ticket(ticket_id):
+    """Find ticket file by full or partial ID match."""
+    if not os.path.isdir(TICKETS_DIR):
+        return None
+    for fname in os.listdir(TICKETS_DIR):
+        if not fname.endswith('.md'):
+            continue
+        name = fname[:-3]  # strip .md
+        if name == ticket_id or name.endswith(ticket_id):
+            return os.path.join(TICKETS_DIR, fname)
+    return None
+
+
+def set_frontmatter_field(content, key, value):
+    """Replace a scalar frontmatter field, or insert it if missing."""
+    # Match existing key
+    pattern = re.compile(r'^(' + re.escape(key) + r':)[ \t]*.*$', re.MULTILINE)
+    replacement = f'{key}: {value}'
+    if pattern.search(content):
+        return pattern.sub(replacement, content)
+    # Insert before closing ---
+    return re.sub(r'^(---\s*\n)', replacement + '\n' + r'\1',
+                  content, count=1, flags=re.MULTILINE | re.DOTALL)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog='tk set',
+        description='Set one or more attributes on a ticket',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  tk set pbp-xxxx --priority 1
+  tk set pbp-xxxx --type bug
+  tk set pbp-xxxx --priority 0 --type bug --assignee "Jane"
+  tk set pbp-xxxx --status in_progress
+  tk set pbp-xxxx --tags ui,backend
+  tk set pbp-xxxx --parent pbp-rods
+""",
+    )
+    parser.add_argument('id', help='Ticket ID (full or partial)')
+    parser.add_argument('--priority', type=int, metavar='N',
+                        help='Priority 0–4 (0=critical)')
+    parser.add_argument('--type', metavar='TYPE',
+                        choices=['bug', 'task', 'feature', 'epic', 'chore'],
+                        help='Type: bug, task, feature, epic, chore')
+    parser.add_argument('--status', metavar='STATUS',
+                        choices=['open', 'in_progress', 'closed'],
+                        help='Status: open, in_progress, closed')
+    parser.add_argument('--assignee', metavar='NAME',
+                        help='Assignee name')
+    parser.add_argument('--parent', metavar='ID',
+                        help='Parent epic ID (use "none" to clear)')
+    parser.add_argument('--tags', metavar='TAG[,TAG]',
+                        help='Comma-separated tags (replaces existing tags)')
+
+    args = parser.parse_args()
+
+    # Must set at least one field
+    fields = {k: v for k, v in vars(args).items()
+              if k != 'id' and v is not None}
+    if not fields:
+        parser.error('Specify at least one attribute to set.')
+
+    path = find_ticket(args.id)
+    if not path:
+        print(f'tk set: ticket not found: {args.id}', file=sys.stderr)
+        sys.exit(1)
+
+    with open(path, encoding='utf-8') as f:
+        content = f.read()
+
+    original = content
+    changes = []
+
+    if args.priority is not None:
+        content = set_frontmatter_field(content, 'priority', str(args.priority))
+        changes.append(f'priority → {args.priority}')
+
+    if args.type is not None:
+        content = set_frontmatter_field(content, 'type', args.type)
+        changes.append(f'type → {args.type}')
+
+    if args.status is not None:
+        content = set_frontmatter_field(content, 'status', args.status)
+        changes.append(f'status → {args.status}')
+
+    if args.assignee is not None:
+        content = set_frontmatter_field(content, 'assignee', args.assignee)
+        changes.append(f'assignee → {args.assignee}')
+
+    if args.parent is not None:
+        if args.parent.lower() == 'none':
+            # Remove the parent field entirely
+            content = re.sub(r'^parent:[ \t]*.*\n', '', content, flags=re.MULTILINE)
+            changes.append('parent → (cleared)')
+        else:
+            content = set_frontmatter_field(content, 'parent', args.parent)
+            changes.append(f'parent → {args.parent}')
+
+    if args.tags is not None:
+        tag_list = [t.strip() for t in args.tags.split(',') if t.strip()]
+        tag_value = '[' + ', '.join(tag_list) + ']'
+        content = set_frontmatter_field(content, 'tags', tag_value)
+        changes.append(f'tags → {tag_value}')
+
+    if content == original:
+        print('No changes made.')
+        return
+
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(content)
+
+    ticket_id = os.path.basename(path)[:-3]
+    print(f'{ticket_id}: ' + ', '.join(changes))
+
+
+if __name__ == '__main__':
+    main()
