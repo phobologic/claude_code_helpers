@@ -77,11 +77,12 @@ all epic work off main until the full epic is reviewed.
 
 ```bash
 REPO_ROOT=$(pwd)
+STAMP=$(date +%s | tail -c 7)  # short session discriminator for unique worktree names
 git checkout -b epic/<epic-id> main
 git checkout main  # return to main, implementers branch from here
 ```
 
-Record `REPO_ROOT` — you'll use it in worktree paths for implementer prompts.
+Record `REPO_ROOT` and `STAMP` — you'll use them in worktree paths for implementer prompts.
 
 ### Step 1.2: Create the team
 
@@ -119,28 +120,28 @@ gives each teammate a readable identifier.
 Agent({
   prompt: "You are an implementer on a team.
 
-  WORKTREE: <REPO_ROOT>/.worktrees/implementer-1
+  WORKTREE: <REPO_ROOT>/.worktrees/implementer-1-<STAMP>
 
   Before doing anything else:
-  1. cd <REPO_ROOT>/.worktrees/implementer-1
+  1. cd <REPO_ROOT>/.worktrees/implementer-1-<STAMP>
   2. [ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: not in worktree'
   3. Report the result to the team lead via SendMessage.
 
   All tool calls MUST target your worktree, not the main repo:
   - Bash: cd to your worktree first
-  - Read/Edit: absolute paths starting with <REPO_ROOT>/.worktrees/implementer-1/
-  - Glob/Grep: pass path=<REPO_ROOT>/.worktrees/implementer-1
+  - Read/Edit: absolute paths starting with <REPO_ROOT>/.worktrees/implementer-1-<STAMP>/
+  - Glob/Grep: pass path=<REPO_ROOT>/.worktrees/implementer-1-<STAMP>
 
   Then claim a task from the task list. Run `tk show <ticket-id>` for
   full context.",
   subagent_type: "implementer",
   team_name: "epic-<epic-id>",
-  name: "implementer-1",
+  name: "implementer-1-<STAMP>",
   isolation: "worktree"
 })
 ```
 
-Repeat for implementer-2, implementer-3, etc.
+Repeat for implementer-2-<STAMP>, implementer-3-<STAMP>, etc.
 
 **AC verifier:**
 
@@ -387,7 +388,7 @@ When all child tickets of the epic are closed:
    ```
    SendMessage({
      type: "shutdown_request",
-     recipient: "implementer-1",
+     recipient: "implementer-1-<STAMP>",
      content: "Epic complete. Shutting down."
    })
    ```
@@ -398,7 +399,7 @@ When all child tickets of the epic are closed:
    ```bash
    # Clean up implementer worktrees (adjust count to match)
    for N in 1 2 3; do
-     git worktree remove .worktrees/implementer-$N --force 2>/dev/null || true
+     git worktree remove .worktrees/implementer-$N-<STAMP> --force 2>/dev/null || true
    done
    ```
    ```
