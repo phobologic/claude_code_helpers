@@ -12,7 +12,7 @@ language plugins, tool rules, and working style rules for `~/.claude/`.
 | `languages/` | Per-language Claude Code plugins (Go, Python) — auto-formatting hooks + coding rules |
 | `plugins/` | General-purpose Claude Code plugins — workflow automation and tool integrations |
 | `tools/` | Per-tool rule files (Railway, SQLAlchemy) — loaded via `.claude/rules/` symlinks |
-| `bin/` | Utility scripts: tk plugins (`tk-show-multi`, `tk-epic-status`) and `git-auto-commit.sh` |
+| `bin/` | Utility scripts: tk plugins (`tk-show-multi`, `tk-epic-status`, `tk-triage`) and `git-auto-commit.sh` |
 | `CLAUDE.global.md` | Global CLAUDE.md with personal working style rules |
 | `install.sh` | Sets up `~/.claude/` symlinks from scratch |
 
@@ -32,6 +32,7 @@ This creates:
 - `~/.claude/rules/python.md` → `languages/python/rules/CLAUDE.md` *(path-scoped to `*.py` files)*
 - `~/.local/bin/tk-show-multi` → `bin/tk-show-multi` *(tk plugin)*
 - `~/.local/bin/tk-epic-status` → `bin/tk-epic-status` *(tk plugin)*
+- `~/.local/bin/tk-triage` → `bin/tk-triage` *(tk plugin)*
 
 It also adds `.tickets/` to `~/.config/git/ignore` so ticket files are never accidentally committed.
 
@@ -54,6 +55,7 @@ are available globally:
 | `/use-railway` | Symlink Railway CLI rules into the current project |
 | `/use-sqlalchemy` | Symlink SQLAlchemy/Alembic rules into the current project |
 | `/migrate-beads` | Migrate a project's issue tracking from `bd` (beads) to `tk` |
+| `/ticket-triage` | Filter, sort, and review open tickets — use instead of inline Python/jq |
 
 ## Agent Team Workflow
 
@@ -203,6 +205,21 @@ Used extensively by `/implement-ticket` to batch-load ticket context efficiently
 
 **`tk epic-status`** — overview of all open epics with their child tickets grouped by
 priority. Also shows unclaimed tickets not belonging to any epic.
+
+**`tk triage [flags]`** — filter and sort tickets for review with multi-key sorting and
+confidence extraction. Handles all the cases where you'd otherwise reach for inline
+Python or jq:
+
+```bash
+tk triage --priority 2 --sort type,created --limit 10   # P2 tickets, bugs first, oldest first
+tk triage --type bug --sort confidence                  # bugs ranked by extracted confidence
+tk triage --epic pbp-rods --sort priority,created       # all tickets in an epic
+tk triage --json --full                                 # structured JSON with full body
+```
+
+Confidence is extracted from ticket bodies automatically, handling all formats seen in
+practice: `95%`, `0.95`, `85/100`, `high`. The `--sort confidence` flag puts
+highest-confidence tickets first, unrated tickets last.
 
 ### Workflow with `/implement-ticket`
 

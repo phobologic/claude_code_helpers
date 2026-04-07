@@ -1,0 +1,276 @@
+#!/usr/bin/env python3
+# tk-plugin: Filter and sort tickets for triage with multi-key sorting and confidence extraction
+
+import os
+import sys
+import json
+import re
+import argparse
+from datetime import datetime, timezone
+
+TICKETS_DIR = os.environ.get('TICKETS_DIR', '.tickets')
+
+TYPE_ORDER_DEFAULT = ['bug', 'task', 'feature', 'chore', 'epic']
+
+
+def parse_frontmatter_value(val):
+    val = val.strip()
+    if val.startswith('[') and val.endswith(']'):
+        inner = val[1:-1].strip()
+        if not inner:
+            return []
+        return [x.strip() for x in inner.split(',') if x.strip()]
+    try:
+        return int(val)
+    except ValueError:
+        pass
+    return val
+
+
+def parse_ticket(path):
+    try:
+        with open(path, encoding='utf-8') as f:
+            content = f.read()
+    except (IOError, OSError):
+        return None
+
+    if not content.startswith('---'):
+        return None
+
+    try:
+        end = content.index('\n---', 3)
+    except ValueError:
+        return None
+
+    frontmatter_str = content[3:end].strip()
+    body = content[end + 4:].strip()
+
+    ticket = {}
+    for line in frontmatter_str.splitlines():
+        if ':' in line:
+            key, _, val = line.partition(':')
+            ticket[key.strip()] = parse_frontmatter_value(val)
+
+    title_match = re.search(r'^#+\s+(.+)$', body, re.MULTILINE)
+    ticket['title'] = title_match.group(1).strip() if title_match else os.path.basename(path)
+    ticket['body'] = body
+    ticket['confidence'] = extract_confidence(body)
+
+    if 'priority' in ticket and not isinstance(ticket['priority'], int):
+        try:
+            ticket['priority'] = int(ticket['priority'])
+        except (ValueError, TypeError):
+            ticket['priority'] = 99
+
+    return ticket
+
+
+def extract_confidence(body):
+    """Extract confidence from ticket body and normalize to 0-100 int.
+
+    Handles: 95%, 0.95, 1.0, 85/100, bare integer, high/medium/low
+    """
+    prefix = r'\*{0,2}[Cc]onfidence\*{0,2}\s*[:=]\s*'
+
+    m = re.search(prefix + r'(\d+)\s*%', body)
+    if m:
+        return int(m.group(1))
+
+    m = re.search(prefix + r'(\d+)\s*/\s*100\b', body)
+    if m:
+        return int(m.group(1))
+
+    m = re.search(prefix + r'1\.0\b', body)
+    if m:
+        return 100
+
+    m = re.search(prefix + r'(0\.\d+)', body)
+    if m:
+        return round(float(m.group(1)) * 100)
+
+    m = re.search(prefix + r'(high|medium|low)\b', body, re.IGNORECASE)
+    if m:
+        return {'high': 90, 'medium': 60, 'low': 30}[m.group(1).lower()]
+
+    # Bare integer last — least specific, only match 0-100
+    m = re.search(prefix + r'(\d{1,3})\b', body)
+    if m:
+        val = int(m.group(1))
+        if 0 <= val <= 100:
+            return val
+
+    return None
+
+
+def make_sort_key(ticket, sort_fields, type_order):
+    key = []
+    for field in sort_fields:
+        if field == 'type':
+            t = ticket.get('type', '')
+            try:
+                key.append(type_order.index(t))
+            except ValueError:
+                key.append(len(type_order))
+        elif field == 'created':
+            raw = (ticket.get('created') or '').replace('Z', '+00:00')
+            try:
+                key.append(datetime.fromisoformat(raw))
+            except (ValueError, AttributeError):
+                key.append(datetime.min.replace(tzinfo=timezone.utc))
+        elif field == 'priority':
+            p = ticket.get('priority')
+            key.append(p if isinstance(p, int) else 99)
+        elif field == 'confidence':
+            c = ticket.get('confidence')
+            # Higher confidence sorts first; None sorts last
+            key.append(-(c if c is not None else -1))
+        else:
+            key.append(str(ticket.get(field) or ''))
+    return tuple(key)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog='tk triage',
+        description='Filter and sort tickets for triage',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Sort fields: type, created, priority, confidence, status, assignee
+  type      — uses --type-order for custom ordering (bugs first by default)
+  confidence — higher confidence sorts first; tickets without confidence sort last
+
+Examples:
+  tk triage --priority 2 --sort type,created --limit 10
+  tk triage --type bug --sort confidence --limit 20
+  tk triage --epic pbp-rods --sort priority,created
+  tk triage --status all --type bug --json
+  tk triage --json --full   # include ticket body for deep review
+""",
+    )
+    parser.add_argument(
+        '--status', default='open',
+        help='Status filter: open, closed, in_progress, all (default: open)',
+    )
+    parser.add_argument(
+        '--priority', type=int, metavar='N',
+        help='Filter by priority level 0–4',
+    )
+    parser.add_argument(
+        '--type', dest='types', metavar='TYPE[,TYPE]',
+        help='Filter by type(s), comma-separated: bug, task, feature, epic, chore',
+    )
+    parser.add_argument(
+        '--epic', metavar='ID',
+        help='Filter by parent epic ID',
+    )
+    parser.add_argument(
+        '--tag', metavar='TAG',
+        help='Filter by tag',
+    )
+    parser.add_argument(
+        '--sort', default='type,created', metavar='FIELD[,FIELD]',
+        help='Comma-separated sort fields (default: type,created)',
+    )
+    parser.add_argument(
+        '--type-order', default=','.join(TYPE_ORDER_DEFAULT), metavar='TYPE[,TYPE]',
+        help='Custom type sort order (default: bug,task,feature,chore,epic)',
+    )
+    parser.add_argument(
+        '--limit', type=int, metavar='N',
+        help='Limit output to N tickets',
+    )
+    parser.add_argument(
+        '--json', dest='as_json', action='store_true',
+        help='Output as JSON (metadata + title + confidence)',
+    )
+    parser.add_argument(
+        '--full', action='store_true',
+        help='With --json: include full ticket body',
+    )
+
+    args = parser.parse_args()
+
+    # Load all tickets
+    tickets = []
+    if os.path.isdir(TICKETS_DIR):
+        for fname in sorted(os.listdir(TICKETS_DIR)):
+            if fname.endswith('.md'):
+                t = parse_ticket(os.path.join(TICKETS_DIR, fname))
+                if t:
+                    tickets.append(t)
+
+    if not tickets:
+        print('No tickets found in', TICKETS_DIR, file=sys.stderr)
+        sys.exit(0)
+
+    # Filter
+    if args.status != 'all':
+        tickets = [t for t in tickets if t.get('status') == args.status]
+
+    if args.priority is not None:
+        tickets = [t for t in tickets if t.get('priority') == args.priority]
+
+    if args.types:
+        type_set = {s.strip() for s in args.types.split(',')}
+        tickets = [t for t in tickets if t.get('type') in type_set]
+
+    if args.epic:
+        tickets = [t for t in tickets if t.get('parent') == args.epic]
+
+    if args.tag:
+        tickets = [t for t in tickets if args.tag in (t.get('tags') or [])]
+
+    # Sort
+    sort_fields = [f.strip() for f in args.sort.split(',')]
+    type_order = [s.strip() for s in args.type_order.split(',')]
+    tickets.sort(key=lambda t: make_sort_key(t, sort_fields, type_order))
+
+    # Limit
+    if args.limit:
+        tickets = tickets[:args.limit]
+
+    # --- Output ---
+
+    if args.as_json:
+        out = []
+        for t in tickets:
+            d = {k: v for k, v in t.items() if k != 'body' or args.full}
+            out.append(d)
+        print(json.dumps(out, default=str, indent=2))
+        return
+
+    # Table output
+    if not tickets:
+        print('No tickets match the given filters.')
+        return
+
+    id_w = max((len(t.get('id', '')) for t in tickets), default=8)
+    id_w = max(id_w, 4)
+
+    row = '{:<{id_w}}  {:<8}  {:>3}  {:>5}  {:<10}  {}'
+    header = row.format('ID', 'TYPE', 'PRI', 'CONF', 'CREATED', 'TITLE', id_w=id_w)
+    sep = '-' * len(header)
+    print(header)
+    print(sep)
+
+    max_title = max(len(header) - id_w - 8 - 3 - 5 - 10 - 12, 20)
+    for t in tickets:
+        conf = t.get('confidence')
+        conf_str = f'{conf}%' if conf is not None else '-'
+        created = (t.get('created') or '')[:10]
+        title = t.get('title', '')
+        if len(title) > max_title:
+            title = title[:max_title - 1] + '\u2026'
+        print(row.format(
+            t.get('id', ''),
+            t.get('type', ''),
+            str(t.get('priority', '')),
+            conf_str,
+            created,
+            title,
+            id_w=id_w,
+        ))
+
+
+if __name__ == '__main__':
+    main()

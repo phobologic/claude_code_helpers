@@ -100,6 +100,7 @@ tk start <id>                               # Claim work
 tk close <id>                               # Complete work
 tk dep <child> <parent>                     # child depends on parent
 tk query '<jq-filter>'                      # Filter tickets with jq
+tk triage [--priority N] [--type T] [--sort fields] [--limit N]   # Filter/sort for triage
 ```
 
 **Workflow:**
@@ -161,6 +162,7 @@ tk query '.parent == "<epic-id>"'           # Find children of an epic
 - Always use `--parent` to add tickets to an epic (membership). Use `tk dep` only for execution ordering. Never substitute `tk dep` for `--parent`.
 - `tk dep A B` means "A is blocked until B is done" — it does NOT mean "A belongs to B" or "A was found during B". When in doubt, use `--parent`.
 - Tickets are gitignored — no need to commit them
+- **Never write inline Python or jq pipelines to filter/sort tickets** — use `tk triage` instead. It handles multi-key sorting, confidence extraction from ticket bodies, and both table and JSON output in a single safe command.
 
 ## Living Document
 
