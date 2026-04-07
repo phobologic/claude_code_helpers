@@ -246,12 +246,12 @@ carry them forward to show the user.
    - Splitting oversized tickets
    - Adding context to ticket descriptions for self-containment
 
-### Step 3: Iterate (up to 3 rounds)
+### Step 3: Iterate (up to 5 rounds)
 
 After revising, invoke the spec-critic again with the updated plan. The critic
 reviews fresh -- it does not remember the previous round.
 
-**Cap: 3 rounds maximum.** If the critic still returns REVISE after 3 rounds,
+**Cap: 5 rounds maximum.** If the critic still returns REVISE after 5 rounds,
 proceed to Phase 5 with the outstanding findings included.
 
 ## Phase 5 -- User approval
