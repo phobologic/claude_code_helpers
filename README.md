@@ -337,6 +337,20 @@ Both files are newline-delimited lists of repo-relative paths. Lines starting wi
 
 **First-time setup:** on the first message after installing the plugin in a repo that has `.worktreeinclude` but no `.worktreelinks`, Claude will walk you through migrating entries to the right file. Once `.worktreelinks` exists (even empty) the prompt won't appear again.
 
+**Agent team workaround:** Claude Code's `isolation: "worktree"` parameter is
+[silently ignored](https://github.com/anthropics/claude-code/issues/33045) for
+agents spawned via `TeamCreate`. The plugin includes a `PreToolUse` hook
+(`agent-worktree-guard.sh`) that detects this combination and pre-creates the
+worktree at `.worktrees/<agent-name>` before the agent spawns. Since the platform
+can't change the agent's working directory, agents must `cd` to their worktree
+themselves — the path is deterministic from the agent name, so spawn prompts can
+reference it directly.
+
+To avoid collisions between concurrent sessions (or stale worktrees from crashed
+runs), the `/run-epic` and `/fix-tickets` skills append a short session-unique
+timestamp to implementer names (e.g. `implementer-1-483921`), which flows through
+to the worktree path.
+
 **Safety net:** the `SessionStart` hook retroactively symlinks `.worktreelinks` entries in worktrees created before the plugin was installed.
 
 **`.gitignore` note:** git's trailing-slash patterns (e.g. `.tickets/`) match real directories but not symlinks. For any directory entry in `.worktreelinks`, add both forms to `.gitignore`:

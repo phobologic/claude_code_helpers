@@ -29,7 +29,12 @@ Replaces Claude Code's default git worktree creation to support two configuratio
 - **`.worktreeinclude`** — paths copied into each worktree (per-worktree snapshots)
 
 **Hooks:**
-- `WorktreeCreate` — creates the worktree, processes both files
+- `WorktreeCreate` — creates the worktree, processes both config files
+- `PreToolUse (Agent)` — works around [anthropics/claude-code#33045](https://github.com/anthropics/claude-code/issues/33045)
+  where `isolation: "worktree"` is silently ignored for `TeamCreate` agents. Detects
+  agents with both `isolation: "worktree"` and `team_name`, pre-creates the worktree
+  at `.worktrees/<agent-name>`, and runs `.worktreelinks`/`.worktreeinclude` setup.
+  Agents must `cd` to the worktree themselves since the platform can't change their cwd.
 - `SessionStart` — retroactively symlinks `.worktreelinks` entries in pre-existing
   worktrees; on first session after install, prompts migration from `.worktreeinclude`
 
