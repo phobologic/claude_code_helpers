@@ -176,6 +176,47 @@ waiting for messages.
 If any teammate failed to spawn, retry the Agent call. If repeated failures,
 inform the user.
 
+## Status updates
+
+**Output a status dashboard to the user every time agent or ticket state changes.**
+Triggers: ticket dispatched, implementer signals done, AC verdict received,
+quality review verdict received, ticket merged and closed, new ticket unblocked,
+or an agent appears stuck.
+
+Format (adapt column widths to content):
+
+```
+── TK-09: AC PASS ──────────────────────────────────────
+
+Agents
+| Agent                    | State        | Working on                    |
+|--------------------------|--------------|-------------------------------|
+| implementer-1-<STAMP>   | implementing | [TK-12] Add login endpoint    |
+| implementer-2-<STAMP>   | idle         |                               |
+| ac-verifier              | idle         |                               |
+| quality-reviewer         | reviewing    | [TK-09] Fix rate limiter      |
+
+Tickets
+| Ticket                          | Status               | Notes          |
+|---------------------------------|----------------------|----------------|
+| [TK-09] Fix rate limiter       | quality review       | AC pass #1     |
+| [TK-12] Add login endpoint     | implementing         |                |
+| [TK-15] Add logout endpoint    | blocked              | waiting: TK-12 |
+| [TK-07] Update README          | ✓ merged             |                |
+
+Progress: 1/4 closed
+─────────────────────────────────────────────────────────
+```
+
+The one-line header after `──` describes the event that triggered this update.
+
+Keep it concise — no prose, just the tables. For minor updates you may omit
+unchanged tables (e.g. if only an agent state changed, show just the Agents
+table with the event header).
+
+If an implementer hasn't signaled completion in a while, send a status check
+via SendMessage and note it in the dashboard.
+
 ## Phase 3 -- Manage the validation loop
 
 This is your main operating loop. You will receive messages from teammates
@@ -332,29 +373,7 @@ receive the ticket IDs and their severities.
    tk add-note <finding-id> "Fixed in <ticket-id>"
    ```
 
-## Phase 4 -- Monitor progress
-
-Periodically (or when things seem quiet), check on the state of things:
-
-1. Check epic progress:
-   ```bash
-   tk query '.parent == "<epic-id>"'
-   ```
-   Report to the user how many tickets are closed vs. remaining.
-
-2. Check for stuck teammates. If an implementer hasn't signaled completion
-   in a while, message them via SendMessage:
-   ```
-   SendMessage({
-     recipient: "<implementer-name>",
-     content: "Status check on <ticket-id>: how's it going? Need any help?"
-   })
-   ```
-
-3. If a teammate appears to have crashed or is unresponsive, inform the user
-   and suggest spawning a replacement.
-
-## Phase 5 -- Epic completion
+## Phase 4 -- Epic completion
 
 When all child tickets of the epic are closed:
 

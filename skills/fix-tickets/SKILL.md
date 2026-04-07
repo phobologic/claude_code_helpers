@@ -183,6 +183,51 @@ Track implementer state throughout the run:
 - **idle**: waiting for work (all start idle)
 - **busy**: working on a ticket (map: implementer-name → ticket-id)
 
+## Status updates
+
+**Output a status dashboard to the user every time agent or ticket state changes.**
+Triggers: ticket dispatched, implementer signals done, quality review verdict
+received, ticket merged and closed, wave boundary reached, or an agent appears stuck.
+
+Format (adapt column widths to content):
+
+```
+── TK-42: quality CLEAN ─────────────────────────────────
+
+Agents
+| Agent                    | State        | Working on                    |
+|--------------------------|--------------|-------------------------------|
+| implementer-1-<STAMP>   | idle         |                               |
+| implementer-2-<STAMP>   | implementing | [TK-44] Fix auth timeout      |
+| quality-reviewer-1       | idle         |                               |
+| quality-reviewer-2       | reviewing    | [TK-43] Add retry header      |
+
+Wave 1 (active)
+| Ticket                          | Status               | Notes          |
+|---------------------------------|----------------------|----------------|
+| [TK-42] Fix null check          | ✓ merged             |                |
+| [TK-43] Add retry header        | quality review       |                |
+| [TK-44] Fix auth timeout        | implementing         |                |
+
+Wave 2 (pending)
+| Ticket                          | Status               | Notes          |
+|---------------------------------|----------------------|----------------|
+| [TK-45] Update schema           | queued               |                |
+| [TK-46] Fix migration           | queued               |                |
+
+Progress: 1/5 closed · Wave 1: 1/3 merged
+─────────────────────────────────────────────────────────
+```
+
+The one-line header after `──` describes the event that triggered this update.
+
+Keep it concise — no prose, just the tables. For minor updates you may omit
+unchanged tables (e.g. if only an agent state changed, show just the Agents
+table with the event header).
+
+If an implementer hasn't signaled completion in a while, send a status check
+via SendMessage and note it in the dashboard.
+
 ## Phase 3 — Execute waves
 
 Repeat for each wave in order. A wave is complete only when all its tickets are closed
