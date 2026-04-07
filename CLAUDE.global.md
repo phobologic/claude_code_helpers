@@ -101,6 +101,7 @@ tk close <id>                               # Complete work
 tk dep <child> <parent>                     # child depends on parent
 tk query '<jq-filter>'                      # Filter tickets with jq
 tk triage [--priority N] [--type T] [--sort fields] [--limit N]   # Filter/sort for triage
+tk set <id> [--priority N] [--type T] [--status S] [--assignee A] [--parent ID] [--tags T]  # Update ticket attributes
 ```
 
 **Workflow:**
@@ -163,6 +164,7 @@ tk query '.parent == "<epic-id>"'           # Find children of an epic
 - `tk dep A B` means "A is blocked until B is done" — it does NOT mean "A belongs to B" or "A was found during B". When in doubt, use `--parent`.
 - Tickets are gitignored — no need to commit them
 - **Never write inline Python or jq pipelines to filter/sort tickets** — use `tk triage` instead. It handles multi-key sorting, confidence extraction from ticket bodies, and both table and JSON output in a single safe command.
+- **Never use `sed` or direct file edits to update ticket fields** — use `tk set <id> --priority N --type T ...` instead. Supports priority, type, status, assignee, parent, and tags in one call.
 
 ## Living Document
 

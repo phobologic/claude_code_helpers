@@ -12,7 +12,7 @@ language plugins, tool rules, and working style rules for `~/.claude/`.
 | `languages/` | Per-language Claude Code plugins (Go, Python) — auto-formatting hooks + coding rules |
 | `plugins/` | General-purpose Claude Code plugins — workflow automation and tool integrations |
 | `tools/` | Per-tool rule files (Railway, SQLAlchemy) — loaded via `.claude/rules/` symlinks |
-| `bin/` | Utility scripts: tk plugins (`tk-show-multi`, `tk-epic-status`, `tk-triage`) and `git-auto-commit.sh` |
+| `bin/` | Utility scripts: tk plugins (`tk-show-multi`, `tk-epic-status`, `tk-triage`, `tk-set`) and `git-auto-commit.sh` |
 | `CLAUDE.global.md` | Global CLAUDE.md with personal working style rules |
 | `install.sh` | Sets up `~/.claude/` symlinks from scratch |
 
@@ -33,6 +33,7 @@ This creates:
 - `~/.local/bin/tk-show-multi` → `bin/tk-show-multi` *(tk plugin)*
 - `~/.local/bin/tk-epic-status` → `bin/tk-epic-status` *(tk plugin)*
 - `~/.local/bin/tk-triage` → `bin/tk-triage` *(tk plugin)*
+- `~/.local/bin/tk-set` → `bin/tk-set` *(tk plugin)*
 
 It also adds `.tickets/` to `~/.config/git/ignore` so ticket files are never accidentally committed.
 
@@ -220,6 +221,20 @@ tk triage --json --full                                 # structured JSON with f
 Confidence is extracted from ticket bodies automatically, handling all formats seen in
 practice: `95%`, `0.95`, `85/100`, `high`. The `--sort confidence` flag puts
 highest-confidence tickets first, unrated tickets last.
+
+**`tk set <id> [flags]`** — update one or more attributes on a ticket in place.
+Avoids the need for `tk edit` (which blocks agents) or manual `sed` on ticket files:
+
+```bash
+tk set pbp-xxxx --priority 1
+tk set pbp-xxxx --type bug --priority 0
+tk set pbp-xxxx --tags ui,backend
+tk set pbp-xxxx --parent pbp-rods
+tk set pbp-xxxx --parent none        # clear parent
+```
+
+Supports: `--priority`, `--type`, `--status`, `--assignee`, `--parent`, `--tags`.
+Multiple flags apply in one call. Partial ID matching works as with other tk commands.
 
 ### Workflow with `/implement-ticket`
 
