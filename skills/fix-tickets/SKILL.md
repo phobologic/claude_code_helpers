@@ -191,33 +191,35 @@ received, ticket merged and closed, wave boundary reached, or an agent appears s
 
 Format (adapt column widths to content):
 
-```
 ── TK-42: quality CLEAN ─────────────────────────────────
 
-Agents
-| Agent                    | State        | Working on                    |
-|--------------------------|--------------|-------------------------------|
-| implementer-1-<STAMP>   | idle         |                               |
-| implementer-2-<STAMP>   | implementing | [TK-44] Fix auth timeout      |
-| quality-reviewer-1       | idle         |                               |
-| quality-reviewer-2       | reviewing    | [TK-43] Add retry header      |
+**Agents**
 
-Wave 1 (active)
-| Ticket                          | Status               | Notes          |
-|---------------------------------|----------------------|----------------|
-| [TK-42] Fix null check          | ✓ merged             |                |
-| [TK-43] Add retry header        | quality review       |                |
-| [TK-44] Fix auth timeout        | implementing         |                |
+| Agent | State | Working on |
+|---|---|---|
+| implementer-1-&lt;STAMP&gt; | idle | |
+| implementer-2-&lt;STAMP&gt; | implementing | [TK-44] Fix auth timeout |
+| quality-reviewer-1 | idle | |
+| quality-reviewer-2 | reviewing | [TK-43] Add retry header |
 
-Wave 2 (pending)
-| Ticket                          | Status               | Notes          |
-|---------------------------------|----------------------|----------------|
-| [TK-45] Update schema           | queued               |                |
-| [TK-46] Fix migration           | queued               |                |
+**Wave 1** (active)
+
+| Ticket | Status | Notes |
+|---|---|---|
+| [TK-42] Fix null check | ✓ merged | |
+| [TK-43] Add retry header | quality review | |
+| [TK-44] Fix auth timeout | implementing | |
+
+**Wave 2** (pending)
+
+| Ticket | Status | Notes |
+|---|---|---|
+| [TK-45] Update schema | queued | |
+| [TK-46] Fix migration | queued | |
 
 Progress: 1/5 closed · Wave 1: 1/3 merged
+
 ─────────────────────────────────────────────────────────
-```
 
 The one-line header after `──` describes the event that triggered this update.
 

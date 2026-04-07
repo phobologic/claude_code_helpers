@@ -185,28 +185,29 @@ or an agent appears stuck.
 
 Format (adapt column widths to content):
 
-```
 ── TK-09: AC PASS ──────────────────────────────────────
 
-Agents
-| Agent                    | State        | Working on                    |
-|--------------------------|--------------|-------------------------------|
-| implementer-1-<STAMP>   | implementing | [TK-12] Add login endpoint    |
-| implementer-2-<STAMP>   | idle         |                               |
-| ac-verifier              | idle         |                               |
-| quality-reviewer         | reviewing    | [TK-09] Fix rate limiter      |
+**Agents**
 
-Tickets
-| Ticket                          | Status               | Notes          |
-|---------------------------------|----------------------|----------------|
-| [TK-09] Fix rate limiter       | quality review       | AC pass #1     |
-| [TK-12] Add login endpoint     | implementing         |                |
-| [TK-15] Add logout endpoint    | blocked              | waiting: TK-12 |
-| [TK-07] Update README          | ✓ merged             |                |
+| Agent | State | Working on |
+|---|---|---|
+| implementer-1-&lt;STAMP&gt; | implementing | [TK-12] Add login endpoint |
+| implementer-2-&lt;STAMP&gt; | idle | |
+| ac-verifier | idle | |
+| quality-reviewer | reviewing | [TK-09] Fix rate limiter |
+
+**Tickets**
+
+| Ticket | Status | Notes |
+|---|---|---|
+| [TK-09] Fix rate limiter | quality review | AC pass #1 |
+| [TK-12] Add login endpoint | implementing | |
+| [TK-15] Add logout endpoint | blocked | waiting: TK-12 |
+| [TK-07] Update README | ✓ merged | |
 
 Progress: 1/4 closed
+
 ─────────────────────────────────────────────────────────
-```
 
 The one-line header after `──` describes the event that triggered this update.
 
