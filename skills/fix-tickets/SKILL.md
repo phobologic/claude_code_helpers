@@ -97,10 +97,14 @@ Create worktrees for all implementers now, before spawning any agents. Do not re
 on the `isolation: "worktree"` parameter to create them — that hook only fires
 reliably in the main session, not from sub-agent contexts.
 
+Use `worktree-init` (not raw `git worktree add`) — it applies `.worktreelinks` and
+`.worktreeinclude` setup so shared state (e.g. `.tickets/`) is available in each
+implementer worktree.
+
 ```bash
 # Create one worktree per implementer (min(4, total_ticket_count))
-git worktree add .worktrees/implementer-1-$STAMP
-git worktree add .worktrees/implementer-2-$STAMP
+worktree-init implementer-1-$STAMP $REPO_ROOT
+worktree-init implementer-2-$STAMP $REPO_ROOT
 # ... repeat for each implementer up to the cap
 ```
 

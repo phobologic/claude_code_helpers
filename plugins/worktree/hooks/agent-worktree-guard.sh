@@ -40,8 +40,7 @@ if [[ -d "$WORKTREE_PATH" ]]; then
   exit 0
 fi
 
-# Delegate creation + .worktreelinks/.worktreeinclude setup to worktree-create.sh
-echo "{\"worktree_name\": \"$AGENT_NAME\", \"cwd\": \"$CWD\"}" \
-  | bash "${CLAUDE_PLUGIN_ROOT}/hooks/worktree-create.sh" >&2
+# Delegate creation + .worktreelinks/.worktreeinclude setup to worktree-init
+worktree-init "$AGENT_NAME" "$CWD" >&2
 
 echo "claude-worktree: pre-created team agent worktree at $WORKTREE_PATH" >&2

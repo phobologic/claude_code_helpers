@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Create a git worktree and apply .worktreelinks / .worktreeinclude setup.
+#
+# Usage: worktree-init <name> [repo-root]
+#   <name>        Worktree name — created at <repo-root>/.worktrees/<name>
+#   [repo-root]   Defaults to the root of the current git repo
+#
+# Mirrors the setup done by the claude-worktree plugin's worktree-create.sh,
+# but callable directly from skills/scripts without relying on hook machinery.
+set -euo pipefail
+
+WORKTREE_NAME="${1:?Usage: worktree-init <name> [repo-root]}"
+REPO_ROOT="${2:-$(git rev-parse --show-toplevel)}"
+
+cd "$REPO_ROOT"
+
+WORKTREE_PATH="$REPO_ROOT/.worktrees/$WORKTREE_NAME"
+
+if [[ -d "$WORKTREE_PATH" ]]; then
+  echo "worktree-init: $WORKTREE_PATH already exists, skipping" >&2
+else
+  git worktree add "$WORKTREE_PATH" >&2
+  echo "worktree-init: created $WORKTREE_PATH" >&2
+fi
+
+# .worktreeinclude — copy files/dirs into the worktree (independent per-worktree)
+if [[ -f "$REPO_ROOT/.worktreeinclude" ]]; then
+  while IFS= read -r entry || [[ -n "$entry" ]]; do
+    [[ -z "$entry" || "$entry" =~ ^# ]] && continue
+    entry="${entry%/}"
+    src="$REPO_ROOT/$entry"
+    dst="$WORKTREE_PATH/$entry"
+    [[ -e "$src" ]] || continue
+    mkdir -p "$(dirname "$dst")"
+    cp -r "$src" "$dst"
+    echo "worktree-init: copied $entry" >&2
+  done < "$REPO_ROOT/.worktreeinclude"
+fi
+
+# .worktreelinks — symlink paths back to the main repo (shared state)
+if [[ -f "$REPO_ROOT/.worktreelinks" ]]; then
+  while IFS= read -r entry || [[ -n "$entry" ]]; do
+    [[ -z "$entry" || "$entry" =~ ^# ]] && continue
+    entry="${entry%/}"
+    src="$REPO_ROOT/$entry"
+    dst="$WORKTREE_PATH/$entry"
+    [[ -e "$src" ]] || mkdir -p "$src"
+    mkdir -p "$(dirname "$dst")"
+    ln -sfn "$src" "$dst"
+    echo "worktree-init: linked $entry" >&2
+  done < "$REPO_ROOT/.worktreelinks"
+fi
+
+echo "$WORKTREE_PATH"
