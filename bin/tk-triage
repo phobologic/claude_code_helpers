@@ -246,18 +246,22 @@ Examples:
 
     id_w = max((len(t.get('id', '')) for t in tickets), default=8)
     id_w = max(id_w, 4)
+    epic_w = max((len(t.get('parent', '') or '') for t in tickets), default=8)
+    epic_w = max(epic_w, 5)
 
-    row = '{:<{id_w}}  {:<8}  {:>3}  {:>5}  {:<10}  {}'
-    header = row.format('ID', 'TYPE', 'PRI', 'CONF', 'CREATED', 'TITLE', id_w=id_w)
+    row = '{:<{id_w}}  {:<8}  {:>3}  {:>5}  {:<10}  {:<{epic_w}}  {}'
+    header = row.format('ID', 'TYPE', 'PRI', 'CONF', 'CREATED', 'EPIC', 'TITLE',
+                        id_w=id_w, epic_w=epic_w)
     sep = '-' * len(header)
     print(header)
     print(sep)
 
-    max_title = max(len(header) - id_w - 8 - 3 - 5 - 10 - 12, 20)
+    max_title = max(len(header) - id_w - 8 - 3 - 5 - 10 - epic_w - 16, 20)
     for t in tickets:
         conf = t.get('confidence')
         conf_str = f'{conf}%' if conf is not None else '-'
         created = (t.get('created') or '')[:10]
+        epic = t.get('parent') or '-'
         title = t.get('title', '')
         if len(title) > max_title:
             title = title[:max_title - 1] + '\u2026'
@@ -267,8 +271,10 @@ Examples:
             str(t.get('priority', '')),
             conf_str,
             created,
+            epic,
             title,
             id_w=id_w,
+            epic_w=epic_w,
         ))
 
 
