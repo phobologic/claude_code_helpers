@@ -110,6 +110,18 @@ URLs, etc.), send it to each of them:
 Wait for them to confirm before continuing steps that require their presence.
 They will message you when they've completed a coordination step.
 
+## Checkpoints
+After completing each logical step (e.g. logged in, set up the session, completed
+a major flow), send a brief status update to the team lead before continuing:
+  SendMessage({ to: 'team-lead', content: 'STATUS <role-1>: <what you just completed>' })
+This gives the team lead a window to send instructions. Check for any incoming
+messages at each checkpoint before proceeding to the next step.
+
+## Shutdown
+If you receive a shutdown message from the team lead at any point, finish your
+current action, send any unsent findings, then send DONE immediately. Do not
+continue to the next step.
+
 ## Reporting findings
 Whenever you notice something broken, confusing, missing, or worth improving,
 send a structured finding to the team lead:
@@ -171,6 +183,18 @@ Wait for <role-1> to send you the information you need to join the session
 Then confirm back:
   SendMessage({ to: '<role-1>', content: '<role-N> joined' })
 Then continue exploring from your role's perspective.
+
+## Checkpoints
+After completing each logical step (e.g. joined the session, completed a major
+flow), send a brief status update to the team lead before continuing:
+  SendMessage({ to: 'team-lead', content: 'STATUS <role-N>: <what you just completed>' })
+This gives the team lead a window to send instructions. Check for any incoming
+messages at each checkpoint before proceeding to the next step.
+
+## Shutdown
+If you receive a shutdown message from the team lead at any point, finish your
+current action, send any unsent findings, then send DONE immediately. Do not
+continue to the next step.
 
 ## Reporting findings
 Whenever you notice something broken, confusing, missing, or worth improving,
