@@ -87,7 +87,18 @@ You are the session initiator. Use playwright-cli to control a browser.
 Log in or create an account using realistic test credentials for your role
 (e.g. <role-1>@test.com / password123, or register if needed).
 
+## Playwright CLI usage
+Always pass `-s=<role-1>` on every playwright-cli command. Without it, all
+agents share the same browser session and will clobber each other's logins.
+
+  playwright-cli -s=<role-1> open <url>
+  playwright-cli -s=<role-1> snapshot
+  playwright-cli -s=<role-1> click <ref>
+  playwright-cli -s=<role-1> fill <ref> <value>
+  playwright-cli -s=<role-1> goto <url>
+
 ## Scenario
+
 <scenario>
 
 ## Coordination protocol
@@ -140,7 +151,18 @@ Use playwright-cli to control a browser. Log in or create an account using
 realistic test credentials for your role (e.g. <role-N>@test.com / password123,
 or register if needed).
 
+## Playwright CLI usage
+Always pass `-s=<role-N>` on every playwright-cli command. Without it, all
+agents share the same browser session and will clobber each other's logins.
+
+  playwright-cli -s=<role-N> open <url>
+  playwright-cli -s=<role-N> snapshot
+  playwright-cli -s=<role-N> click <ref>
+  playwright-cli -s=<role-N> fill <ref> <value>
+  playwright-cli -s=<role-N> goto <url>
+
 ## Scenario
+
 <scenario>
 
 ## Coordination protocol
