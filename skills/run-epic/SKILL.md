@@ -92,7 +92,26 @@ git checkout main  # return to main, implementers branch from here
 
 Record `REPO_ROOT` and `STAMP` — you'll use them in worktree paths for implementer prompts.
 
-### Step 1.2: Create the team
+### Step 1.2: Pre-create implementer worktrees
+
+Create worktrees for all implementers now, before spawning any agents. Do not rely
+on the `isolation: "worktree"` parameter — that hook only fires reliably in the main
+session, not from sub-agent contexts.
+
+Use `worktree-init` (not raw `git worktree add`) — it applies `.worktreelinks` and
+`.worktreeinclude` setup so shared state (e.g. `.tickets/`) is available in each
+implementer worktree.
+
+```bash
+# Create one worktree per implementer (min(3-4, ready_ticket_count))
+worktree-init implementer-1-$STAMP $REPO_ROOT
+worktree-init implementer-2-$STAMP $REPO_ROOT
+# ... repeat for each implementer
+```
+
+Verify each was created: `ls .worktrees/` should show all implementer dirs.
+
+### Step 1.3: Create the team
 
 Call TeamCreate to initialize the team namespace:
 
@@ -103,7 +122,7 @@ TeamCreate({
 })
 ```
 
-### Step 1.3: Create initial tasks
+### Step 1.4: Create initial tasks
 
 Call TaskCreate for each ready ticket (up to the implementer cap):
 
@@ -116,7 +135,7 @@ TaskCreate({
 })
 ```
 
-### Step 1.4: Spawn teammates
+### Step 1.5: Spawn teammates
 
 Spawn each teammate using the Agent tool with the `team_name` parameter so
 they join the team (not as standalone background agents). The `name` parameter
@@ -144,8 +163,7 @@ Agent({
   full context.",
   subagent_type: "implementer",
   team_name: "epic-<epic-id>",
-  name: "implementer-1-<STAMP>",
-  isolation: "worktree"
+  name: "implementer-1-<STAMP>"
 })
 ```
 
@@ -175,14 +193,20 @@ Agent({
 })
 ```
 
-## Phase 2 -- Confirm teammates are active
+## Phase 2 -- Verify worktree isolation
 
-Verify that all spawned teammates are running. Implementers should be claiming
-tasks from the task list. The AC verifier and quality reviewer should be idle,
-waiting for messages.
+After spawning all implementers, wait for their isolation check results. Each
+implementer will report back `WORKTREE OK` or `WARNING: in main repo`.
 
-If any teammate failed to spawn, retry the Agent call. If repeated failures,
-inform the user.
+- If **all report `WORKTREE OK`**: proceed to Phase 3.
+- If **any report `WARNING: in main repo`**: stop immediately and tell the user:
+  > Worktree isolation failed — implementers are running in the main repo.
+  > This will cause parallel agents to conflict. Aborting.
+  Then shut down all teammates and call `TeamDelete()`.
+
+The AC verifier and quality reviewer should be idle, waiting for messages. If
+any teammate failed to spawn entirely, retry the Agent call. If repeated
+failures, inform the user.
 
 ## Status updates
 
