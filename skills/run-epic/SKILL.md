@@ -158,9 +158,21 @@ Agent({
   - Bash: cd to your worktree first
   - Read/Edit: absolute paths starting with <REPO_ROOT>/.worktrees/implementer-1-<STAMP>/
   - Glob/Grep: pass path=<REPO_ROOT>/.worktrees/implementer-1-<STAMP>
+  Never reference <REPO_ROOT> without the .worktrees/implementer-1-<STAMP> suffix.
 
-  Then claim a task from the task list. Run `tk show <ticket-id>` for
-  full context.",
+  Then wait for the team lead to assign you a ticket via SendMessage. Do NOT
+  claim tickets from the task list — the team lead routes all work.
+
+  For each ticket assignment:
+  1. Run `tk show <ticket-id>` for full context
+  2. Send STATUS to team lead: 'STATUS <name>: read <ticket-id>, starting implementation'
+  3. Implement the fix
+  4. Send STATUS to team lead: 'STATUS <name>: implementation done on <ticket-id>, running tests'
+  5. Run tests from your worktree
+  6. Commit to a branch named ticket/<ticket-id>
+  7. Message the team lead: DONE <ticket-id> ticket/<ticket-id>
+
+  Then wait for your next assignment. When you receive a shutdown message, stop.",
   subagent_type: "implementer",
   team_name: "epic-<epic-id>",
   name: "implementer-1-<STAMP>",
@@ -365,13 +377,14 @@ medium/low finding tickets -- these are tracked but non-blocking.
    })
    ```
 
-6. Tell the implementer via SendMessage:
+6. Dispatch the next ticket to the implementer via SendMessage (or stand them
+   down if nothing is available):
    ```
    SendMessage({
      recipient: "<implementer-name>",
      content: "<ticket-id> is closed and merged to epic/<epic-id>.
-     [Next task: claim <next-ticket-id> from the task list. / No more
-     tickets available, stand by.]"
+     [Next: implement <next-ticket-id>: <title>. Run `tk show <next-ticket-id>`
+     for full context. / No more tickets available — stand by.]"
    })
    ```
 

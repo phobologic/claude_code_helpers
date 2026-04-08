@@ -188,10 +188,12 @@ Agent({
 
   For each ticket assignment:
   1. Run `tk show <ticket-id>` for full context
-  2. Implement the fix
-  3. Run tests from your worktree
-  4. Commit to a branch named fix/<ticket-id>
-  5. Message the team lead: DONE <ticket-id> fix/<ticket-id>
+  2. Send STATUS to team lead: 'STATUS <name>: read <ticket-id>, starting implementation'
+  3. Implement the fix
+  4. Send STATUS to team lead: 'STATUS <name>: implementation done on <ticket-id>, running tests'
+  5. Run tests from your worktree
+  6. Commit to a branch named fix/<ticket-id>
+  7. Message the team lead: DONE <ticket-id> fix/<ticket-id>
 
   Then wait for your next assignment. When you receive a shutdown message, stop."
 })
