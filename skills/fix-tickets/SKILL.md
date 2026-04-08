@@ -35,6 +35,14 @@ tk query '.parent == "<epic-id>"'
 Filter out any tickets with status `closed` or `in-progress`. If nothing remains,
 tell the user and stop.
 
+Mark all remaining tickets as in-progress immediately, before planning or confirmation,
+so concurrent runs cannot claim the same tickets:
+
+```bash
+tk start <ticket-id>
+# repeat for each ticket
+```
+
 ## Phase 1 — Plan waves
 
 Read every ticket's title, description, and notes. Reason about which tickets

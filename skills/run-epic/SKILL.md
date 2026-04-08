@@ -31,6 +31,14 @@ stop.
 Check for child tickets. If there are none, tell the user the epic has no
 tickets and stop.
 
+Mark all non-closed child tickets as in-progress immediately, so concurrent
+runs cannot claim the same tickets:
+
+```bash
+tk start <ticket-id>
+# repeat for each non-closed child ticket
+```
+
 Present a summary to the user:
 
 ```
