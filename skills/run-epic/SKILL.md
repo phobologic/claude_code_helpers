@@ -163,7 +163,8 @@ Agent({
   full context.",
   subagent_type: "implementer",
   team_name: "epic-<epic-id>",
-  name: "implementer-1-<STAMP>"
+  name: "implementer-1-<STAMP>",
+  isolation: "worktree"
 })
 ```
 
