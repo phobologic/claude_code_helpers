@@ -81,6 +81,7 @@ To add language auto-formatting hooks to a project:
 ### Ticket Workflow
 - `/implement-ticket [id ...] [-- extra instructions]` - Pick up and implement tk tickets (serial)
 - `/fix-tickets <id> [id ...] | <epic-id>` - Implement a set of tickets in parallel with quality review; designed for multi-review fix batches
+- `/epic-tree [--all] [epic-id ...]` - Show a tree of epics with open/closed ticket counts per level; omit IDs to show all root epics; `--all` includes closed sub-epics
 
 ### Design
 - `/design-sprint [--scan] [--output <path>] [-- <guidance>]` - Three-round GAN-style design sprint: 3 sonnet designers propose independently, opus evaluator scores and issues shared briefs, team lead writes the final spec

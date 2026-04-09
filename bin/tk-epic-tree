@@ -1,0 +1,238 @@
+#!/usr/bin/env bash
+# tk-plugin: Show a tree of epics with open/closed ticket counts at each level
+
+set -euo pipefail
+
+TICKETS_DIR="${TICKETS_DIR:-}"
+if [ -z "$TICKETS_DIR" ]; then
+    dir="$PWD"
+    while [[ "$dir" != "/" ]]; do
+        if [[ -d "$dir/.tickets" ]]; then
+            TICKETS_DIR="$dir/.tickets"
+            break
+        fi
+        dir="$(dirname "$dir")"
+    done
+fi
+
+if [ -z "$TICKETS_DIR" ] || [ ! -d "$TICKETS_DIR" ]; then
+    echo "No tickets directory found" >&2
+    exit 1
+fi
+
+python3 - "$TICKETS_DIR" "$@" <<'PYEOF'
+import sys
+import os
+import re
+from collections import defaultdict
+
+tickets_dir = sys.argv[1]
+args = sys.argv[2:]
+
+# Parse flags and IDs
+show_all = "--all" in args
+requested_ids = [a for a in args if not a.startswith("-")]
+
+def parse_ticket(path):
+    with open(path) as f:
+        content = f.read()
+    parts = content.split("---", 2)
+    if len(parts) < 3:
+        return None
+    ticket = {}
+    for line in parts[1].splitlines():
+        line = line.strip()
+        if ": " in line:
+            key, _, val = line.partition(": ")
+            ticket[key.strip()] = val.strip()
+    for key in ("deps", "links", "tags"):
+        if key in ticket:
+            val = ticket[key].strip("[]")
+            ticket[key] = [v.strip() for v in val.split(",") if v.strip()] if val else []
+    body = parts[2].strip()
+    title_match = re.search(r"^#\s+(.+)$", body, re.MULTILINE)
+    ticket["title"] = title_match.group(1).strip() if title_match else "(untitled)"
+    ticket.setdefault("id", os.path.basename(path).replace(".md", ""))
+    ticket.setdefault("deps", [])
+    return ticket
+
+# Load all tickets
+all_tickets = []
+for fname in sorted(os.listdir(tickets_dir)):
+    if not fname.endswith(".md"):
+        continue
+    t = parse_ticket(os.path.join(tickets_dir, fname))
+    if t:
+        all_tickets.append(t)
+
+by_id = {t["id"]: t for t in all_tickets}
+epic_ids = {t["id"] for t in all_tickets if t.get("type") == "epic"}
+
+# Build indexes
+sub_epics_of = defaultdict(list)    # epic_id -> [child epic tickets]
+direct_tickets_of = defaultdict(list)  # epic_id -> [non-epic child tickets]
+for t in all_tickets:
+    p = t.get("parent", "").split("#")[0].strip()  # strip inline comments
+    if not p or p not in by_id:
+        continue
+    if t.get("type") == "epic":
+        sub_epics_of[p].append(t)
+    else:
+        direct_tickets_of[p].append(t)
+
+def wave_groups(tickets):
+    """
+    Group tickets into parallel waves based on dep ordering within the set.
+    Returns a list of waves; each wave is a list of tickets sorted by creation date.
+    A wave contains all tickets that can run in parallel at that stage.
+    Deps pointing outside the sibling set are ignored.
+    Cycles are appended as a final wave sorted by creation date.
+    """
+    if not tickets:
+        return []
+
+    ids = {t["id"] for t in tickets}
+    wave_num = {t["id"]: 0 for t in tickets}
+
+    in_degree = {t["id"]: 0 for t in tickets}
+    dependents = defaultdict(list)  # blocker_id -> [blocked_id, ...]
+    for t in tickets:
+        for dep in t.get("deps", []):
+            if dep in ids:
+                in_degree[t["id"]] += 1
+                dependents[dep].append(t["id"])
+
+    queue = sorted(
+        [t for t in tickets if in_degree[t["id"]] == 0],
+        key=lambda t: t.get("created", ""),
+    )
+    processed = set()
+    while queue:
+        t = queue.pop(0)
+        processed.add(t["id"])
+        newly_free = []
+        for blocked_id in dependents[t["id"]]:
+            # Wave of blocked = max(its current wave, this blocker's wave + 1)
+            wave_num[blocked_id] = max(wave_num[blocked_id], wave_num[t["id"]] + 1)
+            in_degree[blocked_id] -= 1
+            if in_degree[blocked_id] == 0:
+                newly_free.append(by_id[blocked_id])
+        newly_free.sort(key=lambda t: t.get("created", ""))
+        queue = newly_free + queue
+
+    # Cycles: assign to a final wave
+    max_w = max(wave_num.values()) if wave_num else 0
+    for t in tickets:
+        if t["id"] not in processed:
+            wave_num[t["id"]] = max_w + 1
+
+    groups = defaultdict(list)
+    for t in tickets:
+        groups[wave_num[t["id"]]].append(t)
+
+    return [
+        sorted(groups[w], key=lambda t: t.get("created", ""))
+        for w in sorted(groups.keys())
+    ]
+
+# Determine root epics to display
+if requested_ids:
+    missing = [rid for rid in requested_ids if rid not in by_id]
+    if missing:
+        for m in missing:
+            print(f"Unknown ticket ID: {m}", file=sys.stderr)
+        sys.exit(1)
+    roots = [by_id[rid] for rid in requested_ids]
+else:
+    # Root epics: epics whose parent is absent or not itself an epic
+    root_candidates = [
+        t for t in all_tickets
+        if t.get("type") == "epic"
+        and t.get("parent", "").split("#")[0].strip() not in epic_ids
+        and (show_all or t.get("status", "open") != "closed")
+    ]
+    roots = [t for wave in wave_groups(root_candidates) for t in wave]
+
+if not roots:
+    print("No epics found.")
+    sys.exit(0)
+
+forced_ids = set(requested_ids)
+
+def ticket_counts(epic_id):
+    tickets = direct_tickets_of.get(epic_id, [])
+    open_n = sum(1 for t in tickets if t.get("status", "open") != "closed")
+    closed_n = sum(1 for t in tickets if t.get("status", "open") == "closed")
+    return open_n, closed_n
+
+def print_tree(epic_id, prefix="", child_prefix=""):
+    """
+    prefix:       prepended to the epic title line
+    child_prefix: prepended to continuation lines (counts, children)
+    """
+    epic = by_id[epic_id]
+    status = epic.get("status", "open")
+    title = epic.get("title", "(untitled)")
+    closed_marker = "  ✓" if status == "closed" else ""
+
+    print(f"{prefix}[{epic_id}] {title}  ({status}){closed_marker}")
+
+    open_n, closed_n = ticket_counts(epic_id)
+    print(f"{child_prefix}  {open_n} open / {closed_n} closed")
+
+    children = sub_epics_of.get(epic_id, [])
+    visible = [
+        t for t in children
+        if show_all
+        or t.get("status", "open") != "closed"
+        or t["id"] in forced_ids
+    ]
+    hidden_closed_n = sum(
+        1 for t in children
+        if not show_all
+        and t.get("status", "open") == "closed"
+        and t["id"] not in forced_ids
+    )
+
+    if not visible and not hidden_closed_n:
+        return
+
+    waves = wave_groups(visible)
+    multi_wave = len(waves) > 1
+    flat_visible = [t for w in waves for t in w]
+    total_visible = len(flat_visible)
+
+    if multi_wave:
+        print(child_prefix)  # blank line before wave section
+
+    item_i = 0
+    for wave_idx, wave in enumerate(waves):
+        if multi_wave:
+            if wave_idx > 0:
+                print(child_prefix)  # blank line between waves
+            parallel_tag = " · parallel" if len(wave) > 1 else ""
+            print(f"{child_prefix}── wave {wave_idx + 1}{parallel_tag} ──")
+
+        for t in wave:
+            is_last = (item_i == total_visible - 1) and hidden_closed_n == 0
+            connector    = "└── " if is_last else "├── "
+            continuation = "    " if is_last else "│   "
+            print_tree(
+                t["id"],
+                prefix=child_prefix + connector,
+                child_prefix=child_prefix + continuation,
+            )
+            item_i += 1
+
+    if hidden_closed_n:
+        if multi_wave:
+            print(child_prefix)
+        noun = "sub-epic" if hidden_closed_n == 1 else "sub-epics"
+        print(f"{child_prefix}└── ({hidden_closed_n} closed {noun} hidden — use --all to show)")
+
+for i, root in enumerate(roots):
+    if i > 0:
+        print()
+    print_tree(root["id"], prefix="", child_prefix="")
+
+PYEOF
