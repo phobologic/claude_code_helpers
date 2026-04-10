@@ -92,7 +92,7 @@ STAMP=$(date +%Y%m%d-%H%M%S)
 REPO_ROOT=$(pwd)
 git checkout -b fix/batch-$STAMP main
 git checkout main
-git worktree add .worktrees/fix-batch-$STAMP fix/batch-$STAMP
+worktree-init fix-batch-$STAMP $REPO_ROOT fix/batch-$STAMP
 ```
 
 Record `STAMP` and `REPO_ROOT` — you'll need them throughout. The integration

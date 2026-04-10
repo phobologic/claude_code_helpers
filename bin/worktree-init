@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # Create a git worktree and apply .worktreelinks / .worktreeinclude setup.
 #
-# Usage: worktree-init <name> [repo-root]
+# Usage: worktree-init <name> [repo-root] [branch]
 #   <name>        Worktree name — created at <repo-root>/.worktrees/<name>
 #   [repo-root]   Defaults to the root of the current git repo
+#   [branch]      Branch to check out in the worktree (optional; omit for detached)
 #
 # Mirrors the setup done by the claude-worktree plugin's worktree-create.sh,
 # but callable directly from skills/scripts without relying on hook machinery.
 set -euo pipefail
 
-WORKTREE_NAME="${1:?Usage: worktree-init <name> [repo-root]}"
+WORKTREE_NAME="${1:?Usage: worktree-init <name> [repo-root] [branch]}"
 REPO_ROOT="${2:-$(git rev-parse --show-toplevel)}"
+BRANCH="${3:-}"
 
 cd "$REPO_ROOT"
 
@@ -19,7 +21,11 @@ WORKTREE_PATH="$REPO_ROOT/.worktrees/$WORKTREE_NAME"
 if [[ -d "$WORKTREE_PATH" ]]; then
   echo "worktree-init: $WORKTREE_PATH already exists, skipping" >&2
 else
-  git worktree add "$WORKTREE_PATH" >&2
+  if [[ -n "$BRANCH" ]]; then
+    git worktree add "$WORKTREE_PATH" "$BRANCH" >&2
+  else
+    git worktree add "$WORKTREE_PATH" >&2
+  fi
   echo "worktree-init: created $WORKTREE_PATH" >&2
 fi
 
