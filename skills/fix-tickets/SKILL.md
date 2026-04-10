@@ -151,8 +151,8 @@ Agent({
      - FINDINGS — list each critical/high finding ticket ID and its title
 
   Process tickets in the order received. Do not start the next review until you have
-  reported results for the current one. When you receive a shutdown message, reply
-  with SHUTDOWN_ACK <your-name> then stop."
+  reported results for the current one. When you receive a message containing
+  'type: shutdown_request', reply with SHUTDOWN_ACK <your-name> then stop."
 })
 
 Agent({
@@ -202,8 +202,8 @@ Agent({
   7. Commit to fix/<ticket-id>
   8. Message the team lead: DONE <ticket-id> fix/<ticket-id>
 
-  Then wait for your next assignment. When you receive a shutdown message, reply
-  with SHUTDOWN_ACK <name> then stop."
+  Then wait for your next assignment. When you receive a message containing
+  'type: shutdown_request', reply with SHUTDOWN_ACK <name> then stop."
 })
 ```
 
@@ -428,9 +428,9 @@ Remaining waves: <W-N> — restarting agents for clean context
 should be idle at this point.
 
 ```
-SendMessage({ to: "quality-reviewer-1", message: "Wave <N> complete. Shutting down." })
-SendMessage({ to: "quality-reviewer-2", message: "Wave <N> complete. Shutting down." })
-SendMessage({ to: "implementer-1-<STAMP>", message: "Wave <N> complete. Shutting down." })
+SendMessage({ to: "quality-reviewer-1",    message: "type: shutdown_request" })
+SendMessage({ to: "quality-reviewer-2",    message: "type: shutdown_request" })
+SendMessage({ to: "implementer-1-<STAMP>", message: "type: shutdown_request" })
 # ... all implementers
 ```
 
@@ -487,8 +487,8 @@ Agent({
   7. Commit to fix/<ticket-id>
   8. Message the team lead: DONE <ticket-id> fix/<ticket-id>
 
-  Then wait for your next assignment. When you receive a shutdown message, reply
-  with SHUTDOWN_ACK <name> then stop."
+  Then wait for your next assignment. When you receive a message containing
+  'type: shutdown_request', reply with SHUTDOWN_ACK <name> then stop."
 })
 # ... repeat for each needed implementer
 ```
@@ -527,9 +527,9 @@ Next steps:
 
 Shut down all teammates:
 ```
-SendMessage({ recipient: "quality-reviewer-1", content: "Batch complete. Shutting down." })
-SendMessage({ recipient: "quality-reviewer-2", content: "Batch complete. Shutting down." })
-SendMessage({ recipient: "implementer-1-<STAMP>",       content: "Batch complete. Shutting down." })
+SendMessage({ to: "quality-reviewer-1",    message: "type: shutdown_request" })
+SendMessage({ to: "quality-reviewer-2",    message: "type: shutdown_request" })
+SendMessage({ to: "implementer-1-<STAMP>", message: "type: shutdown_request" })
 # ... all implementers
 ```
 

@@ -178,8 +178,8 @@ Agent({
   7. Commit to ticket/<ticket-id>
   8. Message the team lead: DONE <ticket-id> ticket/<ticket-id>
 
-  Then wait for your next assignment. When you receive a shutdown message, reply
-  with SHUTDOWN_ACK <name> then stop.",
+  Then wait for your next assignment. When you receive a message containing
+  'type: shutdown_request', reply with SHUTDOWN_ACK <name> then stop.",
   subagent_type: "implementer",
   team_name: "epic-<epic-id>",
   name: "implementer-1-<STAMP>",
@@ -195,7 +195,7 @@ Repeat for implementer-2-<STAMP>, implementer-3-<STAMP>, etc.
 Agent({
   prompt: "You are the AC verifier on a team. Wait for the team lead to
   send you tickets to verify. Do not claim tasks from the task list.
-  When you receive a shutdown message, reply with SHUTDOWN_ACK ac-verifier then stop.",
+  When you receive a message containing 'type: shutdown_request', reply with SHUTDOWN_ACK ac-verifier then stop.",
   subagent_type: "ac-verifier",
   team_name: "epic-<epic-id>",
   name: "ac-verifier"
@@ -208,7 +208,7 @@ Agent({
 Agent({
   prompt: "You are the quality reviewer on a team. Wait for the team lead
   to send you tickets to review. Do not claim tasks from the task list.
-  When you receive a shutdown message, reply with SHUTDOWN_ACK quality-reviewer then stop.",
+  When you receive a message containing 'type: shutdown_request', reply with SHUTDOWN_ACK quality-reviewer then stop.",
   subagent_type: "quality-reviewer",
   team_name: "epic-<epic-id>",
   name: "quality-reviewer"
@@ -473,10 +473,10 @@ Wave <N+1>: <K> new tickets unblocked — restarting agents for clean context
 `SHUTDOWN_ACK <name>` from each. Proceed after timeout — agents should be idle.
 
 ```
-SendMessage({ to: "implementer-1-<STAMP>", message: "Wave <N> complete. Shutting down." })
+SendMessage({ to: "implementer-1-<STAMP>", message: "type: shutdown_request" })
 # ... all implementers
-SendMessage({ to: "ac-verifier",      message: "Wave <N> complete. Shutting down." })
-SendMessage({ to: "quality-reviewer", message: "Wave <N> complete. Shutting down." })
+SendMessage({ to: "ac-verifier",           message: "type: shutdown_request" })
+SendMessage({ to: "quality-reviewer",      message: "type: shutdown_request" })
 ```
 
 **3. Compute next wave's implementer count:** `min(cap, len(new_tickets))`. Only
@@ -528,8 +528,8 @@ Agent({
   7. Commit to ticket/<ticket-id>
   8. Message the team lead: DONE <ticket-id> ticket/<ticket-id>
 
-  Then wait for your next assignment. When you receive a shutdown message, reply
-  with SHUTDOWN_ACK <name> then stop."
+  Then wait for your next assignment. When you receive a message containing
+  'type: shutdown_request', reply with SHUTDOWN_ACK <name> then stop."
 })
 # ... repeat for needed implementer count
 Agent({ subagent_type: "ac-verifier",      team_name: "epic-<epic-id>", name: "ac-verifier",
@@ -579,13 +579,11 @@ When all child tickets of the epic are closed:
 
 3. Shut down all teammates by sending shutdown requests:
    ```
-   SendMessage({
-     type: "shutdown_request",
-     recipient: "implementer-1-<STAMP>",
-     content: "Epic complete. Shutting down."
-   })
+   SendMessage({ to: "implementer-1-<STAMP>", message: "type: shutdown_request" })
+   # ... all implementers
+   SendMessage({ to: "ac-verifier",           message: "type: shutdown_request" })
+   SendMessage({ to: "quality-reviewer",      message: "type: shutdown_request" })
    ```
-   Repeat for all implementers, ac-verifier, and quality-reviewer.
 
 4. Wait briefly for teammates to acknowledge, then clean up worktrees
    and the team:
