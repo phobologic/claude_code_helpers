@@ -6,7 +6,7 @@ description: >
   the team lead, who deduplicates and creates tk tickets. Use when the user
   says "explore the app", "test the app with playwright", "simulate users", or
   similar.
-argument-hint: "<url> [roles:role1,role2,role3] [-- <scenario description>]"
+argument-hint: "<url> [roles:role1,role2,role3] [time:30m] [-- <scenario description>]"
 ---
 
 # Playwright Explore
@@ -28,7 +28,9 @@ Parse `$ARGUMENTS` in this order:
      session and shares any join links or state with the other roles.
    - Remaining roles are joiners — they wait for the initiator's signal,
      then proceed.
-3. **Scenario** — everything after `--` is a free-form description of what to
+3. **Time limit** — look for a `time:` token (e.g. `time:30m`, `time:2h`, `time:1h30m`).
+   Parse to seconds (`30m` → 1800, `2h` → 7200, `1h30m` → 5400). If absent, no limit.
+4. **Scenario** — everything after `--` is a free-form description of what to
    explore. Default: "Explore the app as real users would, exercising the core
    flows end-to-end."
 
@@ -38,13 +40,25 @@ role `participant-1` → agent name `participant-1`).
 Present a short plan and wait for confirmation:
 
 ```
-App:      <url>
-Roles:    <role-1> (initiator), <role-2>, <role-3>  [sonnet each]
-Scenario: <scenario>
-Epic:     will be created now
+App:        <url>
+Roles:      <role-1> (initiator), <role-2>, <role-3>  [sonnet each]
+Scenario:   <scenario>
+Time limit: <N minutes/hours — session ends at ~HH:MM> / none
+Epic:       will be created now
 
 Proceed? [y/N]
 ```
+
+If a time limit was given, compute the deadline immediately after confirmation:
+
+```bash
+DEADLINE_TS=$(( $(date +%s) + DURATION_SECONDS ))
+# human-readable: macOS uses -r, Linux uses -d @
+DEADLINE_HUMAN=$(date -r $DEADLINE_TS "+%H:%M" 2>/dev/null || date -d "@$DEADLINE_TS" "+%H:%M")
+```
+
+Record `DEADLINE_TS` and `DEADLINE_HUMAN` — pass both into every agent prompt.
+If no time limit, set `DEADLINE_TS=0` and omit the **Time limit** section from prompts.
 
 ## Phase 1 — Create the epic
 
@@ -117,10 +131,35 @@ a major flow), send a brief status update to the team lead before continuing:
 This gives the team lead a window to send instructions. Check for any incoming
 messages at each checkpoint before proceeding to the next step.
 
+## Time limit
+Deadline: <DEADLINE_TS> (unix epoch) — approximately <DEADLINE_HUMAN>
+
+At every checkpoint, check the current time before continuing:
+  date +%s
+
+- **Within 120 seconds of deadline**: finish your current action, then wrap up —
+  do not start any new major flow.
+- **At or past the deadline**: flush everything and send DONE (see Wrapping up).
+
+**Wrapping up when time is up:**
+1. Send any observations you haven't reported yet.
+2. For anything you suspected but didn't have time to verify, send a theory finding:
+   SendMessage({
+     to: 'team-lead',
+     content: JSON.stringify({
+       title: '<short title>',
+       description: 'Theory — not yet verified: <what you suspect, why, and how you would verify it>',
+       severity: '<your best estimate>',
+       confidence: 0.1-0.3,
+       tags: ['theory', 'unexplored', ...]
+     })
+   })
+3. Send DONE.
+
 ## Shutdown
-If you receive a shutdown message from the team lead at any point, finish your
-current action, send any unsent findings, then send DONE immediately. Do not
-continue to the next step.
+If you receive a shutdown or TIME_UP message from the team lead, finish your
+current action, flush any unsent findings and theories (using the format above),
+then send DONE immediately. Do not continue to the next step.
 
 ## Reporting findings
 Whenever you notice something broken, confusing, missing, or worth improving,
@@ -191,10 +230,35 @@ flow), send a brief status update to the team lead before continuing:
 This gives the team lead a window to send instructions. Check for any incoming
 messages at each checkpoint before proceeding to the next step.
 
+## Time limit
+Deadline: <DEADLINE_TS> (unix epoch) — approximately <DEADLINE_HUMAN>
+
+At every checkpoint, check the current time before continuing:
+  date +%s
+
+- **Within 120 seconds of deadline**: finish your current action, then wrap up —
+  do not start any new major flow.
+- **At or past the deadline**: flush everything and send DONE (see Wrapping up).
+
+**Wrapping up when time is up:**
+1. Send any observations you haven't reported yet.
+2. For anything you suspected but didn't have time to verify, send a theory finding:
+   SendMessage({
+     to: 'team-lead',
+     content: JSON.stringify({
+       title: '<short title>',
+       description: 'Theory — not yet verified: <what you suspect, why, and how you would verify it>',
+       severity: '<your best estimate>',
+       confidence: 0.1-0.3,
+       tags: ['theory', 'unexplored', ...]
+     })
+   })
+3. Send DONE.
+
 ## Shutdown
-If you receive a shutdown message from the team lead at any point, finish your
-current action, send any unsent findings, then send DONE immediately. Do not
-continue to the next step.
+If you receive a shutdown or TIME_UP message from the team lead, finish your
+current action, flush any unsent findings and theories (using the format above),
+then send DONE immediately. Do not continue to the next step.
 
 ## Reporting findings
 Whenever you notice something broken, confusing, missing, or worth improving,
@@ -270,6 +334,25 @@ Note it. When all agents have sent `DONE`, proceed to Phase 5.
 ### While waiting:
 
 Periodically check in with agents that haven't sent anything in a while.
+
+### Time enforcement:
+
+If a `time:` limit was specified, check the deadline after processing each
+incoming message:
+
+```bash
+date +%s
+```
+
+If `now >= DEADLINE_TS` and any agents haven't sent `DONE` yet, send TIME_UP
+to each still-active agent:
+
+```
+SendMessage({ to: '<role-N>', content: 'TIME_UP — time limit reached. Flush your outstanding findings and any unexplored theories, then send DONE.' })
+```
+
+Give agents up to 2 minutes to complete their flush. After that, proceed to
+Phase 5 with whoever has reported in — don't wait indefinitely.
 
 ## Phase 5 — Completion
 
