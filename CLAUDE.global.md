@@ -59,6 +59,12 @@ When coordinating a team of agents (`TeamCreate` → spawn → coordinate → cl
 
 **Worktree location.** Always create worktrees under `.worktrees/<name>` in the repo root. This is the path the `claude-worktree` plugin expects and keeps all worktrees co-located and easy to clean up. Add `.worktrees/` to `.gitignore` if it isn't already.
 
+**Git in worktree teams.** Implementers `cd` to their worktree at startup, so they
+use plain `git` with no path qualification — their CWD is already correct. The team
+lead operates from the main repo and must use `cd <path> && git` (or `git -C <path>`)
+only when acting on a worktree it doesn't currently occupy. Never use `git -C` in
+implementer prompts.
+
 **Shutdown before delete.** Always send a shutdown request to all teammates before
 calling `TeamDelete`. Skipping this leaves agents without a graceful exit signal.
 

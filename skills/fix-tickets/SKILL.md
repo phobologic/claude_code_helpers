@@ -187,6 +187,10 @@ Agent({
   - Glob/Grep: pass path=<REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>
   Never reference <REPO_ROOT> without the .worktrees/implementer-<N>-<STAMP> suffix.
 
+  Git: your CWD is already the worktree — always use plain `git` with no -C flag.
+  Never use `git -C <path>` in implementer code; that is reserved for the team lead
+  when it operates outside its own working directory.
+
   For each ticket assignment:
   1. Run `git checkout -B fix/<ticket-id> fix/batch-<stamp>` to branch from the
      latest integration state (this ensures wave N+1 builds on wave N's merged code)

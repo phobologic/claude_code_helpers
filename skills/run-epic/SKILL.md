@@ -160,6 +160,10 @@ Agent({
   - Glob/Grep: pass path=<REPO_ROOT>/.worktrees/implementer-1-<STAMP>
   Never reference <REPO_ROOT> without the .worktrees/implementer-1-<STAMP> suffix.
 
+  Git: your CWD is already the worktree — always use plain `git` with no -C flag.
+  Never use `git -C <path>` in implementer code; that is reserved for the team lead
+  when it operates outside its own working directory.
+
   Then wait for the team lead to assign you a ticket via SendMessage. Do NOT
   claim tickets from the task list — the team lead routes all work.
 
