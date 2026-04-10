@@ -176,9 +176,9 @@ Agent({
 
   WORKTREE: <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>
 
-  Before doing anything else:
-  1. cd <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>
-  2. [ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: not in worktree'
+  Before doing anything else, run these as SEPARATE Bash calls:
+  1. `cd <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>` — standalone so the CWD persists
+  2. `[ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: not in worktree'`
   3. Report the result to the team lead via SendMessage, then wait.
 
   All tool calls MUST target your worktree, not the main repo:
@@ -322,9 +322,10 @@ SendMessage({
 **When quality reviewer returns CLEAN:**
 
 1. Merge to integration branch (in the integration worktree — never
-   checkout the integration branch in the main repo):
+   checkout the integration branch in the main repo). Use a subshell
+   so the team lead's CWD stays in the main repo:
    ```bash
-   cd .worktrees/fix-batch-<stamp> && git merge fix/<ticket-id> --no-ff -m "Fix <ticket-id>: <title>"
+   (cd .worktrees/fix-batch-<stamp> && git merge fix/<ticket-id> --no-ff -m "Fix <ticket-id>: <title>")
    ```
 
 2. Close the ticket:
@@ -461,9 +462,9 @@ Agent({
 
   WORKTREE: <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>
 
-  Before doing anything else:
-  1. cd <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>
-  2. [ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: not in worktree'
+  Before doing anything else, run these as SEPARATE Bash calls:
+  1. `cd <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>` — standalone so the CWD persists
+  2. `[ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: not in worktree'`
   3. Report the result to the team lead via SendMessage, then wait.
 
   All tool calls MUST target your worktree, not the main repo:

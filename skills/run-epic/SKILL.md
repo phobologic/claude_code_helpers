@@ -149,9 +149,9 @@ Agent({
 
   WORKTREE: <REPO_ROOT>/.worktrees/implementer-1-<STAMP>
 
-  Before doing anything else:
-  1. cd <REPO_ROOT>/.worktrees/implementer-1-<STAMP>
-  2. [ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: not in worktree'
+  Before doing anything else, run these as SEPARATE Bash calls:
+  1. `cd <REPO_ROOT>/.worktrees/implementer-1-<STAMP>` — standalone so the CWD persists
+  2. `[ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: not in worktree'`
   3. Report the result to the team lead via SendMessage.
 
   All tool calls MUST target your worktree, not the main repo:
