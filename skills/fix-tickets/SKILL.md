@@ -445,12 +445,51 @@ Agent({ subagent_type: "quality-reviewer", team_name: "fix-<stamp>",
 ```
 
 **3. Re-spawn implementers.** Spawn only `min(cap, next_wave_ticket_count)` — no
-idle agents. Reuse the same names and worktree paths:
+idle agents. Reuse the same names and worktree paths. Do NOT use `isolation: "worktree"`
+here — the worktrees already exist, and using it on re-spawn can cause the agent to
+inherit the team lead's CWD (the fix-batch worktree) instead of its own.
+
+Write the full prompt — do not abbreviate or reference Phase 2.4. The `cd` step is
+critical; if omitted the agent starts in the wrong directory:
 
 ```
-Agent({ subagent_type: "implementer", team_name: "fix-<stamp>",
-        name: "implementer-<N>-<STAMP>", isolation: "worktree",
-        prompt: "<same as Phase 2.4, same WORKTREE path and fix/batch-<stamp> ref>" })
+Agent({
+  subagent_type: "implementer",
+  team_name: "fix-<stamp>",
+  name: "implementer-<N>-<STAMP>",
+  prompt: "You are implementer-<N>-<STAMP> on a fix team.
+
+  WORKTREE: <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>
+
+  Before doing anything else:
+  1. cd <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>
+  2. [ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: not in worktree'
+  3. Report the result to the team lead via SendMessage, then wait.
+
+  All tool calls MUST target your worktree, not the main repo:
+  - Bash: cd to your worktree first (or run from it)
+  - Read/Edit: absolute paths starting with <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>/
+  - Glob/Grep: pass path=<REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>
+  Never reference <REPO_ROOT> without the .worktrees/implementer-<N>-<STAMP> suffix.
+
+  Git: your CWD is already the worktree — always use plain \`git\` with no -C flag.
+  Never use \`git -C <path>\` in implementer code; that is reserved for the team lead
+  when it operates outside its own working directory.
+
+  For each ticket assignment:
+  1. Run \`git checkout -B fix/<ticket-id> fix/batch-<stamp>\` to branch from the
+     latest integration state (this ensures wave N+1 builds on wave N's merged code)
+  2. Run \`tk show <ticket-id>\` for full context
+  3. Send STATUS to team lead: 'STATUS <name>: read <ticket-id>, starting implementation'
+  4. Implement the fix
+  5. Send STATUS to team lead: 'STATUS <name>: implementation done on <ticket-id>, running tests'
+  6. Run tests from your worktree
+  7. Commit to fix/<ticket-id>
+  8. Message the team lead: DONE <ticket-id> fix/<ticket-id>
+
+  Then wait for your next assignment. When you receive a shutdown message, reply
+  with SHUTDOWN_ACK <name> then stop."
+})
 # ... repeat for each needed implementer
 ```
 

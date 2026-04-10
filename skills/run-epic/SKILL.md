@@ -483,18 +483,59 @@ SendMessage({ to: "quality-reviewer", message: "Wave <N> complete. Shutting down
 spawn as many implementers as needed for this wave — idle agents waste cost.
 
 **4. Re-spawn all agents** with the same names and prompts. Implementers reuse their
-pre-created worktrees:
+pre-created worktrees. Do NOT use `isolation: "worktree"` on re-spawn — the worktrees
+already exist, and using it can cause the agent to inherit the team lead's CWD instead
+of its own.
+
+Write the full implementer prompt — do not abbreviate or reference Phase 1.5. The `cd`
+step is critical; if omitted the agent starts in the wrong directory:
 
 ```
-Agent({ subagent_type: "implementer", team_name: "epic-<epic-id>",
-        name: "implementer-1-<STAMP>", isolation: "worktree",
-        prompt: "<same as Phase 1.5, same WORKTREE path>" })
+Agent({
+  subagent_type: "implementer",
+  team_name: "epic-<epic-id>",
+  name: "implementer-<N>-<STAMP>",
+  prompt: "You are an implementer on a team.
+
+  WORKTREE: <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>
+
+  Before doing anything else:
+  1. cd <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>
+  2. [ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: not in worktree'
+  3. Report the result to the team lead via SendMessage.
+
+  All tool calls MUST target your worktree, not the main repo:
+  - Bash: cd to your worktree first
+  - Read/Edit: absolute paths starting with <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>/
+  - Glob/Grep: pass path=<REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>
+  Never reference <REPO_ROOT> without the .worktrees/implementer-<N>-<STAMP> suffix.
+
+  Git: your CWD is already the worktree — always use plain \`git\` with no -C flag.
+  Never use \`git -C <path>\` in implementer code; that is reserved for the team lead
+  when it operates outside its own working directory.
+
+  Then wait for the team lead to assign you a ticket via SendMessage. Do NOT
+  claim tickets from the task list — the team lead routes all work.
+
+  For each ticket assignment:
+  1. Run \`git checkout -B ticket/<ticket-id> epic/<epic-id>\` to branch from the
+     latest integration state (wave N+1 builds on wave N's merged code)
+  2. Run \`tk show <ticket-id>\` for full context
+  3. Send STATUS to team lead: 'STATUS <name>: read <ticket-id>, starting implementation'
+  4. Implement the fix
+  5. Send STATUS to team lead: 'STATUS <name>: implementation done on <ticket-id>, running tests'
+  6. Run tests from your worktree
+  7. Commit to ticket/<ticket-id>
+  8. Message the team lead: DONE <ticket-id> ticket/<ticket-id>
+
+  Then wait for your next assignment. When you receive a shutdown message, reply
+  with SHUTDOWN_ACK <name> then stop."
+})
 # ... repeat for needed implementer count
 Agent({ subagent_type: "ac-verifier",      team_name: "epic-<epic-id>", name: "ac-verifier",
         prompt: "<same as Phase 1.5>" })
 Agent({ subagent_type: "quality-reviewer", team_name: "epic-<epic-id>", name: "quality-reviewer",
         prompt: "<same as Phase 1.5>" })
-```
 
 **5. Wait for `WORKTREE OK`** from all re-spawned implementers. Apply the same
 abort logic as Phase 2 — if any report `WARNING: in main repo`, stop.
