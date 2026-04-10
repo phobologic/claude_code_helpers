@@ -151,7 +151,8 @@ Agent({
      - FINDINGS — list each critical/high finding ticket ID and its title
 
   Process tickets in the order received. Do not start the next review until you have
-  reported results for the current one. When you receive a shutdown message, stop."
+  reported results for the current one. When you receive a shutdown message, reply
+  with SHUTDOWN_ACK <your-name> then stop."
 })
 
 Agent({
@@ -187,15 +188,18 @@ Agent({
   Never reference <REPO_ROOT> without the .worktrees/implementer-<N>-<STAMP> suffix.
 
   For each ticket assignment:
-  1. Run `tk show <ticket-id>` for full context
-  2. Send STATUS to team lead: 'STATUS <name>: read <ticket-id>, starting implementation'
-  3. Implement the fix
-  4. Send STATUS to team lead: 'STATUS <name>: implementation done on <ticket-id>, running tests'
-  5. Run tests from your worktree
-  6. Commit to a branch named fix/<ticket-id>
-  7. Message the team lead: DONE <ticket-id> fix/<ticket-id>
+  1. Run `git checkout -B fix/<ticket-id> fix/batch-<stamp>` to branch from the
+     latest integration state (this ensures wave N+1 builds on wave N's merged code)
+  2. Run `tk show <ticket-id>` for full context
+  3. Send STATUS to team lead: 'STATUS <name>: read <ticket-id>, starting implementation'
+  4. Implement the fix
+  5. Send STATUS to team lead: 'STATUS <name>: implementation done on <ticket-id>, running tests'
+  6. Run tests from your worktree
+  7. Commit to fix/<ticket-id>
+  8. Message the team lead: DONE <ticket-id> fix/<ticket-id>
 
-  Then wait for your next assignment. When you receive a shutdown message, stop."
+  Then wait for your next assignment. When you receive a shutdown message, reply
+  with SHUTDOWN_ACK <name> then stop."
 })
 ```
 
@@ -277,8 +281,10 @@ SendMessage({
   to: "<idle-implementer-name>",
   message: "ticket: <ticket-id>
 title: <title>
-Run `tk show <ticket-id>` for full context. Implement the fix, run tests, commit to
-fix/<ticket-id>, then message the team lead: DONE <ticket-id> fix/<ticket-id>"
+First `git checkout -B fix/<ticket-id> fix/batch-<stamp>` to branch from integration.
+Then `tk show <ticket-id>` for full context.
+Implement the fix, run tests, commit to fix/<ticket-id>, then message the team lead:
+DONE <ticket-id> fix/<ticket-id>"
 })
 ```
 
@@ -324,17 +330,18 @@ SendMessage({
    tk close <ticket-id>
    ```
 
-3. If there are remaining unassigned tickets in this wave (or queued from a
-   future wave), dispatch the next one to this now-free implementer. Do NOT
-   spawn a new implementer — send the assignment to the existing one:
+3. If there are remaining unassigned tickets **in this wave**, dispatch the next one
+   to this now-free implementer. Do NOT dispatch tickets from future waves — those
+   start only after the wave boundary restart. Do NOT spawn a new implementer:
    ```
    SendMessage({
      to: "<implementer-name>",
      message: "ticket: <next-ticket-id>
    title: <title>
-   Run `tk show <next-ticket-id>` for full context. Implement the fix, run tests,
-   commit to fix/<next-ticket-id>, then message the team lead:
-   DONE <next-ticket-id> fix/<next-ticket-id>"
+   First `git checkout -B fix/<next-ticket-id> fix/batch-<stamp>` to branch from
+   integration. Then `tk show <next-ticket-id>` for full context.
+   Implement the fix, run tests, commit to fix/<next-ticket-id>, then message the
+   team lead: DONE <next-ticket-id> fix/<next-ticket-id>"
    })
    ```
    Mark that implementer busy again.
@@ -398,16 +405,59 @@ Escalate to the user rather than looping indefinitely:
 
 ### Step 3.3: Wave boundary
 
-The wave is complete when **all** its tickets are closed and merged. Log it:
+The wave is complete when **all** its tickets are closed and merged **and** all agents
+are idle — including any in-flight quality reviews. A ticket stuck in a
+findings-rework loop is not closed, so it holds the wave open.
+
+**Restart all agents at every wave boundary** to clear accumulated context and prevent
+compaction on long runs. Worktrees persist between waves — only agent contexts reset.
+
+Log it:
 
 ```
 Wave <N> complete: <M> tickets merged to fix/batch-<stamp>
-Remaining waves: <W-N>
+Remaining waves: <W-N> — restarting agents for clean context
 ```
 
-**Do NOT spawn new implementers for the next wave.** The same implementer pool
-is reused for the entire batch. All implementers are currently idle at this point —
-proceed to Step 3.1 and dispatch the next wave's tickets to them via `SendMessage`.
+**1. Shutdown all agents.** Send shutdown to each and wait up to 30 seconds for
+`SHUTDOWN_ACK <name>` from each. Proceed after the timeout regardless — agents
+should be idle at this point.
+
+```
+SendMessage({ to: "quality-reviewer-1", message: "Wave <N> complete. Shutting down." })
+SendMessage({ to: "quality-reviewer-2", message: "Wave <N> complete. Shutting down." })
+SendMessage({ to: "implementer-1-<STAMP>", message: "Wave <N> complete. Shutting down." })
+# ... all implementers
+```
+
+**2. Re-spawn quality reviewers** (no worktrees — pure context reset). Reuse the
+same names so dispatch routing doesn't change:
+
+```
+Agent({ subagent_type: "quality-reviewer", team_name: "fix-<stamp>",
+        name: "quality-reviewer-1", prompt: "<same as Phase 2.4>" })
+Agent({ subagent_type: "quality-reviewer", team_name: "fix-<stamp>",
+        name: "quality-reviewer-2", prompt: "<same as Phase 2.4>" })
+```
+
+**3. Re-spawn implementers.** Spawn only `min(cap, next_wave_ticket_count)` — no
+idle agents. Reuse the same names and worktree paths:
+
+```
+Agent({ subagent_type: "implementer", team_name: "fix-<stamp>",
+        name: "implementer-<N>-<STAMP>", isolation: "worktree",
+        prompt: "<same as Phase 2.4, same WORKTREE path and fix/batch-<stamp> ref>" })
+# ... repeat for each needed implementer
+```
+
+**4. Wait for `WORKTREE OK`** from all re-spawned implementers. Apply the same
+abort logic as Phase 2 — if any report `WARNING: in main repo`, stop.
+
+Proceed to Step 3.1 and dispatch the next wave's tickets.
+
+**Known limitation:** agent restarts clear context between waves but do not protect
+against compaction during a single long-running ticket. If a ticket is complex
+enough to trigger compaction mid-implementation, consider splitting it.
 
 ## Phase 4 — Completion
 

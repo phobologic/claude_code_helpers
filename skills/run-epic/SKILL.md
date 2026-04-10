@@ -164,15 +164,18 @@ Agent({
   claim tickets from the task list — the team lead routes all work.
 
   For each ticket assignment:
-  1. Run `tk show <ticket-id>` for full context
-  2. Send STATUS to team lead: 'STATUS <name>: read <ticket-id>, starting implementation'
-  3. Implement the fix
-  4. Send STATUS to team lead: 'STATUS <name>: implementation done on <ticket-id>, running tests'
-  5. Run tests from your worktree
-  6. Commit to a branch named ticket/<ticket-id>
-  7. Message the team lead: DONE <ticket-id> ticket/<ticket-id>
+  1. Run `git checkout -B ticket/<ticket-id> epic/<epic-id>` to branch from the
+     latest integration state (wave N+1 builds on wave N's merged code)
+  2. Run `tk show <ticket-id>` for full context
+  3. Send STATUS to team lead: 'STATUS <name>: read <ticket-id>, starting implementation'
+  4. Implement the fix
+  5. Send STATUS to team lead: 'STATUS <name>: implementation done on <ticket-id>, running tests'
+  6. Run tests from your worktree
+  7. Commit to ticket/<ticket-id>
+  8. Message the team lead: DONE <ticket-id> ticket/<ticket-id>
 
-  Then wait for your next assignment. When you receive a shutdown message, stop.",
+  Then wait for your next assignment. When you receive a shutdown message, reply
+  with SHUTDOWN_ACK <name> then stop.",
   subagent_type: "implementer",
   team_name: "epic-<epic-id>",
   name: "implementer-1-<STAMP>",
@@ -187,7 +190,8 @@ Repeat for implementer-2-<STAMP>, implementer-3-<STAMP>, etc.
 ```
 Agent({
   prompt: "You are the AC verifier on a team. Wait for the team lead to
-  send you tickets to verify. Do not claim tasks from the task list.",
+  send you tickets to verify. Do not claim tasks from the task list.
+  When you receive a shutdown message, reply with SHUTDOWN_ACK ac-verifier then stop.",
   subagent_type: "ac-verifier",
   team_name: "epic-<epic-id>",
   name: "ac-verifier"
@@ -199,7 +203,8 @@ Agent({
 ```
 Agent({
   prompt: "You are the quality reviewer on a team. Wait for the team lead
-  to send you tickets to review. Do not claim tasks from the task list.",
+  to send you tickets to review. Do not claim tasks from the task list.
+  When you receive a shutdown message, reply with SHUTDOWN_ACK quality-reviewer then stop.",
   subagent_type: "quality-reviewer",
   team_name: "epic-<epic-id>",
   name: "quality-reviewer"
@@ -267,6 +272,22 @@ via SendMessage and note it in the dashboard.
 
 This is your main operating loop. You will receive messages from teammates
 and route them appropriately.
+
+### Wave tracking
+
+Track two variables throughout the run:
+
+- **`current_wave`** — set of ticket IDs currently in flight (dispatched but not yet closed)
+- **`wave_number`** — starts at 1, increments at each wave boundary restart
+
+Add a ticket to `current_wave` when dispatched. Remove it when closed and merged.
+A wave is complete when `current_wave` is empty **and** all agents are idle (no
+in-flight reviews or verifications pending). A ticket in a findings-rework loop is
+not closed, so it holds the wave open.
+
+When a wave completes, check for newly unblocked epic tickets. If any exist, trigger
+a wave boundary restart before dispatching them (see "When the wave is complete" below).
+If none remain and all child tickets are closed, proceed to Phase 4.
 
 ### Validation overview
 
@@ -377,16 +398,17 @@ medium/low finding tickets -- these are tracked but non-blocking.
    })
    ```
 
-6. Dispatch the next ticket to the implementer via SendMessage (or stand them
-   down if nothing is available):
+6. Remove `<ticket-id>` from `current_wave`. Stand the implementer down — do not
+   dispatch new work directly here, even if unblocked tickets exist. New work is
+   dispatched only after the wave boundary restart:
    ```
    SendMessage({
      recipient: "<implementer-name>",
-     content: "<ticket-id> is closed and merged to epic/<epic-id>.
-     [Next: implement <next-ticket-id>: <title>. Run `tk show <next-ticket-id>`
-     for full context. / No more tickets available — stand by.]"
+     content: "<ticket-id> closed and merged. Stand by — do not start new work."
    })
    ```
+   If `current_wave` is now empty and all agents are idle, proceed to
+   "When the wave is complete" below.
 
 ### When the quality reviewer returns FINDINGS with critical or high tickets:
 
@@ -419,6 +441,66 @@ receive the ticket IDs and their severities.
    tk close <finding-id>
    tk add-note <finding-id> "Fixed in <ticket-id>"
    ```
+
+### When the wave is complete
+
+Triggered when `current_wave` is empty and all agents are idle (including reviewers
+and verifiers — no pending verifications or reviews). Check for new work:
+
+```bash
+tk ready
+# filter output to tickets belonging to this epic
+```
+
+**If no tickets remain unblocked and all child tickets are closed:** proceed to Phase 4.
+
+**If new tickets are ready:** restart all agents before dispatching wave N+1.
+Restarting clears accumulated context and eliminates compaction risk on long epics.
+Worktrees persist — only agent contexts reset.
+
+**1. Announce:**
+
+```
+Wave <N> complete — <M> tickets merged to epic/<epic-id>
+Wave <N+1>: <K> new tickets unblocked — restarting agents for clean context
+```
+
+**2. Shutdown all agents.** Send shutdown to each; wait up to 30 seconds for
+`SHUTDOWN_ACK <name>` from each. Proceed after timeout — agents should be idle.
+
+```
+SendMessage({ to: "implementer-1-<STAMP>", message: "Wave <N> complete. Shutting down." })
+# ... all implementers
+SendMessage({ to: "ac-verifier",      message: "Wave <N> complete. Shutting down." })
+SendMessage({ to: "quality-reviewer", message: "Wave <N> complete. Shutting down." })
+```
+
+**3. Compute next wave's implementer count:** `min(cap, len(new_tickets))`. Only
+spawn as many implementers as needed for this wave — idle agents waste cost.
+
+**4. Re-spawn all agents** with the same names and prompts. Implementers reuse their
+pre-created worktrees:
+
+```
+Agent({ subagent_type: "implementer", team_name: "epic-<epic-id>",
+        name: "implementer-1-<STAMP>", isolation: "worktree",
+        prompt: "<same as Phase 1.5, same WORKTREE path>" })
+# ... repeat for needed implementer count
+Agent({ subagent_type: "ac-verifier",      team_name: "epic-<epic-id>", name: "ac-verifier",
+        prompt: "<same as Phase 1.5>" })
+Agent({ subagent_type: "quality-reviewer", team_name: "epic-<epic-id>", name: "quality-reviewer",
+        prompt: "<same as Phase 1.5>" })
+```
+
+**5. Wait for `WORKTREE OK`** from all re-spawned implementers. Apply the same
+abort logic as Phase 2 — if any report `WARNING: in main repo`, stop.
+
+**6. Dispatch wave N+1 tickets** to implementers via SendMessage (same format as
+Phase 1.5). Add all dispatched ticket IDs to `current_wave`. Increment `wave_number`.
+
+**Known limitation:** agent restarts clear context between waves but do not protect
+against compaction during a single long-running ticket. If a ticket is complex
+enough to trigger compaction mid-implementation, consider splitting it.
 
 ## Phase 4 -- Epic completion
 
