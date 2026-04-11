@@ -168,7 +168,7 @@ Agent({
   claim tickets from the task list — the team lead routes all work.
 
   For each ticket assignment:
-  1. Run `git checkout -B ticket/<ticket-id> epic/<epic-id>` to branch from the
+  1. Run `cd <REPO_ROOT>/.worktrees/implementer-1-<STAMP> && git checkout -B ticket/<ticket-id> epic/<epic-id>` to branch from the
      latest integration state (wave N+1 builds on wave N's merged code)
   2. Run `tk show <ticket-id>` for full context
   3. Send STATUS to team lead: 'STATUS <name>: read <ticket-id>, starting implementation'
@@ -484,8 +484,10 @@ spawn as many implementers as needed for this wave — idle agents waste cost.
 
 **4. Re-spawn all agents** with the same names and prompts. Implementers reuse their
 pre-created worktrees. Do NOT use `isolation: "worktree"` on re-spawn — the worktrees
-already exist, and using it can cause the agent to inherit the team lead's CWD instead
-of its own.
+already exist, and the isolation parameter creates a new worktree via raw `git worktree add`,
+bypassing the `worktree-init` setup (`.worktreelinks`, `.worktreeinclude`) that the
+pre-created worktrees have. Re-spawned agents start in the team lead's CWD; the `cd`
+embedded in the first git command corrects this.
 
 Write the full implementer prompt — do not abbreviate or reference Phase 1.5. The `cd`
 step is critical; if omitted the agent starts in the wrong directory:
@@ -518,7 +520,7 @@ Agent({
   claim tickets from the task list — the team lead routes all work.
 
   For each ticket assignment:
-  1. Run \`git checkout -B ticket/<ticket-id> epic/<epic-id>\` to branch from the
+  1. Run \`cd <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP> && git checkout -B ticket/<ticket-id> epic/<epic-id>\` to branch from the
      latest integration state (wave N+1 builds on wave N's merged code)
   2. Run \`tk show <ticket-id>\` for full context
   3. Send STATUS to team lead: 'STATUS <name>: read <ticket-id>, starting implementation'
