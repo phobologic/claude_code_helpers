@@ -42,16 +42,9 @@ two sentences on what the command accomplishes, not a line-by-line breakdown.
 
 ## Hooks
 
-A non-zero PostToolUse hook exit is a blocker — treat it like a failing test, not a warning.
+**PostToolUse hooks report issues but do not block.** The framework marks them "non-blocking" — the tool result stands regardless. When a PostToolUse hook exits non-zero, treat the stderr output as a mandatory fix: stop what you're doing, read the full error, fix the file, and verify the hook passes before continuing. Do not proceed with other edits while hook errors are pending. Every unresolved hook error is a broken file that compounds the problem.
 
-When a hook fails:
-
-1. **Stop immediately.** Do not make any further edits to other files.
-2. **Read the full stderr output.** Do not skip or skim it — the error message is the diagnosis.
-3. **Fix the issue** in the file that triggered the hook.
-4. **Verify the hook passes** before resuming work.
-
-Never accumulate edits across multiple files while hook failures are pending. Every unresolved hook failure is a broken file that compounds the problem.
+**Stop hooks are a best-effort safety net.** A Stop hook that returns `{"decision": "block"}` gets one cycle: Claude sees the reason, fixes it, then stops again — at which point the hook allows the exit (`stop_hook_active: true`). It is not a hard guarantee.
 
 ## Agent Teams
 
