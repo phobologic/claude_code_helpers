@@ -285,7 +285,7 @@ SendMessage({
   to: "<idle-implementer-name>",
   message: "ticket: <ticket-id>
 title: <title>
-First `git checkout -B fix/<ticket-id> fix/batch-<stamp>` to branch from integration.
+First `cd <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP> && git checkout -B fix/<ticket-id> fix/batch-<stamp>` to branch from integration.
 Then `tk show <ticket-id>` for full context.
 Implement the fix, run tests, commit to fix/<ticket-id>, then message the team lead:
 DONE <ticket-id> fix/<ticket-id>"
@@ -343,7 +343,7 @@ SendMessage({
      to: "<implementer-name>",
      message: "ticket: <next-ticket-id>
    title: <title>
-   First `git checkout -B fix/<next-ticket-id> fix/batch-<stamp>` to branch from
+   First `cd <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP> && git checkout -B fix/<next-ticket-id> fix/batch-<stamp>` to branch from
    integration. Then `tk show <next-ticket-id>` for full context.
    Implement the fix, run tests, commit to fix/<next-ticket-id>, then message the
    team lead: DONE <next-ticket-id> fix/<next-ticket-id>"
@@ -447,8 +447,10 @@ Agent({ subagent_type: "quality-reviewer", team_name: "fix-<stamp>",
 
 **3. Re-spawn implementers.** Spawn only `min(cap, next_wave_ticket_count)` — no
 idle agents. Reuse the same names and worktree paths. Do NOT use `isolation: "worktree"`
-here — the worktrees already exist, and using it on re-spawn can cause the agent to
-inherit the team lead's CWD (the fix-batch worktree) instead of its own.
+here — the worktrees already exist, and the isolation parameter creates a new worktree
+via raw `git worktree add`, bypassing the `worktree-init` setup (`.worktreelinks`,
+`.worktreeinclude`) that the pre-created worktrees have. Re-spawned agents start in the
+team lead's CWD; the `cd` embedded in every dispatch message corrects this.
 
 Write the full prompt — do not abbreviate or reference Phase 2.4. The `cd` step is
 critical; if omitted the agent starts in the wrong directory:
