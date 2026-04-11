@@ -337,8 +337,8 @@ The implementer will send you a message with the ticket ID and branch name.
    SendMessage({
      recipient: "quality-reviewer",
      content: "Review <ticket-id> on branch <branch-name>. Changes
-     have passed AC verification. Parent epic for any finding tickets:
-     <epic-id>"
+     have passed AC verification. Diff: git diff main...<branch-name>
+     Parent epic for any finding tickets: <epic-id>"
    })
    ```
 
