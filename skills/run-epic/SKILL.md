@@ -339,7 +339,9 @@ The implementer will send you a message with the ticket ID and branch name.
    SendMessage({
      recipient: "quality-reviewer",
      content: "Review <ticket-id> on branch <branch-name>. Changes
-     have passed AC verification. Diff: git diff main...<branch-name>
+     have passed AC verification. Diff the ticket's own changes only
+     (not prior wave changes already merged to the integration branch)
+     with: git diff epic/<epic-id>...<branch-name>
      Parent epic for any finding tickets: <epic-id>"
    })
    ```

@@ -315,7 +315,9 @@ whichever reviewer reports back first.
 SendMessage({
   recipient: "quality-reviewer-1",  // or quality-reviewer-2
   content: "Review <ticket-id> on branch <branch-name>. Run `tk show <ticket-id>`
-  for context on what was being fixed. Diff: git diff main...<branch-name>"
+  for context on what was being fixed. Diff the ticket's own changes only
+  (not wave N-1 changes already merged to the integration branch) with:
+  git diff fix/batch-<stamp>...<branch-name>"
 })
 ```
 
