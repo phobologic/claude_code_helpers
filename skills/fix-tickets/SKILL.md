@@ -234,12 +234,12 @@ Format (adapt column widths to content):
 
 **Agents**
 
-| Agent | State | Working on |
-|---|---|---|
-| implementer-1-&lt;STAMP&gt; | idle | |
-| implementer-2-&lt;STAMP&gt; | implementing | [TK-44] Fix auth timeout |
-| quality-reviewer-1 | idle | |
-| quality-reviewer-2 | reviewing | [TK-43] Add retry header |
+| Agent | State | Working on | Last heard |
+|---|---|---|---|
+| implementer-1-&lt;STAMP&gt; | idle | | 14:31:02 |
+| implementer-2-&lt;STAMP&gt; | implementing | [TK-44] Fix auth timeout | 14:29:47 |
+| quality-reviewer-1 | idle | | 14:30:55 |
+| quality-reviewer-2 | reviewing | [TK-43] Add retry header | 14:32:11 |
 
 **Wave 1** (active)
 
@@ -266,8 +266,23 @@ Keep it concise — no prose, just the tables. For minor updates you may omit
 unchanged tables (e.g. if only an agent state changed, show just the Agents
 table with the event header).
 
-If an implementer hasn't signaled completion in a while, send a status check
-via SendMessage and note it in the dashboard.
+**Timestamping inbound messages.** Every time you quote or summarize a
+teammate's message to the user, prefix it with the local clock time you
+received it, e.g. `[14:32:05] implementer-2: DONE TK-44 fix/TK-44`. Update
+that agent's "Last heard" cell to the same timestamp. This makes silent
+stalls visible at a glance.
+
+**Heartbeat cadence.** Don't passively wait forever — agents can die silently
+(PostToolUse hook block, stuck shell command, orphaned confirmation prompt).
+
+- If any agent is marked busy and you haven't received a message from anyone
+  in ~5 minutes, actively sweep: send a one-line status check via SendMessage
+  to each busy agent.
+- If a specific agent has been busy on the same task for ~15 minutes without
+  a progress message, use `TaskOutput` against its task to inspect what it's
+  actually doing. Hook failures and stuck tool calls show up there.
+- Report findings in the next dashboard update (the event header for the
+  dashboard can be something like `heartbeat sweep`).
 
 ## Phase 3 — Execute waves
 
@@ -562,9 +577,13 @@ TeamDelete()
 
 ## Edge Cases
 
-**Implementer unresponsive.** After a reasonable wait, send a status check via
-SendMessage. If no response, inform the user and suggest spawning a replacement
-implementer pointed at the same task.
+**Implementer unresponsive.** Follow the heartbeat cadence (see "Status
+updates"): SendMessage status check after ~5 min of silence, `TaskOutput`
+inspection after ~15 min of no progress. Common silent-death modes are
+PostToolUse hook blocks, stuck shell commands, and orphaned confirmation
+prompts — all visible via `TaskOutput`. If the agent is truly stuck, tell
+the user what you found and suggest spawning a replacement pointed at the
+same task.
 
 **All tickets in a wave fail quality review simultaneously.** Don't hold up the
 quality reviewer queue — process each ticket's review cycle independently. Other
