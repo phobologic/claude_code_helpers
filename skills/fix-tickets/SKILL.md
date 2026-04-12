@@ -176,13 +176,15 @@ Agent({
 
   WORKTREE: <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>
 
-  Before doing anything else, run these as SEPARATE Bash calls:
-  1. `cd <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>` — standalone so the CWD persists
-  2. `[ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: not in worktree'`
-  3. Report the result to the team lead via SendMessage, then wait.
+  Before doing anything else, run this single Bash call to set your CWD
+  and verify isolation:
+  ```
+  cd <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP> && pwd && [ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: not in worktree'
+  ```
+  Report the pwd output and result to the team lead via SendMessage, then wait.
 
   All tool calls MUST target your worktree, not the main repo:
-  - Bash: cd to your worktree first (or run from it)
+  - Bash: your CWD is already set — just run commands directly
   - Read/Edit: absolute paths starting with <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>/
   - Glob/Grep: pass path=<REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>
   Never reference <REPO_ROOT> without the .worktrees/implementer-<N>-<STAMP> suffix.
@@ -321,11 +323,11 @@ SendMessage({
 
 **When quality reviewer returns CLEAN:**
 
-1. Merge to integration branch (in the integration worktree — never
-   checkout the integration branch in the main repo). Use a subshell
-   so the team lead's CWD stays in the main repo:
+1. Merge to integration branch using `git -C` — never `cd` into the
+   integration worktree, as that contaminates the team lead's CWD and
+   breaks worktree isolation for agents spawned afterward:
    ```bash
-   (cd .worktrees/fix-batch-<stamp> && git merge fix/<ticket-id> --no-ff -m "Fix <ticket-id>: <title>")
+   git -C .worktrees/fix-batch-<stamp> merge fix/<ticket-id> --no-ff -m "Fix <ticket-id>: <title>"
    ```
 
 2. Close the ticket:
@@ -445,15 +447,19 @@ Agent({ subagent_type: "quality-reviewer", team_name: "fix-<stamp>",
         name: "quality-reviewer-2", prompt: "<same as Phase 2.4>" })
 ```
 
-**3. Re-spawn implementers.** Spawn only `min(cap, next_wave_ticket_count)` — no
-idle agents. Reuse the same names and worktree paths. Do NOT use `isolation: "worktree"`
-here — the worktrees already exist, and the isolation parameter creates a new worktree
-via raw `git worktree add`, bypassing the `worktree-init` setup (`.worktreelinks`,
-`.worktreeinclude`) that the pre-created worktrees have. Re-spawned agents start in the
-team lead's CWD; the `cd` embedded in every dispatch message corrects this.
+**3. Reset CWD and re-spawn implementers.** Before spawning, verify the team
+lead is at `REPO_ROOT` — merge operations may have drifted the CWD:
 
-Write the full prompt — do not abbreviate or reference Phase 2.4. The `cd` step is
-critical; if omitted the agent starts in the wrong directory:
+```bash
+cd <REPO_ROOT> && pwd
+```
+
+Spawn only `min(cap, next_wave_ticket_count)` — no idle agents. Reuse the same
+names and worktree paths. Do NOT use `isolation: "worktree"` — the worktrees
+already exist, and the isolation parameter creates a new worktree via raw
+`git worktree add`, bypassing the `worktree-init` setup.
+
+Write the full prompt — do not abbreviate or reference Phase 2.4:
 
 ```
 Agent({
@@ -464,13 +470,15 @@ Agent({
 
   WORKTREE: <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>
 
-  Before doing anything else, run these as SEPARATE Bash calls:
-  1. `cd <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>` — standalone so the CWD persists
-  2. `[ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: not in worktree'`
-  3. Report the result to the team lead via SendMessage, then wait.
+  Before doing anything else, run this single Bash call to set your CWD
+  and verify isolation:
+  \`\`\`
+  cd <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP> && pwd && [ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: not in worktree'
+  \`\`\`
+  Report the pwd output and result to the team lead via SendMessage, then wait.
 
   All tool calls MUST target your worktree, not the main repo:
-  - Bash: cd to your worktree first (or run from it)
+  - Bash: your CWD is already set — just run commands directly
   - Read/Edit: absolute paths starting with <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>/
   - Glob/Grep: pass path=<REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>
   Never reference <REPO_ROOT> without the .worktrees/implementer-<N>-<STAMP> suffix.
@@ -496,8 +504,9 @@ Agent({
 # ... repeat for each needed implementer
 ```
 
-**4. Wait for `WORKTREE OK`** from all re-spawned implementers. Apply the same
-abort logic as Phase 2 — if any report `WARNING: in main repo`, stop.
+**4. Wait for `WORKTREE OK`** from all re-spawned implementers. Each must
+report the `pwd` output showing their worktree path. Apply the same abort
+logic as Phase 2 — if any report `WARNING` or a wrong path, stop.
 
 Proceed to Step 3.1 and dispatch the next wave's tickets.
 

@@ -149,13 +149,15 @@ Agent({
 
   WORKTREE: <REPO_ROOT>/.worktrees/implementer-1-<STAMP>
 
-  Before doing anything else, run these as SEPARATE Bash calls:
-  1. `cd <REPO_ROOT>/.worktrees/implementer-1-<STAMP>` — standalone so the CWD persists
-  2. `[ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: not in worktree'`
-  3. Report the result to the team lead via SendMessage.
+  Before doing anything else, run this single Bash call to set your CWD
+  and verify isolation:
+  ```
+  cd <REPO_ROOT>/.worktrees/implementer-1-<STAMP> && pwd && [ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: not in worktree'
+  ```
+  Report the pwd output and result to the team lead via SendMessage.
 
   All tool calls MUST target your worktree, not the main repo:
-  - Bash: cd to your worktree first
+  - Bash: your CWD is already set — just run commands directly
   - Read/Edit: absolute paths starting with <REPO_ROOT>/.worktrees/implementer-1-<STAMP>/
   - Glob/Grep: pass path=<REPO_ROOT>/.worktrees/implementer-1-<STAMP>
   Never reference <REPO_ROOT> without the .worktrees/implementer-1-<STAMP> suffix.
@@ -168,7 +170,7 @@ Agent({
   claim tickets from the task list — the team lead routes all work.
 
   For each ticket assignment:
-  1. Run `cd <REPO_ROOT>/.worktrees/implementer-1-<STAMP> && git checkout -B ticket/<ticket-id> epic/<epic-id>` to branch from the
+  1. Run `git checkout -B ticket/<ticket-id> epic/<epic-id>` to branch from the
      latest integration state (wave N+1 builds on wave N's merged code)
   2. Run `tk show <ticket-id>` for full context
   3. Send STATUS to team lead: 'STATUS <name>: read <ticket-id>, starting implementation'
@@ -374,7 +376,10 @@ medium/low finding tickets -- these are tracked but non-blocking.
    tk close <ticket-id>
    ```
 
-3. Merge the ticket branch into the integration branch:
+3. Merge the ticket branch into the integration branch. Never `cd` to a
+   different directory for merges — use checkout/merge/checkout in place,
+   or `git -C` if merging in a separate worktree. The team lead's CWD must
+   stay at `REPO_ROOT` so agents spawned later inherit the correct CWD:
    ```bash
    git checkout epic/<epic-id>
    git merge <branch-name> --no-ff -m "Merge <ticket-id>: <ticket title>"
@@ -482,15 +487,18 @@ SendMessage({ to: "quality-reviewer",      message: "type: shutdown_request" })
 **3. Compute next wave's implementer count:** `min(cap, len(new_tickets))`. Only
 spawn as many implementers as needed for this wave — idle agents waste cost.
 
-**4. Re-spawn all agents** with the same names and prompts. Implementers reuse their
-pre-created worktrees. Do NOT use `isolation: "worktree"` on re-spawn — the worktrees
-already exist, and the isolation parameter creates a new worktree via raw `git worktree add`,
-bypassing the `worktree-init` setup (`.worktreelinks`, `.worktreeinclude`) that the
-pre-created worktrees have. Re-spawned agents start in the team lead's CWD; the `cd`
-embedded in the first git command corrects this.
+**4. Reset CWD and re-spawn all agents.** Before spawning, verify the team
+lead is at `REPO_ROOT` — merge operations may have drifted the CWD:
 
-Write the full implementer prompt — do not abbreviate or reference Phase 1.5. The `cd`
-step is critical; if omitted the agent starts in the wrong directory:
+```bash
+cd <REPO_ROOT> && pwd
+```
+
+Implementers reuse their pre-created worktrees. Do NOT use `isolation: "worktree"`
+on re-spawn — the worktrees already exist, and the isolation parameter creates a
+new worktree via raw `git worktree add`, bypassing the `worktree-init` setup.
+
+Write the full implementer prompt — do not abbreviate or reference Phase 1.5:
 
 ```
 Agent({
@@ -501,13 +509,15 @@ Agent({
 
   WORKTREE: <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>
 
-  Before doing anything else:
-  1. cd <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>
-  2. [ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: not in worktree'
-  3. Report the result to the team lead via SendMessage.
+  Before doing anything else, run this single Bash call to set your CWD
+  and verify isolation:
+  \`\`\`
+  cd <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP> && pwd && [ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: not in worktree'
+  \`\`\`
+  Report the pwd output and result to the team lead via SendMessage.
 
   All tool calls MUST target your worktree, not the main repo:
-  - Bash: cd to your worktree first
+  - Bash: your CWD is already set — just run commands directly
   - Read/Edit: absolute paths starting with <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>/
   - Glob/Grep: pass path=<REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>
   Never reference <REPO_ROOT> without the .worktrees/implementer-<N>-<STAMP> suffix.
@@ -520,7 +530,7 @@ Agent({
   claim tickets from the task list — the team lead routes all work.
 
   For each ticket assignment:
-  1. Run \`cd <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP> && git checkout -B ticket/<ticket-id> epic/<epic-id>\` to branch from the
+  1. Run \`git checkout -B ticket/<ticket-id> epic/<epic-id>\` to branch from the
      latest integration state (wave N+1 builds on wave N's merged code)
   2. Run \`tk show <ticket-id>\` for full context
   3. Send STATUS to team lead: 'STATUS <name>: read <ticket-id>, starting implementation'
@@ -539,8 +549,9 @@ Agent({ subagent_type: "ac-verifier",      team_name: "epic-<epic-id>", name: "a
 Agent({ subagent_type: "quality-reviewer", team_name: "epic-<epic-id>", name: "quality-reviewer",
         prompt: "<same as Phase 1.5>" })
 
-**5. Wait for `WORKTREE OK`** from all re-spawned implementers. Apply the same
-abort logic as Phase 2 — if any report `WARNING: in main repo`, stop.
+**5. Wait for `WORKTREE OK`** from all re-spawned implementers. Each must
+report the `pwd` output showing their worktree path. Apply the same abort
+logic as Phase 2 — if any report `WARNING` or a wrong path, stop.
 
 **6. Dispatch wave N+1 tickets** to implementers via SendMessage (same format as
 Phase 1.5). Add all dispatched ticket IDs to `current_wave`. Increment `wave_number`.
