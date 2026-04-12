@@ -29,9 +29,12 @@ def set_frontmatter_field(content, key, value):
     replacement = f'{key}: {value}'
     if pattern.search(content):
         return pattern.sub(replacement, content)
-    # Insert before closing ---
-    return re.sub(r'^(---\s*\n)', replacement + '\n' + r'\1',
-                  content, count=1, flags=re.MULTILINE | re.DOTALL)
+    # Insert before closing --- (the second one in the file)
+    # Find the opening --- then match everything up to the closing ---
+    return re.sub(
+        r'^(---\n.*?)(^---\s*\n)',
+        r'\1' + replacement + '\n' + r'\2',
+        content, count=1, flags=re.MULTILINE | re.DOTALL)
 
 
 def main():
