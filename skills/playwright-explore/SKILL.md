@@ -124,17 +124,27 @@ URLs, etc.), send it to each of them:
 Wait for them to confirm before continuing steps that require their presence.
 They will message you when they've completed a coordination step.
 
-## Checkpoints
-After completing each logical step (e.g. logged in, set up the session, completed
-a major flow), send a brief status update to the team lead before continuing:
-  SendMessage({ to: 'team-lead', content: 'STATUS <role-1>: <what you just completed>' })
-This gives the team lead a window to send instructions. Check for any incoming
-messages at each checkpoint before proceeding to the next step.
+## Staying reachable (critical)
+
+The team lead must be able to redirect you at any time. Two hard rules:
+
+1. **Check your inbox before every `playwright-cli` command.** If there is a
+   message from `team-lead`, read it and act on it *before* running the next
+   playwright action. Never run more than one playwright-cli command without
+   first checking for new messages.
+2. **Heartbeat at least once per minute.** If ~60 seconds have passed since
+   your last message to the team lead, send a STATUS update before your
+   next action, even if nothing notable has happened:
+     SendMessage({ to: 'team-lead', content: 'STATUS <role-1>: <what you are doing now>' })
+
+Also send a STATUS after each milestone (logged in, set up the session,
+completed a major flow) — but the two rules above are the floor, not the
+milestones. Going silent for minutes is a bug, not focus.
 
 ## Time limit
 Deadline: <DEADLINE_TS> (unix epoch) — approximately <DEADLINE_HUMAN>
 
-At every checkpoint, check the current time before continuing:
+At every heartbeat, check the current time before continuing:
   date +%s
 
 - **Within 120 seconds of deadline**: finish your current action, then wrap up —
@@ -223,17 +233,27 @@ Then confirm back:
   SendMessage({ to: '<role-1>', content: '<role-N> joined' })
 Then continue exploring from your role's perspective.
 
-## Checkpoints
-After completing each logical step (e.g. joined the session, completed a major
-flow), send a brief status update to the team lead before continuing:
-  SendMessage({ to: 'team-lead', content: 'STATUS <role-N>: <what you just completed>' })
-This gives the team lead a window to send instructions. Check for any incoming
-messages at each checkpoint before proceeding to the next step.
+## Staying reachable (critical)
+
+The team lead must be able to redirect you at any time. Two hard rules:
+
+1. **Check your inbox before every `playwright-cli` command.** If there is a
+   message from `team-lead`, read it and act on it *before* running the next
+   playwright action. Never run more than one playwright-cli command without
+   first checking for new messages.
+2. **Heartbeat at least once per minute.** If ~60 seconds have passed since
+   your last message to the team lead, send a STATUS update before your
+   next action, even if nothing notable has happened:
+     SendMessage({ to: 'team-lead', content: 'STATUS <role-N>: <what you are doing now>' })
+
+Also send a STATUS after each milestone (joined the session, completed a
+major flow) — but the two rules above are the floor, not the milestones.
+Going silent for minutes is a bug, not focus.
 
 ## Time limit
 Deadline: <DEADLINE_TS> (unix epoch) — approximately <DEADLINE_HUMAN>
 
-At every checkpoint, check the current time before continuing:
+At every heartbeat, check the current time before continuing:
   date +%s
 
 - **Within 120 seconds of deadline**: finish your current action, then wrap up —
@@ -331,9 +351,27 @@ Acknowledge the finding back to the tester (one-line SendMessage is fine).
 
 Note it. When all agents have sent `DONE`, proceed to Phase 5.
 
-### While waiting:
+### Timestamping inbound messages
 
-Periodically check in with agents that haven't sent anything in a while.
+Every time you quote or summarize an agent's message to the user, prefix it
+with the local clock time you received it, e.g.
+`[14:32:05] player-1: STATUS — joined session, viewing game list`. Track
+each agent's most recent message time ("last heard") so you can spot stalls.
+
+### Heartbeat cadence (active monitoring)
+
+Agents are required to STATUS at least once per minute. If they stop, act:
+
+- **~2 minutes of silence from any agent**: send a one-line ping —
+  `SendMessage({ to: '<role>', content: 'ping — still alive? what are you doing?' })`.
+- **~5 minutes with no progress** on the same action: use `TaskOutput`
+  against that agent's task to inspect what it's actually doing. Hook
+  failures, stuck playwright commands, and orphaned confirmation prompts
+  show up there.
+- Report sweep results to the user, prefixed with the clock time.
+
+Don't passively wait — if you haven't heard from anyone in a while and the
+session isn't done, assume something is stuck and investigate.
 
 ### Time enforcement:
 
