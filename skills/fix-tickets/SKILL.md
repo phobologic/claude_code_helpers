@@ -194,8 +194,11 @@ Agent({
   when it operates outside its own working directory.
 
   For each ticket assignment:
-  1. Run `git checkout -B fix/<ticket-id> fix/batch-<stamp>` to branch from the
-     latest integration state (this ensures wave N+1 builds on wave N's merged code)
+  1. Check out the ticket branch — resume if it exists, otherwise branch fresh
+     from the latest integration state:
+     `git checkout fix/<ticket-id> 2>/dev/null || git checkout -b fix/<ticket-id> fix/batch-<stamp>`
+     The first form preserves in-progress work if you were recycled mid-ticket;
+     the second creates a fresh branch off the latest integration state for new work.
   2. Run `tk show <ticket-id>` for full context
   3. Send STATUS to team lead: 'STATUS <name>: read <ticket-id>, starting implementation'
   4. Implement the fix
@@ -221,6 +224,9 @@ implementer will report back `WORKTREE OK` or `WARNING: in main repo`.
 Track implementer state throughout the run:
 - **idle**: waiting for work (all start idle)
 - **busy**: working on a ticket (map: implementer-name → ticket-id)
+- **`assignments_since_spawn[name]`**: count of work messages sent to each
+  implementer since (re)spawn. Increment on every dispatch (initial *or*
+  rework). Reset to 0 on respawn. Used by implementer recycling — see below.
 
 ## Status updates
 
@@ -283,6 +289,49 @@ stalls visible at a glance.
   actually doing. Hook failures and stuck tool calls show up there.
 - Report findings in the next dashboard update (the event header for the
   dashboard can be something like `heartbeat sweep`).
+
+## Implementer recycling
+
+Long waves can push individual implementers toward context compaction even
+when no wave-boundary respawn is due. Recycle each implementer after a fixed
+number of work assignments to keep contexts fresh.
+
+- **`RECYCLE_CAP`** — default `3`. Lower to `2` if your tickets are large.
+- **Trigger.** Before sending any work message to an implementer, if
+  `assignments_since_spawn[name] >= RECYCLE_CAP`, recycle that implementer
+  *before* dispatching the new assignment.
+
+**Recycle procedure (per implementer — clean teardown and rebuild):**
+
+1. Send shutdown to that one implementer:
+   ```
+   SendMessage({ to: "<name>", message: "type: shutdown_request" })
+   ```
+2. Wait up to 30 seconds for `SHUTDOWN_ACK <name>`. The implementer is idle
+   by definition (it just finished work and is waiting for its next
+   assignment), so the ack should arrive quickly. Proceed regardless after
+   the timeout.
+3. Verify the team lead's CWD is still at `REPO_ROOT` — never `cd` away from
+   it during recycle:
+   ```bash
+   cd <REPO_ROOT> && pwd
+   ```
+4. Re-spawn using **the exact same `Agent({...})` call as the wave-boundary
+   respawn in Step 3.3** — same `name`, same worktree path, same prompt body.
+   The worktree persists across the recycle, so do NOT pass
+   `isolation: "worktree"`.
+5. Wait for the new implementer's `WORKTREE OK` report. Apply the same abort
+   logic as Phase 2 — wrong path or `WARNING` aborts the run.
+6. Reset `assignments_since_spawn[name] = 0`.
+7. Update the dashboard with event header `recycled <name>`.
+8. Now dispatch the queued work message to the fresh implementer.
+
+The other implementers, the integration worktree, the quality reviewers, and
+any in-flight reviews are untouched — this is a strictly per-implementer
+operation. Because the implementer prompt's first step is `git checkout
+fix/<id> 2>/dev/null || git checkout -b fix/<id> fix/batch-<stamp>`, a
+mid-ticket recycle resumes the existing branch with all in-progress commits
+intact.
 
 ## Phase 3 — Execute waves
 
@@ -505,8 +554,11 @@ Agent({
   when it operates outside its own working directory.
 
   For each ticket assignment:
-  1. Run \`git checkout -B fix/<ticket-id> fix/batch-<stamp>\` to branch from the
-     latest integration state (this ensures wave N+1 builds on wave N's merged code)
+  1. Check out the ticket branch — resume if it exists, otherwise branch fresh
+     from the latest integration state:
+     \`git checkout fix/<ticket-id> 2>/dev/null || git checkout -b fix/<ticket-id> fix/batch-<stamp>\`
+     The first form preserves in-progress work if you were recycled mid-ticket;
+     the second creates a fresh branch off the latest integration state for new work.
   2. Run \`tk show <ticket-id>\` for full context
   3. Send STATUS to team lead: 'STATUS <name>: read <ticket-id>, starting implementation'
   4. Implement the fix

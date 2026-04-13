@@ -170,8 +170,11 @@ Agent({
   claim tickets from the task list — the team lead routes all work.
 
   For each ticket assignment:
-  1. Run `git checkout -B ticket/<ticket-id> epic/<epic-id>` to branch from the
-     latest integration state (wave N+1 builds on wave N's merged code)
+  1. Check out the ticket branch — resume if it exists, otherwise branch fresh
+     from the latest integration state:
+     `git checkout ticket/<ticket-id> 2>/dev/null || git checkout -b ticket/<ticket-id> epic/<epic-id>`
+     The first form preserves in-progress work if you were recycled mid-ticket;
+     the second creates a fresh branch off the latest integration state for new work.
   2. Run `tk show <ticket-id>` for full context
   3. Send STATUS to team lead: 'STATUS <name>: read <ticket-id>, starting implementation'
   4. Implement the fix
@@ -288,6 +291,61 @@ stalls visible at a glance.
   actually doing. Hook failures and stuck tool calls show up there.
 - Report findings in the next dashboard update (the event header for the
   dashboard can be something like `heartbeat sweep`).
+
+## Implementer recycling
+
+Long-running tickets — especially those that go through several findings or
+AC-fail rework cycles — can push an implementer toward context compaction
+mid-ticket. Recycle each implementer after a fixed number of work
+assignments to keep contexts fresh.
+
+Track per implementer:
+
+- **`assignments_since_spawn[name]`** — increment by 1 every time you send a
+  work message to that implementer (initial dispatch *or* AC-fail rework
+  *or* findings rework). Reset to 0 on (re)spawn.
+- **`RECYCLE_CAP`** — default `3`. Lower to `2` if your tickets are large.
+
+**Trigger.** Before sending any work message to an implementer, if
+`assignments_since_spawn[name] >= RECYCLE_CAP`, recycle that implementer
+*before* dispatching the new assignment. (This typically fires mid-ticket
+during rework cycles, since each implementer does at most one fresh ticket
+per wave.)
+
+**Recycle procedure (per implementer — clean teardown and rebuild):**
+
+1. Send shutdown to that one implementer:
+   ```
+   SendMessage({ to: "<name>", message: "type: shutdown_request" })
+   ```
+2. Wait up to 30 seconds for `SHUTDOWN_ACK <name>`. The implementer is idle
+   by definition (it just sent something to the lead and is waiting for the
+   next instruction), so the ack should arrive quickly. Proceed regardless
+   after the timeout.
+3. Verify the team lead's CWD is still at `REPO_ROOT` — never `cd` away
+   from it during recycle:
+   ```bash
+   cd <REPO_ROOT> && pwd
+   ```
+4. Re-spawn using **the exact same `Agent({...})` call as the wave-boundary
+   respawn** — same `name`, same worktree path, same prompt body. The
+   worktree persists across the recycle, so do NOT pass
+   `isolation: "worktree"`.
+5. Wait for the new implementer's `WORKTREE OK` report. Apply the same
+   abort logic as Phase 2 — wrong path or `WARNING` aborts the run.
+6. Reset `assignments_since_spawn[name] = 0`.
+7. Update the dashboard with event header `recycled <name>`.
+8. Now dispatch the queued work message to the fresh implementer. If the
+   recycle happened mid-ticket, that message should be the rework
+   instruction — the new implementer's prompt resumes the existing
+   `ticket/<id>` branch automatically.
+
+The other implementers, the integration branch, the AC verifier, the
+quality reviewer, and any in-flight reviews are untouched — this is a
+strictly per-implementer operation. Because the implementer prompt's first
+step is `git checkout ticket/<id> 2>/dev/null || git checkout -b
+ticket/<id> epic/<epic-id>`, a mid-ticket recycle resumes the existing
+branch with all in-progress commits intact.
 
 ## Phase 3 -- Manage the validation loop
 
@@ -547,8 +605,11 @@ Agent({
   claim tickets from the task list — the team lead routes all work.
 
   For each ticket assignment:
-  1. Run \`git checkout -B ticket/<ticket-id> epic/<epic-id>\` to branch from the
-     latest integration state (wave N+1 builds on wave N's merged code)
+  1. Check out the ticket branch — resume if it exists, otherwise branch fresh
+     from the latest integration state:
+     \`git checkout ticket/<ticket-id> 2>/dev/null || git checkout -b ticket/<ticket-id> epic/<epic-id>\`
+     The first form preserves in-progress work if you were recycled mid-ticket;
+     the second creates a fresh branch off the latest integration state for new work.
   2. Run \`tk show <ticket-id>\` for full context
   3. Send STATUS to team lead: 'STATUS <name>: read <ticket-id>, starting implementation'
   4. Implement the fix
