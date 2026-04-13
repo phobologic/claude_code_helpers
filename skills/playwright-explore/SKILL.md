@@ -37,7 +37,7 @@ Parse `$ARGUMENTS` in this order:
 Derive agent names from the roles (e.g. role `gm` → agent name `gm`,
 role `participant-1` → agent name `participant-1`).
 
-Present a short plan and wait for confirmation:
+Present a short plan to the user:
 
 ```
 App:        <url>
@@ -45,9 +45,28 @@ Roles:      <role-1> (initiator), <role-2>, <role-3>  [sonnet each]
 Scenario:   <scenario>
 Time limit: <N minutes/hours — session ends at ~HH:MM> / none
 Epic:       will be created now
-
-Proceed? [y/N]
 ```
+
+Then ask for confirmation via `AskUserQuestion`:
+
+```
+AskUserQuestion({
+  questions: [{
+    question: "Start the exploratory session with this plan?",
+    header: "Explore",
+    multiSelect: false,
+    options: [
+      { label: "Proceed (Recommended)",
+        description: "Create the epic, spawn tester agents, begin exploration" },
+      { label: "Cancel",
+        description: "Stop now — no epic or agents are created" }
+    ]
+  }]
+})
+```
+
+The user can also pick "Other" to adjust the roles, scenario, or time
+limit before you proceed. Wait for their answer before doing anything.
 
 If a time limit was given, compute the deadline immediately after confirmation:
 

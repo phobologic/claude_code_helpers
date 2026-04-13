@@ -77,11 +77,29 @@ Wave 2 (starts after Wave 1 merges):
   [<id>] <title>
 
 Rationale: Wave 2 serialized because both tickets likely touch <shared area>.
-
-Proceed? [y/N]
 ```
 
-Wait for confirmation before creating anything.
+Then ask for confirmation via `AskUserQuestion`:
+
+```
+AskUserQuestion({
+  questions: [{
+    question: "Proceed with this wave plan?",
+    header: "Fix tickets",
+    multiSelect: false,
+    options: [
+      { label: "Proceed (Recommended)",
+        description: "Create the fix-batch integration branch and start Wave 1" },
+      { label: "Cancel",
+        description: "Stop now — no branches or worktrees are created" }
+    ]
+  }]
+})
+```
+
+The user can also pick "Other" to request a different wave grouping or
+other adjustments before you proceed. Wait for their answer before
+creating anything.
 
 ## Phase 2 — Create team infrastructure
 

@@ -53,11 +53,28 @@ Ready tickets:
 Blocked tickets:
   [<id>] <title> (blocked by: <dep-ids>)
   ...
-
-Proceed with team execution? [y/N]
 ```
 
-Wait for confirmation before creating the team.
+Then ask for confirmation via `AskUserQuestion`:
+
+```
+AskUserQuestion({
+  questions: [{
+    question: "Proceed with team execution for this epic?",
+    header: "Run epic",
+    multiSelect: false,
+    options: [
+      { label: "Proceed (Recommended)",
+        description: "Create the agent team and start executing ready tickets" },
+      { label: "Cancel",
+        description: "Stop now — no team is created, no tickets are claimed" }
+    ]
+  }]
+})
+```
+
+The user can also pick "Other" to request plan adjustments before you
+proceed. Wait for their answer before creating the team.
 
 ## Phase 1 -- Create the agent team
 
