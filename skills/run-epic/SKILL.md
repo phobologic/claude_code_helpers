@@ -333,6 +333,24 @@ received it, e.g. `[14:32:05] implementer-2: DONE TK-12 feat/TK-12`. Update
 that agent's "Last heard" cell to the same timestamp. This makes silent
 stalls visible at a glance.
 
+**Idle-after-STATUS is a stall, not a completion.** Implementers send STATUS
+mid-ticket (after reading the ticket, after implementation). `SendMessage` ends
+the sender's turn, so an implementer that sends STATUS and then goes idle has
+*not* finished its ticket — it has cleanly ended its turn waiting for
+acknowledgement. Treat this as an immediate nudge condition, not a normal post-
+turn state:
+
+- Track the last message type received from each implementer (`STATUS` vs
+  `DONE` vs `BLOCKED`).
+- If an implementer goes idle and its last message was `STATUS` (or you have
+  dispatched a ticket to it but have never received `DONE` for that ticket),
+  immediately `SendMessage` it with `continue working on <ticket-id>`. Do not
+  wait for the 5-minute heartbeat sweep below — that cadence is for silent
+  death, not for this case.
+- Only treat idle as "ready for next assignment" when the last message from
+  that implementer was `DONE <ticket-id>` (or it has never been dispatched a
+  ticket since spawn).
+
 **Heartbeat cadence.** Don't passively wait forever — agents can die silently
 (PostToolUse hook block, stuck shell command, orphaned confirmation prompt).
 
