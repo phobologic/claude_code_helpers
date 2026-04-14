@@ -45,17 +45,99 @@ tk triage --json --full [same filters]
 This returns structured JSON including the full ticket body — use it when you need to
 reason about ticket content, not just metadata.
 
-## Phase 3 — Present and analyze
+## Phase 3 — Present
 
-After getting the list:
+Render results in a consistent layout. Scale the layout to the size of the
+result set — a 3-ticket triage doesn't need a cross-tab.
 
-1. **Display** the table output directly to the user
-2. **Analyze** each ticket if asked (relevance, whether to close, priority agreement)
-3. For each ticket, consider:
-   - Is the title/description still relevant given current project state?
-   - Does the confidence level match the evidence in the body?
-   - Are there duplicates or superseded tickets?
-   - Should priority be adjusted?
+### Standard layout
+
+```
+Epic: [<id>] <title>              (or "All open tickets" if no --epic filter)
+
+Count by priority × type:
+           bug  task  feat  chore  epic  │ total
+  P0         2     0     0      0     0  │    2
+  P1         1     3     1      0     0  │    5
+  ...
+
+Signals:
+  - N tickets total, X blocked by deps, Y blocking others
+  - Oldest: <date> (<age>d) — [<id>] <title>
+  - Z tickets missing Acceptance Criteria: [<id>], [<id>]
+
+Tickets:
+  [id]  pri  type  age   title
+  ...
+```
+
+**Rules:**
+
+- **Cross-tab**: only render when ≥5 tickets AND the results vary on both
+  axes. If all tickets share a priority or a type, drop the cross-tab and
+  use a one-line count.
+- **Signals**: always include. Compute from the result set — blocked = has
+  an open dep; blocking = is a dep of another open ticket; missing-AC = body
+  has no `## Acceptance Criteria` section.
+- **Detail table**: show up to `--limit` rows (default 20). If truncated,
+  print the total and suggest raising `--limit`.
+- **Confidence column**: include only when sorting by confidence or when
+  the user asked about it. Otherwise it's noise.
+
+### Multi-epic results
+
+When results span ≥2 epics (no `--epic` filter, or the filter matched a
+parent with sub-epics), render **one section per epic** using the standard
+layout above, preceded by a roll-up.
+
+### Hierarchical epics (e.g. /spec top → phase sub-epics)
+
+`tk triage --epic ID` only returns direct children. If any result row has
+`type=epic`, treat those as sub-epics and **auto-expand one level**: run
+`tk triage --epic <sub-epic>` for each and render nested.
+
+```
+Epic: [TOP] <title>
+
+Roll-up (all descendants):
+  N tickets, X blocked, Y missing ACs, oldest <age>d
+
+By phase:
+  Phase              tickets  P0  P1  P2  bugs  tasks  blocked
+  [P1] <name>          5       0   2   3     1      4        0
+  [P2] <name>          8       1   3   4     2      6        2
+  ...
+
+[P1] <name>
+  <standard layout>
+
+[P2] <name>
+  <standard layout>
+```
+
+**Rules for hierarchy:**
+
+- **Recurse one level only.** For deeper nesting (sub-sub-epics), print a
+  one-liner pointing at the drill-in command rather than silently expanding:
+  `[P2] contains sub-epic [X] — run `tk triage --epic X` to drill in`.
+- **Empty phases collapse** to a one-liner: `[P1] <name> — all closed`.
+- **Filter + hierarchy interaction**: if the user combined `--epic TOP`
+  with a type filter (e.g., `--type bug`), the phase-epic rows get filtered
+  out and you lose the structure. Query the hierarchy first *without* the
+  type filter to learn the sub-epic IDs, then apply the type filter per
+  phase so grouping survives.
+- **Roll-up row** sums across all expanded phases — keep the totals honest.
+
+## Phase 4 — Analyze (when asked)
+
+If the user asks for analysis, go ticket-by-ticket and consider:
+- Is the title/description still relevant given current project state?
+- Does the confidence level match the evidence in the body?
+- Are there duplicates or superseded tickets?
+- Should priority be adjusted?
+
+Don't volunteer analysis on every triage — the layout above is the default
+response; analysis is opt-in.
 
 ## Flag reference
 
