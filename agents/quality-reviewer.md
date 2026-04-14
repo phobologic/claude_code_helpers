@@ -105,11 +105,16 @@ anticipated. Typical examples:
 - All Low-severity findings (nits, style, naming) -- defer as tickets
   regardless of location
 
-Only create tickets for Bucket B. Format:
+Only create tickets for Bucket B. If the team lead's routing message
+includes a `Findings parent: <epic-id>` line, pass that epic to
+`tk create` via `--parent <epic-id>` so findings roll up under the batch
+or run epic automatically. Without it, findings become orphans the user
+has to clean up by hand.
 
 ```bash
 tk create "<concise issue title>" \
   -p <priority> \
+  --parent <findings-parent-epic-id> \
   --tags code-review,quality \
   -d "**File**: <path>
 **Line(s)**: <lines>

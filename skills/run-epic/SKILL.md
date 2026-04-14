@@ -39,6 +39,28 @@ tk start <ticket-id>
 # repeat for each non-closed child ticket
 ```
 
+### Findings parent epic
+
+Establish a `FINDINGS_PARENT` epic ID that every out-of-scope finding ticket
+(created by the quality reviewer or by the team lead from an OUT_OF_SCOPE
+pushback) will be parented to. Without this, findings get created as orphans
+and have to be re-parented by hand after the run.
+
+Findings belong one level *above* the epic being run so they're visible
+alongside the epic itself in `tk epic-status`:
+
+- Read the epic you're executing with `tk show <epic-id>` and inspect its
+  `.parent` field.
+- **If the epic has a parent:** `FINDINGS_PARENT = <epic's parent>`. Findings
+  roll up under the same grandparent the phase epic belongs to.
+- **If the epic is top-level (no parent):** `FINDINGS_PARENT = <epic-id>`
+  itself. Findings become siblings of the epic's implementation tickets.
+  This keeps everything under one rollup rather than creating orphans or
+  a synthetic sibling epic.
+
+Record `FINDINGS_PARENT` — you'll pass it to every quality reviewer routing
+message so finding tickets land under it automatically.
+
 Present a summary to the user:
 
 ```
@@ -446,7 +468,10 @@ The implementer will send you a message with the ticket ID and branch name.
      have passed AC verification. Diff the ticket's own changes only
      (not prior wave changes already merged to the integration branch)
      with: git diff epic/<epic-id>...<branch-name>
-     Parent epic for any finding tickets: <epic-id>"
+
+     Findings parent: <FINDINGS_PARENT>. Any ticket you create (out-of-scope
+     findings and Lows) must be created with `--parent <FINDINGS_PARENT>`
+     so findings roll up under the right epic."
    })
    ```
 
@@ -555,9 +580,9 @@ to the implementer with the OUT_OF_SCOPE escape hatch:
 2. When the implementer replies:
    - For each `OUT_OF_SCOPE <n>: <reason>` line, create a new tk ticket using
      the same format the quality-reviewer would have (title from the finding,
-     priority by severity, body with file/line/description, parent epic
-     `<epic-id>`). Note these tickets on the implementation ticket and remove
-     them from the blocking set.
+     priority by severity, body with file/line/description), and parent it to
+     `FINDINGS_PARENT`: `tk create ... --parent <FINDINGS_PARENT>`. Note these
+     tickets on the implementation ticket and remove them from the blocking set.
    - When the implementer signals DONE again, restart the full validation
      cycle from AC verification.
 

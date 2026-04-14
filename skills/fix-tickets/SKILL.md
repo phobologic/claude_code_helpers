@@ -43,6 +43,41 @@ tk start <ticket-id>
 # repeat for each ticket
 ```
 
+### Findings parent epic
+
+Establish a `FINDINGS_PARENT` epic ID that every finding ticket created by
+the quality reviewer (out-of-scope findings + Lows) will be parented to.
+Without this, findings get created as orphans and have to be re-parented by
+hand after the run.
+
+Inspect the `.parent` field of every input ticket and pick the rule that
+applies:
+
+- **All input tickets share the same non-empty parent** (covers both "user
+  passed an epic ID" and "user passed a filtered subset of one epic's
+  children", e.g. 'all P2s in epic pbp-XXXX plus P3 bugs in that same
+  epic'): reuse it. `FINDINGS_PARENT = <that shared parent id>`. No new
+  epic is created.
+
+- **Input tickets have mixed or no parents:** create a fresh batch epic to
+  catch findings. Do NOT re-parent the input tickets — they may already
+  belong to real epics and overwriting those parents would lose meaningful
+  grouping:
+  ```bash
+  STAMP=$(date +%Y%m%d-%H%M%S)
+  FINDINGS_PARENT=$(tk create "Fix batch $STAMP" -t epic -p 2 \
+    -d "Findings from /fix-tickets run over <N> tickets: <input-ticket-ids>")
+  ```
+
+Tell the user which branch you took in one line:
+
+```
+Findings parent: <FINDINGS_PARENT> (<reused existing epic | created fresh batch epic>)
+```
+
+Record `FINDINGS_PARENT` — you'll pass it to every quality reviewer routing
+message so finding tickets land under it automatically.
+
 ## Phase 1 — Plan waves
 
 Read every ticket's title, description, and notes. Reason about which tickets
@@ -165,8 +200,9 @@ Agent({
   3. Triage findings per your agent instructions:
      - Inline-fixable (Critical/High/Medium scoped to files the ticket touched)
        → list inline in the REWORK verdict; do NOT create tickets for these
-     - Out-of-scope findings and all Lows → create tk tickets (standalone, no
-       parent required)
+     - Out-of-scope findings and all Lows → create tk tickets with
+       `--parent <findings-parent>` (the team lead will pass the parent epic
+       ID in every routing message)
   4. Report back to the team lead with one of three verdicts:
      - CLEAN — no blocking issues (Lows may still have been ticketed)
      - REWORK — numbered inline list of findings for same-run rework
@@ -407,7 +443,10 @@ SendMessage({
 
   Return one of three verdicts per your agent instructions: CLEAN, REWORK, or
   FINDINGS. Inline-fixable issues (Critical/High/Medium in files the ticket
-  already touches) must go in REWORK -- do not create tickets for those."
+  already touches) must go in REWORK -- do not create tickets for those.
+
+  For any ticket you DO create (out-of-scope findings and Lows), use
+  `--parent <FINDINGS_PARENT>` so findings roll up under the batch epic."
 })
 ```
 
@@ -487,7 +526,8 @@ When the implementer replies:
 
 - For each `OUT_OF_SCOPE <n>: <reason>` line, create a new tk ticket using
   the same format the quality-reviewer would have used (title from the
-  finding, priority by severity, body with file/line/description/reason).
+  finding, priority by severity, body with file/line/description/reason),
+  and parent it to the batch epic: `tk create ... --parent <FINDINGS_PARENT>`.
   Note these tickets in the source ticket's notes and remove them from the
   blocking set.
 - If the implementer then signals `DONE <ticket-id> fix/<ticket-id>`, re-route
