@@ -162,11 +162,15 @@ Agent({
 
   1. Read `tk show <ticket-id>` to understand what was being fixed
   2. Read the diff on the branch provided
-  3. Create tk tickets for any Critical, High, or Medium findings (standalone, no
-     parent required)
-  4. Report back to the team lead with one of:
-     - CLEAN — no critical or high findings (note any medium/low ticket IDs created)
-     - FINDINGS — list each critical/high finding ticket ID and its title
+  3. Triage findings per your agent instructions:
+     - Inline-fixable (Critical/High/Medium scoped to files the ticket touched)
+       → list inline in the REWORK verdict; do NOT create tickets for these
+     - Out-of-scope findings and all Lows → create tk tickets (standalone, no
+       parent required)
+  4. Report back to the team lead with one of three verdicts:
+     - CLEAN — no blocking issues (Lows may still have been ticketed)
+     - REWORK — numbered inline list of findings for same-run rework
+     - FINDINGS — all blockers were out-of-scope; list the ticketed IDs
 
   Process tickets in the order received. Do not start the next review until you have
   reported results for the current one. When you receive a message containing
@@ -399,9 +403,21 @@ SendMessage({
   content: "Review <ticket-id> on branch <branch-name>. Run `tk show <ticket-id>`
   for context on what was being fixed. Diff the ticket's own changes only
   (not wave N-1 changes already merged to the integration branch) with:
-  git diff fix/batch-<stamp>...<branch-name>"
+  git diff fix/batch-<stamp>...<branch-name>
+
+  Return one of three verdicts per your agent instructions: CLEAN, REWORK, or
+  FINDINGS. Inline-fixable issues (Critical/High/Medium in files the ticket
+  already touches) must go in REWORK -- do not create tickets for those."
 })
 ```
+
+The reviewer's verdict will be one of three keywords. Route based on the
+keyword in the first line of the reply:
+
+- **CLEAN** — merge and close (no blocking issues).
+- **REWORK** — send findings back to the implementer for same-run fixes.
+- **FINDINGS** — every blocker was out-of-scope and has been pre-ticketed;
+  merge and close, logging the new ticket IDs.
 
 ---
 
@@ -442,30 +458,61 @@ SendMessage({
 
 ---
 
-**When quality reviewer returns FINDINGS (critical or high):**
+**When quality reviewer returns REWORK:**
 
-Forward to the implementer:
+This is the common case when the reviewer finds inline-fixable issues
+(Critical, High, or Medium) scoped to files the ticket already touches. No
+tickets have been created yet -- the reviewer listed the findings inline in
+its verdict message. Forward them verbatim to the implementer and give it
+the OUT_OF_SCOPE escape hatch:
+
 ```
 SendMessage({
   recipient: "<implementer-name>",
-  content: "Quality review found issues in <ticket-id> that must be fixed:
+  content: "Quality review returned REWORK for <ticket-id>. Fix these in
+  fix/<ticket-id> and signal DONE again:
 
-  Critical/High (blocking):
-  - [<finding-id>] <title>
-  - [<finding-id>] <title>
+  <paste the numbered finding list from the reviewer's REWORK message verbatim>
 
-  Run `tk show <finding-id>` for details. Fix the issues, recommit to
-  fix/<ticket-id>, and signal DONE again. This will go through quality review again."
+  If you believe any individual finding is genuinely out of scope for this
+  ticket (requires touching unrelated files, or is about code the ticket
+  never modified), reply with one line per such finding:
+    OUT_OF_SCOPE <n>: <one-sentence reason>
+  and I will convert those to new tickets instead of blocking the merge.
+  Fix every finding you do not push back on before signaling DONE."
 })
 ```
 
-Once the implementer signals DONE again, re-route to quality reviewer (restarting
-the review cycle). When the ticket eventually passes and merges, close any
-critical/high finding tickets that were resolved:
-```bash
-tk close <finding-id>
-tk add-note <finding-id> "Fixed as part of <ticket-id>"
-```
+When the implementer replies:
+
+- For each `OUT_OF_SCOPE <n>: <reason>` line, create a new tk ticket using
+  the same format the quality-reviewer would have used (title from the
+  finding, priority by severity, body with file/line/description/reason).
+  Note these tickets in the source ticket's notes and remove them from the
+  blocking set.
+- If the implementer then signals `DONE <ticket-id> fix/<ticket-id>`, re-route
+  to a quality reviewer (load-balance across reviewers as before). This
+  restarts the review cycle for that ticket.
+- If the implementer pushes back on *every* finding as OUT_OF_SCOPE without
+  recommitting, treat the reply as equivalent to DONE with no changes --
+  ticket all the findings, route to the reviewer, and let the reviewer
+  decide. In practice this should almost never happen.
+
+Count each REWORK cycle toward the 3-strike limit (see below).
+
+---
+
+**When quality reviewer returns FINDINGS:**
+
+This means every blocking finding was genuinely out of scope and the
+reviewer has already created tickets for them. It does NOT block merge.
+
+1. Log the ticket IDs against the source ticket's notes:
+   ```bash
+   tk add-note <ticket-id> "Quality review: out-of-scope findings ticketed: \
+   <finding-ids>"
+   ```
+2. Proceed to merge exactly as for CLEAN (see above).
 
 ---
 
@@ -484,15 +531,17 @@ SendMessage({
 
 ---
 
-**If a ticket fails quality review 3+ times:**
+**If a ticket returns REWORK 3+ times:**
 
-Escalate to the user rather than looping indefinitely:
+Count every REWORK cycle on the same ticket. After 3 REWORK verdicts,
+escalate to the user rather than looping indefinitely:
 
-> `<ticket-id>` has failed quality review 3 times. The implementer may be stuck
-> or the finding may be ambiguous. Options:
-> 1. Review the finding tickets and provide guidance
+> `<ticket-id>` has returned REWORK from quality review 3 times. The
+> implementer may be stuck or the findings may be ambiguous. Options:
+> 1. Review the inline findings and provide guidance
 > 2. Skip this ticket and leave it open
 > 3. Reassign to a fresh implementer context
+> 4. Convert the remaining findings to new tickets and merge anyway
 
 ### Step 3.3: Wave boundary
 

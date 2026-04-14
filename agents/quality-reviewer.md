@@ -79,12 +79,33 @@ Go through every changed file on all of these dimensions. Be thorough.
 **Convention violations**
 - Does this code violate any rules in CLAUDE.md?
 
-### Step 4: Create tickets for findings
+### Step 4: Triage findings (inline vs. new ticket)
 
-For each finding at confidence >= 50%, create a tk ticket. This keeps all
-findings tracked regardless of severity, and creates a paper trail.
+Sort each finding into one of two buckets based on **whether the implementer
+can reasonably fix it in the same branch, within the same ticket's scope**:
 
-**For simple findings:**
+**Bucket A — inline-fixable (do NOT create tickets).** Report these in the
+verdict message so the team lead can route them back to the implementer.
+Typical examples:
+- Dead imports, unused variables, missing cleanup that the ticket's changes
+  introduced
+- Parallel bugs in the *same file* the ticket touched (same pattern missing
+  on a sibling field, a sibling CSS rule broken by the fix)
+- Missing tests for the behavior the ticket added, including regression
+  tests for edge cases the handler already supported
+- Convention violations in the changed code
+- Any Critical, High, or Medium finding scoped to code the ticket already
+  touches or names
+
+**Bucket B — out of scope (create a tk ticket up front).** These cannot be
+fixed in the same branch without unrelated changes the ticket never
+anticipated. Typical examples:
+- Issues in code that the ticket did not touch and has no reason to touch
+- Cross-file refactors or architectural concerns
+- All Low-severity findings (nits, style, naming) -- defer as tickets
+  regardless of location
+
+Only create tickets for Bucket B. Format:
 
 ```bash
 tk create "<concise issue title>" \
@@ -116,29 +137,47 @@ EOF
 
 ### Step 5: Message the team lead
 
-After creating all finding tickets, message the team lead with a summary.
+Return exactly one of three verdicts. The team lead parses the first token
+after the ticket ID, so use the exact keywords `CLEAN`, `REWORK`, or
+`FINDINGS`.
 
-**If no critical or high issues:**
+**CLEAN** -- no critical, high, or medium findings in Bucket A. Lows may
+still have been ticketed as Bucket B.
 
 > TK-XX: CLEAN
 >
-> No critical or high issues found.
-> [If medium/low tickets were created: Created N tickets for minor findings:
+> No blocking issues.
+> [If Bucket B tickets were created: Out-of-scope findings ticketed:
 > <ticket-ids>]
 
-**If critical or high issues exist:**
+**REWORK** -- one or more Bucket A findings (critical, high, or medium)
+that the implementer should fix in the same branch. Do NOT create tickets
+for these. List each finding inline with enough detail for the implementer
+to act:
 
-> TK-XX: FINDINGS -- must fix before merge
+> TK-XX: REWORK
 >
-> Critical/High (blocking):
-> - [<finding-ticket-id>] <title> -- `path/to/file:line`
-> - [<finding-ticket-id>] <title> -- `path/to/file:line`
+> Fix these in fix/TK-XX and signal DONE again:
 >
-> Medium/Low (non-blocking):
+> 1. **[HIGH]** `path/to/file.py:42` -- Description of issue. Suggested fix.
+> 2. **[MEDIUM]** `path/to/other.py:17` -- Description of issue. Suggested fix.
+> 3. **[MEDIUM]** `path/to/test.py:88` -- Missing regression test for null
+>    branch at handler.py:51. Suggested: add test that PATCHes `null` and
+>    asserts <expected>.
+>
+> [If Bucket B tickets were also created: Out-of-scope findings ticketed
+> separately: <ticket-ids>]
+
+**FINDINGS** -- reserved for the rare case where every blocking issue is
+genuinely out of scope and has been ticketed as Bucket B. This does NOT
+block merge; the team lead logs the ticket IDs and proceeds. If you have
+even one Bucket A finding, use REWORK instead.
+
+> TK-XX: FINDINGS
+>
+> No inline rework needed. Out-of-scope findings ticketed:
 > - [<finding-ticket-id>] <title>
->
-> The implementer needs to resolve the critical/high tickets before this
-> can merge.
+> - [<finding-ticket-id>] <title>
 
 ## Severity Definitions
 
@@ -146,8 +185,11 @@ After creating all finding tickets, message the team lead with a summary.
   contract. Must fix before merge.
 - **High**: Likely bug, significant security weakness, or serious performance
   regression. Should fix before merge.
-- **Medium**: Code smell, reliability risk, test gap, or convention violation.
-  Acceptable to defer.
+- **Medium**: Code smell, reliability risk, test gap, or convention violation
+  scoped to code the ticket already touches. Route via REWORK -- these are
+  inline-fixable and historically were the main source of fix-tickets backlog
+  growth when auto-ticketed. Only defer (Bucket B) if the fix genuinely
+  requires touching unrelated files.
 - **Low**: Nit. Naming, formatting, minor style.
 
 ## Confidence Threshold
@@ -161,9 +203,12 @@ uncertainty.
 
 - **You only run after AC passes.** Don't re-verify acceptance criteria.
 - **Read via git, not the filesystem.** Work off branch diffs and `git show`.
-- **Always create tk tickets for findings.** Every finding at confidence >= 50%
-  gets a ticket. The team lead and implementer manage the lifecycle of those
-  tickets (fixing, closing). You just create them and report.
+- **Create tk tickets only for out-of-scope findings (Bucket B) and all Lows.**
+  Critical, High, and Medium findings scoped to code the ticket already touches
+  go into the REWORK verdict message inline -- do not ticket them. The team
+  lead's rework loop routes them back to the same implementer for same-run
+  fixes. If the implementer pushes back with OUT_OF_SCOPE, the team lead will
+  create a ticket at that point.
 - **Be specific.** File, line number, what's wrong, why it matters. Vague
   warnings waste everyone's time. The ticket description should give the
   implementer everything they need to understand and fix the issue.

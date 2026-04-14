@@ -230,6 +230,20 @@ Agent({
 Agent({
   prompt: "You are the quality reviewer on a team. Wait for the team lead
   to send you tickets to review. Do not claim tasks from the task list.
+
+  For each ticket routed:
+  1. Read `tk show <ticket-id>` to understand what was being fixed
+  2. Read the diff on the branch provided
+  3. Triage findings per your agent instructions:
+     - Inline-fixable (Critical/High/Medium scoped to files the ticket touched)
+       → list inline in the REWORK verdict; do NOT create tickets for these
+     - Out-of-scope findings and all Lows → create tk tickets with the
+       parent epic ID the team lead provides
+  4. Return one of three verdicts to the team lead:
+     - CLEAN — no blocking issues (Lows may still have been ticketed)
+     - REWORK — numbered inline list of findings for same-run rework
+     - FINDINGS — all blockers were out-of-scope; list the ticketed IDs
+
   When you receive a message containing 'type: shutdown_request', reply with SHUTDOWN_ACK quality-reviewer then stop.",
   subagent_type: "quality-reviewer",
   team_name: "epic-<epic-id>",
@@ -436,7 +450,9 @@ The implementer will send you a message with the ticket ID and branch name.
    })
    ```
 
-2. Wait for the quality reviewer's response.
+2. Wait for the quality reviewer's response. The reviewer returns one of
+   three verdicts: `CLEAN`, `REWORK`, or `FINDINGS`. Route based on which
+   keyword appears in the first line.
 
 ### When the AC verifier returns FAIL:
 
@@ -511,37 +527,54 @@ medium/low finding tickets -- these are tracked but non-blocking.
    If `current_wave` is now empty and all agents are idle, proceed to
    "When the wave is complete" below.
 
-### When the quality reviewer returns FINDINGS with critical or high tickets:
+### When the quality reviewer returns REWORK:
 
-The quality reviewer has already created tk tickets for each finding. You
-receive the ticket IDs and their severities.
+The reviewer has found inline-fixable issues (Critical, High, or Medium)
+scoped to files the ticket already touched. No tickets have been created --
+the findings are listed inline in the verdict message. Forward them verbatim
+to the implementer with the OUT_OF_SCOPE escape hatch:
 
-1. Forward the critical/high finding ticket IDs to the implementer:
+1. Forward the inline findings:
    ```
    SendMessage({
      recipient: "<implementer-name>",
-     content: "Quality review found issues that must be fixed before
-     <ticket-id> can merge:
+     content: "Quality review returned REWORK for <ticket-id>. Fix these in
+     your branch and signal DONE again:
 
-     Critical/High (must fix):
-     - [<finding-id>] <title>
-     - [<finding-id>] <title>
+     <paste the numbered finding list from the reviewer's REWORK message verbatim>
 
-     Run `tk show <finding-id>` for details on each. Address these
-     issues, recommit, and let me know when ready. This will go
-     through the full validation cycle again (AC first, then quality)."
+     If you believe any individual finding is genuinely out of scope (would
+     require touching files the ticket never named), reply with one line per
+     such finding:
+       OUT_OF_SCOPE <n>: <one-sentence reason>
+     and I will convert those to new tickets instead of blocking the merge.
+     Fix every finding you do not push back on before signaling DONE."
    })
    ```
 
-2. The implementer will fix and signal "done" again, restarting the full cycle
-   from AC verification.
+2. When the implementer replies:
+   - For each `OUT_OF_SCOPE <n>: <reason>` line, create a new tk ticket using
+     the same format the quality-reviewer would have (title from the finding,
+     priority by severity, body with file/line/description, parent epic
+     `<epic-id>`). Note these tickets on the implementation ticket and remove
+     them from the blocking set.
+   - When the implementer signals DONE again, restart the full validation
+     cycle from AC verification.
 
-3. When the implementation ticket eventually passes validation and closes,
-   also close the critical/high finding tickets that were addressed:
+3. Count each REWORK cycle on the same ticket. After 3 REWORK verdicts,
+   escalate to the user (see "Ticket stuck in rework loop" in Edge Cases).
+
+### When the quality reviewer returns FINDINGS:
+
+This is the narrow case where every blocking finding was genuinely out of
+scope and has already been ticketed by the reviewer. It does NOT block merge.
+
+1. Note the finding ticket IDs on the implementation ticket:
    ```bash
-   tk close <finding-id>
-   tk add-note <finding-id> "Fixed in <ticket-id>"
+   tk add-note <ticket-id> "Quality review: out-of-scope findings ticketed: \
+   <finding-ids>"
    ```
+2. Proceed to merge exactly as for CLEAN (see above).
 
 ### When the wave is complete
 

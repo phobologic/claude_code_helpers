@@ -50,6 +50,41 @@ code, do a brief design pass:
    decisions. Do not block on minor ambiguities -- make a reasonable choice
    and note it in your commit message.
 
+## Before editing
+
+Run these probes *before* writing code. Briefly note what you found in your
+STATUS message to the team lead -- "read file, grepped for X, found N matches,
+plan to fix all in one commit" -- so the team lead can see you actually looked.
+Skipping this step is the number-one reason tickets come back from review.
+
+1. **Read the referenced file(s) in full.** Not just the lines the ticket
+   cites. Tickets describe symptoms; the surrounding code is where the bug
+   class lives and where siblings with the same bug hide.
+
+2. **Grep for the same pattern/bug class.** If the ticket says "missing
+   `ge=0` on field X", grep the file (and obvious neighbors) for every field
+   of the same shape and check each. If any match the same bug, fix them in
+   the same commit. If there are many and you're unsure whether to expand
+   scope, list them in your DONE message and ask the team lead.
+
+3. **Sibling-impact check for structural changes.**
+   - If removing or changing a CSS property, layout rule, or shared utility
+     on a parent element: enumerate every child/caller that depends on that
+     property and verify each. Example: removing `overflow: hidden` on a
+     container means every child with `border-radius`, `background`, or
+     absolute positioning needs checking.
+   - If adding new state (timer, subscription, listener, file handle, ref):
+     find the existing cleanup block in the same file (`onDestroy`,
+     `useEffect` return, `defer`, `__del__`, context manager, etc.) and
+     plug the new state into it in the same commit. Sibling state right
+     next to your new state almost always has cleanup already -- match it.
+
+4. **Test-surface check.** Before writing the test, identify which edge
+   cases the *pre-existing* code handles (null, empty, boundary, the
+   `if x is not None` branch you didn't touch). The new test must exercise
+   at least one failure mode, not just the happy path. A test that only
+   asserts the success case masks pre-existing bugs in the same handler.
+
 ## Implementation
 
 1. Run `tk start <ticket-id>` to mark the ticket as in-progress
@@ -80,10 +115,23 @@ Run `tk show <ticket-id>` and read the most recent AC VERIFICATION note for
 specifics on which criteria were not met and what needs to change. Address the
 gaps, make sure tests still pass, commit, and signal completion again.
 
-**Quality review findings.** You'll get a list of finding ticket IDs. Run
-`tk show <finding-id>` to read the details of each issue. Address critical and
-high findings. For medium/low, the team lead will tell you whether to fix now
-or move on. After fixes, recommit and signal completion again.
+**Quality review REWORK.** The team lead will forward a numbered list of
+inline findings (file, line, description, suggested fix). No ticket IDs --
+the findings are described directly in the message. Fix each one in the same
+branch and signal completion again. If you genuinely believe a specific
+finding is out of scope for this ticket (it would require touching files the
+ticket never named, or is about code the ticket never modified), reply with
+one line per such finding:
+
+> OUT_OF_SCOPE <n>: <one-sentence reason>
+
+The team lead will convert those to new tickets instead of blocking the
+merge. Fix every finding you do not push back on before signaling DONE.
+
+**Quality review FINDINGS with ticket IDs.** Some teams (e.g. `/run-epic`)
+still ticket critical/high findings up front. If you receive a list of
+finding ticket IDs instead of inline findings, run `tk show <finding-id>`
+for each, fix them, recommit, and signal completion again.
 
 **Ticket approved.** The team lead has closed the ticket and merged your branch.
 You're free to claim the next available task.
@@ -112,3 +160,10 @@ You're free to claim the next available task.
   working on nearby code. If you discover something that needs fixing outside
   your scope, note it in your commit message or tell the team lead, but don't
   fix it yourself.
+- **Fix the bug class, not just the line cited.** Ticket descriptions point at
+  one symptom. If the same pattern exists elsewhere in the *same file you
+  touched*, either fix it in the same commit or flag it explicitly in your
+  DONE message. Shipping a narrow fix that leaves siblings broken is the
+  number-one reason tickets come back from review. "Scope" for this rule
+  means the file(s) the ticket already names -- you're not expanding into
+  new files, you're finishing the job in the ones you're already editing.
