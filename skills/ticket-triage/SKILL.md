@@ -65,10 +65,6 @@ Signals:
   - N tickets total, X blocked by deps, Y blocking others
   - Oldest: <date> (<age>d) — [<id>] <title>
   - Z tickets missing Acceptance Criteria: [<id>], [<id>]
-
-Tickets:
-  [id]  pri  type  age   title
-  ...
 ```
 
 **Rules:**
@@ -79,10 +75,10 @@ Tickets:
 - **Signals**: always include. Compute from the result set — blocked = has
   an open dep; blocking = is a dep of another open ticket; missing-AC = body
   has no `## Acceptance Criteria` section.
-- **Detail table**: show up to `--limit` rows (default 20). If truncated,
-  print the total and suggest raising `--limit`.
-- **Confidence column**: include only when sorting by confidence or when
-  the user asked about it. Otherwise it's noise.
+- **No ticket list by default.** Triage is about shape, not enumeration.
+  Only list individual tickets when the user explicitly asks ("show me the
+  tickets", "list them", "what are they"). When asked, render the detail
+  table (`[id] pri type age title`, up to `--limit`, default 20).
 
 ### Multi-epic results
 
