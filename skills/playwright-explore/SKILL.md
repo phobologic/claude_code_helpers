@@ -16,6 +16,11 @@ web app using a team of simulated users. You never use the browser yourself —
 your job is to spawn agents, relay coordination messages, receive findings, and
 create tk tickets from what the testers discover.
 
+This skill uses `playwright-cli` (disk-backed, ~4x more token-efficient than
+Playwright MCP). If `playwright-mcp` is connected in the current session, its
+tool schemas cost tokens on every turn even when unused — ask the user to
+disconnect it with `/mcp` before confirming the plan.
+
 ## Phase 0 — Parse arguments and confirm
 
 Parse `$ARGUMENTS` in this order:
@@ -104,44 +109,90 @@ Note the `team_name` — pass it to every Agent call.
 
 ## Phase 3 — Spawn the testers
 
-Spawn all agents in parallel. Each uses **sonnet** model. Construct each
-agent's prompt from the role name, the role's position (initiator vs. joiner),
-and the scenario.
+Each agent prompt is assembled from two parts:
 
-### Initiator agent (first role)
+1. The **shared agent prompt** below (identical for every role, with `<role>`
+   and `<url>` substituted).
+2. A small **role delta** — initiator vs. joiner — inserted under the
+   `## Scenario` section.
+
+Spawn all roles in parallel (single message, multiple `Agent` tool calls).
+Each uses **sonnet**. After assembly, call:
 
 ```
 Agent({
-  prompt: "
-You are <role-1>, a QA agent exploring a live web app at <url>.
+  prompt: "<assembled prompt>",
+  subagent_type: "general-purpose",
+  model: "sonnet",
+  team_name: "<team_name>",
+  name: "<role>",
+  run_in_background: true
+})
+```
+
+### Shared agent prompt
+
+```
+You are <role>, a QA agent exploring a live web app at <url>.
 
 ## Your job
-You are the session initiator. Use playwright-cli to control a browser.
-Log in or create an account using realistic test credentials for your role
-(e.g. <role-1>@test.com / password123, or register if needed).
+Use playwright-cli to control a browser. Log in or create an account using
+realistic test credentials (e.g. <role>@test.com / password123, or register
+if needed).
 
 ## Playwright CLI usage
-Always pass `-s=<role-1>` on every playwright-cli command. Without it, all
-agents share the same browser session and will clobber each other's logins.
 
-  playwright-cli -s=<role-1> open <url>
-  playwright-cli -s=<role-1> snapshot
-  playwright-cli -s=<role-1> click <ref>
-  playwright-cli -s=<role-1> fill <ref> <value>
-  playwright-cli -s=<role-1> goto <url>
+Always pass `-s=<role>` on every playwright-cli command. Without it, all
+agents share the same browser session and clobber each other's logins.
+
+  playwright-cli -s=<role> open <url>
+  playwright-cli -s=<role> snapshot [--depth=N] [<ref>]
+  playwright-cli -s=<role> click <ref>
+  playwright-cli -s=<role> fill <ref> <value>
+  playwright-cli -s=<role> goto <url>
+  playwright-cli -s=<role> state-save <path>    # persist auth after login
+  playwright-cli -s=<role> state-load <path>    # restore auth on re-run
+
+## Snapshot discipline (critical — this is where token budgets die)
+
+`playwright-cli snapshot` writes a YAML file to `.playwright-cli/` and prints
+a short summary with element refs like `e21`, `e35`. **Work from the stdout
+summary. Do NOT `Read` the snapshot YAML file** unless a ref lookup actually
+failed — reading it undoes the whole point of playwright-cli and costs
+thousands of tokens per call.
+
+Rules:
+- **Default to `--depth=2` or `--depth=3`.** Only go deeper when the shallow
+  tree is missing the element you need.
+- **Scoped re-snapshots.** After interacting with a panel, modal, dropdown,
+  or list item, re-snapshot only that subtree: `snapshot <ref>`. Do not
+  re-snapshot the whole page.
+- **Re-snapshot only after state-changing actions** (click, submit, goto).
+  Refs from the prior snapshot remain valid until something changes — don't
+  snapshot "just to check."
+- **Never `Read` snapshot YAML files.** Treat `.playwright-cli/` as write-only
+  from your side.
+
+## Screenshots
+
+Don't take screenshots unless you're verifying a visual bug. When you must:
+- They land in `.playwright-cli/` as PNG files.
+- **Never `Read` a screenshot** — you don't need to see pixels to file a bug.
+  Cite the file path in your finding and move on.
+
+## Auth persistence
+
+After a successful login, save state so re-runs can skip the login flow:
+  playwright-cli -s=<role> state-save .playwright-cli/<role>-auth.json
+
+At startup, if that file already exists, load it before visiting the app:
+  playwright-cli -s=<role> state-load .playwright-cli/<role>-auth.json
 
 ## Scenario
 
 <scenario>
 
-## Coordination protocol
-You go first. Once you have set up the session and have information the other
-agents need to join or participate (invite links, join codes, session IDs,
-URLs, etc.), send it to each of them:
-  SendMessage({ to: '<role-2>', content: '<the info>' })
-  SendMessage({ to: '<role-3>', content: '<the info>' })
-Wait for them to confirm before continuing steps that require their presence.
-They will message you when they've completed a coordination step.
+<ROLE DELTA — see below>
 
 ## Staying reachable (critical)
 
@@ -154,9 +205,9 @@ The team lead must be able to redirect you at any time. Two hard rules:
 2. **Heartbeat at least once per minute.** If ~60 seconds have passed since
    your last message to the team lead, send a STATUS update before your
    next action, even if nothing notable has happened:
-     SendMessage({ to: 'team-lead', content: 'STATUS <role-1>: <what you are doing now>' })
+     SendMessage({ to: 'team-lead', content: 'STATUS <role>: <what you are doing now>' })
 
-Also send a STATUS after each milestone (logged in, set up the session,
+Also send a STATUS after each milestone (logged in, joined/set up session,
 completed a major flow) — but the two rules above are the floor, not the
 milestones. Going silent for minutes is a bug, not focus.
 
@@ -166,13 +217,14 @@ Deadline: <DEADLINE_TS> (unix epoch) — approximately <DEADLINE_HUMAN>
 At every heartbeat, check the current time before continuing:
   date +%s
 
-- **Within 120 seconds of deadline**: finish your current action, then wrap up —
-  do not start any new major flow.
-- **At or past the deadline**: flush everything and send DONE (see Wrapping up).
+- **Within 120 seconds of deadline**: finish your current action, then wrap
+  up — do not start any new major flow.
+- **At or past the deadline**: flush everything and send DONE (see below).
 
 **Wrapping up when time is up:**
 1. Send any observations you haven't reported yet.
-2. For anything you suspected but didn't have time to verify, send a theory finding:
+2. For anything you suspected but didn't have time to verify, send a theory
+   finding:
    SendMessage({
      to: 'team-lead',
      content: JSON.stringify({
@@ -187,8 +239,8 @@ At every heartbeat, check the current time before continuing:
 
 ## Shutdown
 If you receive a shutdown or TIME_UP message from the team lead, finish your
-current action, flush any unsent findings and theories (using the format above),
-then send DONE immediately. Do not continue to the next step.
+current action, flush any unsent findings and theories (using the format
+above), then send DONE immediately. Do not continue to the next step.
 
 ## Reporting findings
 Whenever you notice something broken, confusing, missing, or worth improving,
@@ -203,141 +255,58 @@ send a structured finding to the team lead:
       tags: ['<tag>', ...]
     })
   })
+
+Keep `description` tight: expected vs. actual plus repro steps. The team lead
+expands it into the ticket — don't write paragraphs.
 
 Send findings as you discover them — don't batch at the end.
-When done, send: SendMessage({ to: 'team-lead', content: 'DONE' })
-  ",
-  subagent_type: "general-purpose",
-  model: "sonnet",
-  team_name: "<team_name>",
-  name: "<role-1>",
-  run_in_background: true
-})
+When done: SendMessage({ to: 'team-lead', content: 'DONE' })
 ```
 
-### Joiner agents (remaining roles)
+### Role delta — initiator (first role only)
 
-Spawn all remaining roles in parallel. The prompt is the same structure with
-the role's position flipped — they wait for the initiator's signal, then
-confirm back.
+Insert under `## Scenario` in the shared prompt when assembling the initiator:
 
 ```
-Agent({
-  prompt: "
-You are <role-N>, a QA agent exploring a live web app at <url>.
+## Coordination protocol (initiator)
+You go first. Once you have set up the session and have information the
+other agents need to join or participate (invite links, join codes, session
+IDs, URLs, etc.), send it to each of them:
+  SendMessage({ to: '<role-2>', content: '<the info>' })
+  SendMessage({ to: '<role-3>', content: '<the info>' })
+Wait for them to confirm before continuing steps that require their presence.
+They will message you when they've completed a coordination step.
+```
 
-## Your job
-Use playwright-cli to control a browser. Log in or create an account using
-realistic test credentials for your role (e.g. <role-N>@test.com / password123,
-or register if needed).
+### Role delta — joiner (remaining roles)
 
-## Playwright CLI usage
-Always pass `-s=<role-N>` on every playwright-cli command. Without it, all
-agents share the same browser session and will clobber each other's logins.
+Insert under `## Scenario` in the shared prompt when assembling each joiner:
 
-  playwright-cli -s=<role-N> open <url>
-  playwright-cli -s=<role-N> snapshot
-  playwright-cli -s=<role-N> click <ref>
-  playwright-cli -s=<role-N> fill <ref> <value>
-  playwright-cli -s=<role-N> goto <url>
-
-## Scenario
-
-<scenario>
-
-## Coordination protocol
+```
+## Coordination protocol (joiner)
 Wait for <role-1> to send you the information you need to join the session
-(invite link, join code, session ID, etc.). Once you have it, use it to join.
-Then confirm back:
-  SendMessage({ to: '<role-1>', content: '<role-N> joined' })
+(invite link, join code, session ID, etc.). Once you have it, use it to join,
+then confirm back:
+  SendMessage({ to: '<role-1>', content: '<role> joined' })
 Then continue exploring from your role's perspective.
-
-## Staying reachable (critical)
-
-The team lead must be able to redirect you at any time. Two hard rules:
-
-1. **Check your inbox before every `playwright-cli` command.** If there is a
-   message from `team-lead`, read it and act on it *before* running the next
-   playwright action. Never run more than one playwright-cli command without
-   first checking for new messages.
-2. **Heartbeat at least once per minute.** If ~60 seconds have passed since
-   your last message to the team lead, send a STATUS update before your
-   next action, even if nothing notable has happened:
-     SendMessage({ to: 'team-lead', content: 'STATUS <role-N>: <what you are doing now>' })
-
-Also send a STATUS after each milestone (joined the session, completed a
-major flow) — but the two rules above are the floor, not the milestones.
-Going silent for minutes is a bug, not focus.
-
-## Time limit
-Deadline: <DEADLINE_TS> (unix epoch) — approximately <DEADLINE_HUMAN>
-
-At every heartbeat, check the current time before continuing:
-  date +%s
-
-- **Within 120 seconds of deadline**: finish your current action, then wrap up —
-  do not start any new major flow.
-- **At or past the deadline**: flush everything and send DONE (see Wrapping up).
-
-**Wrapping up when time is up:**
-1. Send any observations you haven't reported yet.
-2. For anything you suspected but didn't have time to verify, send a theory finding:
-   SendMessage({
-     to: 'team-lead',
-     content: JSON.stringify({
-       title: '<short title>',
-       description: 'Theory — not yet verified: <what you suspect, why, and how you would verify it>',
-       severity: '<your best estimate>',
-       confidence: 0.1-0.3,
-       tags: ['theory', 'unexplored', ...]
-     })
-   })
-3. Send DONE.
-
-## Shutdown
-If you receive a shutdown or TIME_UP message from the team lead, finish your
-current action, flush any unsent findings and theories (using the format above),
-then send DONE immediately. Do not continue to the next step.
-
-## Reporting findings
-Whenever you notice something broken, confusing, missing, or worth improving,
-send a structured finding to the team lead:
-  SendMessage({
-    to: 'team-lead',
-    content: JSON.stringify({
-      title: '<short title>',
-      description: '<what happened, what you expected, steps to reproduce>',
-      severity: 'critical | high | medium | low',
-      confidence: 0.0-1.0,
-      tags: ['<tag>', ...]
-    })
-  })
-
-Send findings as you discover them.
-When done, send: SendMessage({ to: 'team-lead', content: 'DONE' })
-  ",
-  subagent_type: "general-purpose",
-  model: "sonnet",
-  team_name: "<team_name>",
-  name: "<role-N>",
-  run_in_background: true
-})
 ```
 
 ## Phase 4 — Coordination loop
 
 This is your main loop. You receive messages from testers and act on them.
 
+**Maintain a local dedup index.** As you create tickets in this session, keep
+a running in-context list of `{id, title}` for every ticket you've created
+under this epic. Compare incoming findings against this local list — do not
+re-query `tk` for every finding. The local list is always authoritative for
+this session because you are the only creator.
+
 ### When you receive a finding (JSON payload from any tester):
 
-Parse the finding. Before creating a ticket, check whether it duplicates an
-existing one:
+Parse the finding. Compare its `title` (case-insensitive, fuzzy) against your
+local dedup index.
 
-```bash
-tk query '.parent == "<epic-id>"'
-```
-
-**If it's a new issue**, create a ticket:
+**If it's a new issue**, create a ticket and append `{id, title}` to the index:
 
 ```bash
 tk create "<title>" \
@@ -358,7 +327,8 @@ Reported by: <agent-name>
 [Write 2-4 ACs that would verify the issue is fixed]"
 ```
 
-**If it duplicates an existing ticket**, add the new context as a note instead:
+**If it duplicates an existing ticket** in the local index, add the new
+context as a note instead:
 
 ```bash
 tk add-note <existing-id> "Additional report from <agent>: <description>"
@@ -413,11 +383,8 @@ Phase 5 with whoever has reported in — don't wait indefinitely.
 
 ## Phase 5 — Completion
 
-1. Summarize the epic:
-
-```bash
-tk query '.parent == "<epic-id>"'
-```
+1. Summarize the epic from your local dedup index (no need to re-query tk —
+   you already have `{id, title}` for every ticket you created).
 
 2. Report to the user:
 
@@ -456,7 +423,9 @@ SendMessage({ to: '<role-1>', content: 'Other agents are waiting — have you se
 ```
 
 **playwright-cli not available.** If a tester reports `playwright-cli` isn't
-found, suggest the user install it and retry.
+found, suggest the user install it and retry. Point them at
+`playwright-cli install --skills` which registers it as a Skill so its command
+schemas aren't loaded into the model context at startup.
 
 **Duplicate flood.** If multiple agents report the same issue, create one
 ticket and note all reporters:
