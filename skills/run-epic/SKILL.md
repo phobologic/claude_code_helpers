@@ -131,24 +131,47 @@ git checkout main  # return to main, implementers branch from here
 
 Record `REPO_ROOT` and `STAMP` — you'll use them in worktree paths for implementer prompts.
 
-### Step 1.2: Pre-create implementer worktrees
+**Pre-flight the main repo state.** A dirty working tree or a leftover stash
+can corrupt later wave merges (see "Dirty working tree guard" in Edge Cases
+for the incident this guards against). Abort startup if either condition
+holds, and tell the user what to fix:
 
-Create worktrees for all implementers now, before spawning any agents. Do not rely
-on the `isolation: "worktree"` parameter — that hook only fires reliably in the main
-session, not from sub-agent contexts.
+```bash
+git -C $REPO_ROOT status --porcelain   # must be empty
+git -C $REPO_ROOT stash list            # must be empty
+```
 
-Use `worktree-init` (not raw `git worktree add`) — it applies `.worktreelinks` and
-`.worktreeinclude` setup so shared state (e.g. `.tickets/`) is available in each
-implementer worktree.
+If either command produces output, stop and report to the user — do not
+auto-clean. A stash may contain the user's in-progress work.
+
+### Step 1.2: Pre-create worktrees for all sandboxed agents
+
+Every agent that has `Bash` access runs in its own worktree — implementers
+**and** the ac-verifier and quality-reviewer. Sharing the main repo's working
+tree between agents caused a past corruption incident: an agent ran
+`git stash && git checkout <branch> && ...; git stash pop` in the main repo,
+silently popped an unrelated stale stash, and wedged `pbp/app.py` with
+conflict markers mid-run. Isolation is the fix.
+
+Do not rely on the `isolation: "worktree"` parameter — that hook only fires
+reliably in the main session, not from sub-agent contexts.
+
+Use `worktree-init` (not raw `git worktree add`) — it applies `.worktreelinks`
+and `.worktreeinclude` setup so shared state (e.g. `.tickets/`) is available
+in each worktree.
 
 ```bash
 # Create one worktree per implementer (min(3-4, ready_ticket_count))
 worktree-init implementer-1-$STAMP $REPO_ROOT
 worktree-init implementer-2-$STAMP $REPO_ROOT
 # ... repeat for each implementer
+
+# Create worktrees for the verifier and reviewer as well
+worktree-init ac-verifier-$STAMP $REPO_ROOT
+worktree-init quality-reviewer-$STAMP $REPO_ROOT
 ```
 
-Verify each was created: `ls .worktrees/` should show all implementer dirs.
+Verify each was created: `ls .worktrees/` should show all worktree dirs.
 
 ### Step 1.3: Create the team
 
@@ -237,9 +260,33 @@ Repeat for implementer-2-<STAMP>, implementer-3-<STAMP>, etc.
 
 ```
 Agent({
-  prompt: "You are the AC verifier on a team. Wait for the team lead to
-  send you tickets to verify. Do not claim tasks from the task list.
-  When you receive a message containing 'type: shutdown_request', reply with SHUTDOWN_ACK ac-verifier then stop.",
+  prompt: "You are the AC verifier on a team.
+
+  WORKTREE: <REPO_ROOT>/.worktrees/ac-verifier-<STAMP>
+
+  Before doing anything else, run this single Bash call to set your CWD
+  and verify isolation:
+  ```
+  cd <REPO_ROOT>/.worktrees/ac-verifier-<STAMP> && pwd && [ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: not in worktree'
+  ```
+  Report the result to the team lead via SendMessage.
+
+  All Bash/Read/Edit/Glob/Grep calls MUST target your worktree. Never
+  reference <REPO_ROOT> without the .worktrees/ac-verifier-<STAMP> suffix.
+  Git: your CWD is already the worktree — use plain `git` with no -C flag.
+
+  HARD RULES — the team lead relies on these for wave-merge safety:
+  - NEVER run `git stash`, `git stash pop`, `git stash apply`, or
+    `git checkout -m` anywhere. If you need to run code against a branch,
+    `git checkout` that branch inside your own worktree — never in the main
+    repo.
+  - NEVER cd or -C into <REPO_ROOT> or any other worktree.
+  - Prefer `git diff`, `git show`, `git cat-file` over checking branches out
+    at all. Only check out a branch when you genuinely need to execute code.
+
+  Wait for the team lead to send you tickets to verify. Do not claim tasks
+  from the task list. When you receive a message containing
+  'type: shutdown_request', reply with SHUTDOWN_ACK ac-verifier then stop.",
   subagent_type: "ac-verifier",
   team_name: "epic-<epic-id>",
   name: "ac-verifier"
@@ -250,8 +297,33 @@ Agent({
 
 ```
 Agent({
-  prompt: "You are the quality reviewer on a team. Wait for the team lead
-  to send you tickets to review. Do not claim tasks from the task list.
+  prompt: "You are the quality reviewer on a team.
+
+  WORKTREE: <REPO_ROOT>/.worktrees/quality-reviewer-<STAMP>
+
+  Before doing anything else, run this single Bash call to set your CWD
+  and verify isolation:
+  ```
+  cd <REPO_ROOT>/.worktrees/quality-reviewer-<STAMP> && pwd && [ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: not in worktree'
+  ```
+  Report the result to the team lead via SendMessage.
+
+  All Bash/Read/Edit/Glob/Grep calls MUST target your worktree. Never
+  reference <REPO_ROOT> without the .worktrees/quality-reviewer-<STAMP>
+  suffix. Git: your CWD is already the worktree — use plain `git` with no
+  -C flag.
+
+  HARD RULES — the team lead relies on these for wave-merge safety:
+  - NEVER run `git stash`, `git stash pop`, `git stash apply`, or
+    `git checkout -m` anywhere. If you need to run code against a branch,
+    `git checkout` that branch inside your own worktree — never in the main
+    repo.
+  - NEVER cd or -C into <REPO_ROOT> or any other worktree.
+  - Prefer `git diff`, `git show`, `git cat-file` over checking branches out
+    at all.
+
+  Wait for the team lead to send you tickets to review. Do not claim tasks
+  from the task list.
 
   For each ticket routed:
   1. Read `tk show <ticket-id>` to understand what was being fixed
@@ -275,17 +347,17 @@ Agent({
 
 ## Phase 2 -- Verify worktree isolation
 
-After spawning all implementers, wait for their isolation check results. Each
-implementer will report back `WORKTREE OK` or `WARNING: in main repo`.
+After spawning all agents, wait for `WORKTREE OK` from **every sandboxed
+teammate** — implementers, ac-verifier, and quality-reviewer. Each will report
+back `WORKTREE OK` or `WARNING: not in worktree`.
 
 - If **all report `WORKTREE OK`**: proceed to Phase 3.
-- If **any report `WARNING: in main repo`**: stop immediately and tell the user:
-  > Worktree isolation failed — implementers are running in the main repo.
-  > This will cause parallel agents to conflict. Aborting.
+- If **any report `WARNING`** (or a wrong path): stop immediately and tell the user:
+  > Worktree isolation failed — one or more agents are running in the main repo.
+  > This will cause main-repo corruption. Aborting.
   Then shut down all teammates and call `TeamDelete()`.
 
-The AC verifier and quality reviewer should be idle, waiting for messages. If
-any teammate failed to spawn entirely, retry the Agent call. If repeated
+If any teammate failed to spawn entirely, retry the Agent call. If repeated
 failures, inform the user.
 
 ## Status updates
@@ -530,8 +602,18 @@ medium/low finding tickets -- these are tracked but non-blocking.
 3. Merge the ticket branch into the integration branch. Never `cd` to a
    different directory for merges — use checkout/merge/checkout in place,
    or `git -C` if merging in a separate worktree. The team lead's CWD must
-   stay at `REPO_ROOT` so agents spawned later inherit the correct CWD:
+   stay at `REPO_ROOT` so agents spawned later inherit the correct CWD.
+
+   **Pre-flight the main repo before every merge.** Abort the chain if the
+   working tree is dirty — that means something corrupted it since the last
+   wave and merging on top will either fail with `needs merge` or silently
+   carry the corruption forward. See "Dirty working tree guard" in Edge Cases.
    ```bash
+   if [ -n "$(git -C $REPO_ROOT status --porcelain)" ]; then
+     echo "ABORT: main repo working tree is dirty before merge"
+     git -C $REPO_ROOT status
+     # stop and escalate to the user — do not proceed
+   fi
    git checkout epic/<epic-id>
    git merge <branch-name> --no-ff -m "Merge <ticket-id>: <ticket title>"
    git checkout main
@@ -716,9 +798,9 @@ Agent({
 })
 # ... repeat for needed implementer count
 Agent({ subagent_type: "ac-verifier",      team_name: "epic-<epic-id>", name: "ac-verifier",
-        prompt: "<same as Phase 1.5>" })
+        prompt: "<same as Phase 1.5 — full worktree cd + HARD RULES block>" })
 Agent({ subagent_type: "quality-reviewer", team_name: "epic-<epic-id>", name: "quality-reviewer",
-        prompt: "<same as Phase 1.5>" })
+        prompt: "<same as Phase 1.5 — full worktree cd + HARD RULES block>" })
 
 **5. Wait for `WORKTREE OK`** from all re-spawned implementers. Each must
 report the `pwd` output showing their worktree path. Apply the same abort
@@ -776,6 +858,9 @@ When all child tickets of the epic are closed:
    for N in 1 2 3; do
      git worktree remove .worktrees/implementer-$N-<STAMP> --force 2>/dev/null || true
    done
+   # Clean up verifier and reviewer worktrees
+   git worktree remove .worktrees/ac-verifier-<STAMP>      --force 2>/dev/null || true
+   git worktree remove .worktrees/quality-reviewer-<STAMP> --force 2>/dev/null || true
    ```
    ```
    TeamDelete()
@@ -820,6 +905,20 @@ or closed. Tell the user:
 
 > No unblocked tickets found for epic <epic-id>. Check `tk blocked` to see
 > what's holding things up.
+
+**Dirty working tree guard.** The main repo's working tree must stay clean
+for the entire run. If the pre-merge check (`git status --porcelain` in
+Phase 3) returns any output, something corrupted it since the last wave —
+almost always a sandboxed agent that ran `git checkout` or `git stash` in
+the main repo instead of its own worktree. Do not try to auto-recover. Stop
+the run, report to the user with the offending status output, and let the
+user triage. Incident that motivated this guard: an ac-verifier ran
+`git stash && git checkout <branch> && ... ; git checkout - ; git stash pop`
+in the main repo, the initial `stash` was a no-op on a clean tree, and the
+final `pop` silently applied an 8-day-old stale stash, wedging `pbp/app.py`
+with `<<<<<<< Updated upstream` markers mid-run. The Phase 1.1 stash-list
+guard and per-agent worktrees prevent it at the source; this guard catches
+any new variant of the same bug.
 
 **User wants to stop mid-epic.** Send shutdown_request to all teammates via
 SendMessage, wait for acknowledgments, then call TeamDelete. In-progress

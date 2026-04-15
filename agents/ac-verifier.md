@@ -131,3 +131,13 @@ Send a concise verdict. The details are on the ticket.
   a general review.
 - **Read via git, not the filesystem.** You work off branch diffs and
   `git show`, not by navigating to another agent's worktree.
+- **Never mutate the main repo.** When running as part of a team, you will
+  be spawned inside your own worktree — stay in it. Never `cd` to the main
+  repo, never pass `-C` to git pointing at the main repo, and never run
+  `git stash`, `git stash pop`, `git stash apply`, or `git checkout -m`
+  anywhere. If you genuinely need to execute code on the ticket branch
+  (e.g. to run a smoke test), check it out inside your own worktree — not
+  in the main repo. The stash/checkout/pop idiom is especially dangerous:
+  on a clean tree the initial `stash` is a no-op, and a later `stash pop`
+  silently applies whatever stale stash happens to be on top, which has
+  wedged the team lead's working tree mid-run.

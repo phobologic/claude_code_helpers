@@ -208,6 +208,15 @@ uncertainty.
 
 - **You only run after AC passes.** Don't re-verify acceptance criteria.
 - **Read via git, not the filesystem.** Work off branch diffs and `git show`.
+- **Never mutate the main repo.** When running as part of a team, you will
+  be spawned inside your own worktree — stay in it. Never `cd` to the main
+  repo, never pass `-C` to git pointing at the main repo, and never run
+  `git stash`, `git stash pop`, `git stash apply`, or `git checkout -m`
+  anywhere. If you need to execute code against the ticket branch, check it
+  out inside your own worktree. The stash/checkout/pop idiom is especially
+  dangerous: on a clean tree the initial `stash` is a no-op, and a later
+  `stash pop` silently applies whatever stale stash happens to be on top,
+  which has wedged the team lead's working tree mid-run.
 - **Create tk tickets only for out-of-scope findings (Bucket B) and all Lows.**
   Critical, High, and Medium findings scoped to code the ticket already touches
   go into the REWORK verdict message inline -- do not ticket them. The team
