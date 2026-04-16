@@ -15,7 +15,9 @@ ruff for linting/formatting, pytest for testing, and GitHub Actions for CI.
 - Otherwise, infer from `basename $PWD`
 - Derive the Python package name by replacing hyphens with underscores (e.g. `my-app` → `my_app`)
 
-Present a brief summary to the user of what will be created, then ask for confirmation:
+Present a brief summary to the user of what will be created, then ask for confirmation.
+If `.git/` exists, include the hook files in the list; otherwise omit them and note that
+hooks will be skipped until git is initialized.
 
 ```
 Project name:    <name>
@@ -24,6 +26,8 @@ Tests dir:       tests/
 Files to create: pyproject.toml, .python-version, .gitignore, README.md,
                  <package_name>/__init__.py, tests/__init__.py,
                  .github/workflows/test.yml
+Git hooks:       .git/hooks/pre-commit, .git/hooks/pre-commit.d/python.sh
+                 (or: "skipped — git not initialized")
 
 Proceed? [y/N]
 ```
@@ -132,6 +136,68 @@ tmp/
 
 Empty file.
 
+### `.git/hooks/pre-commit`
+
+Only create this if `.git/` exists. If it already exists, leave it alone (the dispatcher
+is language-agnostic and may have been installed by another setup skill).
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Dispatcher: runs all scripts in pre-commit.d/, fails if any fail.
+HOOK_DIR="$(dirname "$0")/pre-commit.d"
+
+if [[ ! -d "$HOOK_DIR" ]]; then
+  exit 0
+fi
+
+exit_code=0
+for hook in "$HOOK_DIR"/*; do
+  if [[ -x "$hook" ]]; then
+    if ! "$hook"; then
+      exit_code=1
+    fi
+  fi
+done
+
+exit $exit_code
+```
+
+### `.git/hooks/pre-commit.d/python.sh`
+
+Only create this if `.git/` exists.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Get staged .py files (excluding deleted files)
+STAGED_PY=$(git diff --cached --name-only --diff-filter=d | grep '\.py$' || true)
+
+if [[ -z "$STAGED_PY" ]]; then
+  exit 0
+fi
+
+# Fix what we can, then re-stage the fixes
+echo "$STAGED_PY" | xargs uv run ruff check --fix --unfixable F401 || true
+echo "$STAGED_PY" | xargs uv run ruff format
+echo "$STAGED_PY" | xargs git add
+
+# Now check — fail the commit if anything unfixable remains
+if ! echo "$STAGED_PY" | xargs uv run ruff check 2>&1; then
+  echo ""
+  echo "pre-commit: ruff check failed. Fix the issues above and retry."
+  exit 1
+fi
+
+if ! echo "$STAGED_PY" | xargs uv run ruff format --check 2>&1; then
+  echo ""
+  echo "pre-commit: ruff format failed (this shouldn't happen — file a bug)."
+  exit 1
+fi
+```
+
 ### `.github/workflows/test.yml`
 
 ```yaml
@@ -185,14 +251,24 @@ uv sync
 `uv sync` reads `[dependency-groups]` from `pyproject.toml` and creates the lockfile +
 virtual environment in `.venv/`.
 
+After `uv sync`, make the git hooks executable (only if `.git/` exists):
+
+```bash
+chmod +x .git/hooks/pre-commit .git/hooks/pre-commit.d/python.sh
+```
+
 ## Phase 5 — Report
 
 Print a summary of what was created. Then suggest next steps:
 
-1. If git was not initialized: `git init && git add -A && git commit -m "Initial project scaffold"`
-2. To enable auto-formatting hooks in this project:
+1. If git was not initialized: `git init && git add -A && git commit -m "Initial project scaffold"`,
+   then re-run `/setup-python-project` to install the pre-commit hooks (they require `.git/`).
+2. If git was initialized, note that a pre-commit hook was installed that auto-fixes and
+   checks ruff on every commit. The dispatcher pattern in `.git/hooks/pre-commit` supports
+   multiple languages — other setup skills can drop scripts in `.git/hooks/pre-commit.d/`.
+3. To enable auto-formatting hooks in this project:
    ```
    /plugin install claude-python@claude-languages
    ```
-3. See the Python rules (`~/.claude/rules/python.md`) for preferred libraries to reach for
+4. See the Python rules (`~/.claude/rules/python.md`) for preferred libraries to reach for
    when adding dependencies.
