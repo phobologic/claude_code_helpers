@@ -146,32 +146,31 @@ Always pass `-s=<role>` on every playwright-cli command. Without it, all
 agents share the same browser session and clobber each other's logins.
 
   playwright-cli -s=<role> open <url>
-  playwright-cli -s=<role> snapshot [--depth=N] [<ref>]
+  playwright-cli -s=<role> snapshot [--filename <path>]
   playwright-cli -s=<role> click <ref>
   playwright-cli -s=<role> fill <ref> <value>
   playwright-cli -s=<role> goto <url>
   playwright-cli -s=<role> state-save <path>    # persist auth after login
   playwright-cli -s=<role> state-load <path>    # restore auth on re-run
 
+Run `playwright-cli --help` and `playwright-cli <command> --help` if you need
+to check flags — don't invent options.
+
 ## Snapshot discipline (critical — this is where token budgets die)
 
-`playwright-cli snapshot` writes a YAML file to `.playwright-cli/` and prints
-a short summary with element refs like `e21`, `e35`. **Work from the stdout
-summary. Do NOT `Read` the snapshot YAML file** unless a ref lookup actually
-failed — reading it undoes the whole point of playwright-cli and costs
-thousands of tokens per call.
+`playwright-cli snapshot` returns the full accessibility tree with element
+refs like `e21`, `e35` directly in the response. There is no depth flag and
+no way to scope to a subtree — every snapshot is the whole page.
 
 Rules:
-- **Default to `--depth=2` or `--depth=3`.** Only go deeper when the shallow
-  tree is missing the element you need.
-- **Scoped re-snapshots.** After interacting with a panel, modal, dropdown,
-  or list item, re-snapshot only that subtree: `snapshot <ref>`. Do not
-  re-snapshot the whole page.
 - **Re-snapshot only after state-changing actions** (click, submit, goto).
   Refs from the prior snapshot remain valid until something changes — don't
   snapshot "just to check."
-- **Never `Read` snapshot YAML files.** Treat `.playwright-cli/` as write-only
-  from your side.
+- **Reuse refs from your last snapshot** instead of re-snapshotting to look
+  them up again.
+- **Use `--filename <path>` to redirect big snapshots to a file** when you
+  only need to confirm an action succeeded and don't want the tree in
+  context. Don't `Read` the file afterward — that defeats the point.
 
 ## Screenshots
 
