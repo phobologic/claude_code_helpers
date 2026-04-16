@@ -16,6 +16,12 @@ web app using a team of simulated users. You never use the browser yourself —
 your job is to spawn agents, relay coordination messages, receive findings, and
 create tk tickets from what the testers discover.
 
+**Phase 5 is mandatory.** Role agents keep driving the browser until you
+shut them down. Never let your turn end after the last ticket is created
+without first running Phase 5 — if you do, the agents will loop indefinitely
+and blow their context budgets. "No new findings in a while" is a trigger to
+shut down, not to quietly stop.
+
 This skill uses `playwright-cli` (disk-backed, ~4x more token-efficient than
 Playwright MCP). If `playwright-mcp` is connected in the current session, its
 tool schemas cost tokens on every turn even when unused — ask the user to
@@ -156,6 +162,15 @@ agents share the same browser session and clobber each other's logins.
 Run `playwright-cli --help` and `playwright-cli <command> --help` if you need
 to check flags — don't invent options.
 
+**Never pipe `playwright-cli` output through `head`, `tail`, `grep`, or any
+other command that closes the pipe early.** `playwright-cli` is a Rust binary
+and panics on `SIGPIPE`, dumping a `thread 'main' panicked … Broken pipe`
+trace plus the full page YAML into your transcript on every call. This is the
+fastest way to blow your context budget. If you want to truncate a large
+snapshot, write it to a file with `--filename` and (only if you truly need to
+look at it) `Read` a bounded range. Do not run
+`playwright-cli ... | head -N` under any circumstance.
+
 ## Snapshot discipline (critical — this is where token budgets die)
 
 `playwright-cli snapshot` returns the full accessibility tree with element
@@ -204,7 +219,13 @@ The team lead must be able to redirect you at any time. Two hard rules:
 2. **Heartbeat at least once per minute.** If ~60 seconds have passed since
    your last message to the team lead, send a STATUS update before your
    next action, even if nothing notable has happened:
-     SendMessage({ to: 'team-lead', content: 'STATUS <role>: <what you are doing now>' })
+     SendMessage({ to: 'team-lead', message: 'STATUS <role>: <what you are doing now>' })
+
+**SendMessage payloads must always be strings.** The tool's field is `message`
+(not `content`), and its value must be a plain string. For structured
+findings, wrap the object in `JSON.stringify(...)` — never pass a raw object
+like `message: { title: ... }` or you'll get `InputValidationError: expected
+string, received object`.
 
 Also send a STATUS after each milestone (logged in, joined/set up session,
 completed a major flow) — but the two rules above are the floor, not the
@@ -226,7 +247,7 @@ At every heartbeat, check the current time before continuing:
    finding:
    SendMessage({
      to: 'team-lead',
-     content: JSON.stringify({
+     message: JSON.stringify({
        title: '<short title>',
        description: 'Theory — not yet verified: <what you suspect, why, and how you would verify it>',
        severity: '<your best estimate>',
@@ -237,16 +258,21 @@ At every heartbeat, check the current time before continuing:
 3. Send DONE.
 
 ## Shutdown
-If you receive a shutdown or TIME_UP message from the team lead, finish your
-current action, flush any unsent findings and theories (using the format
-above), then send DONE immediately. Do not continue to the next step.
+If you receive a `shutdown_request` or TIME_UP message from the team lead,
+finish your current action, flush any unsent findings and theories (using the
+format above), then reply with the matching `shutdown_response`:
+  SendMessage({
+    to: 'team-lead',
+    message: { type: 'shutdown_response', request_id: '<id from request>', approve: true }
+  })
+Approving shutdown terminates your process. Do not continue to the next step.
 
 ## Reporting findings
 Whenever you notice something broken, confusing, missing, or worth improving,
 send a structured finding to the team lead:
   SendMessage({
     to: 'team-lead',
-    content: JSON.stringify({
+    message: JSON.stringify({
       title: '<short title>',
       description: '<what happened, what you expected, steps to reproduce>',
       severity: 'critical | high | medium | low',
@@ -259,7 +285,7 @@ Keep `description` tight: expected vs. actual plus repro steps. The team lead
 expands it into the ticket — don't write paragraphs.
 
 Send findings as you discover them — don't batch at the end.
-When done: SendMessage({ to: 'team-lead', content: 'DONE' })
+When done: SendMessage({ to: 'team-lead', message: 'DONE' })
 ```
 
 ### Role delta — initiator (first role only)
@@ -271,8 +297,8 @@ Insert under `## Scenario` in the shared prompt when assembling the initiator:
 You go first. Once you have set up the session and have information the
 other agents need to join or participate (invite links, join codes, session
 IDs, URLs, etc.), send it to each of them:
-  SendMessage({ to: '<role-2>', content: '<the info>' })
-  SendMessage({ to: '<role-3>', content: '<the info>' })
+  SendMessage({ to: '<role-2>', message: '<the info>' })
+  SendMessage({ to: '<role-3>', message: '<the info>' })
 Wait for them to confirm before continuing steps that require their presence.
 They will message you when they've completed a coordination step.
 ```
@@ -286,7 +312,7 @@ Insert under `## Scenario` in the shared prompt when assembling each joiner:
 Wait for <role-1> to send you the information you need to join the session
 (invite link, join code, session ID, etc.). Once you have it, use it to join,
 then confirm back:
-  SendMessage({ to: '<role-1>', content: '<role> joined' })
+  SendMessage({ to: '<role-1>', message: '<role> joined' })
 Then continue exploring from your role's perspective.
 ```
 
@@ -351,7 +377,7 @@ each agent's most recent message time ("last heard") so you can spot stalls.
 Agents are required to STATUS at least once per minute. If they stop, act:
 
 - **~2 minutes of silence from any agent**: send a one-line ping —
-  `SendMessage({ to: '<role>', content: 'ping — still alive? what are you doing?' })`.
+  `SendMessage({ to: '<role>', message: 'ping — still alive? what are you doing?' })`.
 - **~5 minutes with no progress** on the same action: use `TaskOutput`
   against that agent's task to inspect what it's actually doing. Hook
   failures, stuck playwright commands, and orphaned confirmation prompts
@@ -374,7 +400,7 @@ If `now >= DEADLINE_TS` and any agents haven't sent `DONE` yet, send TIME_UP
 to each still-active agent:
 
 ```
-SendMessage({ to: '<role-N>', content: 'TIME_UP — time limit reached. Flush your outstanding findings and any unexplored theories, then send DONE.' })
+SendMessage({ to: '<role-N>', message: 'TIME_UP — time limit reached. Flush your outstanding findings and any unexplored theories, then send DONE.' })
 ```
 
 Give agents up to 2 minutes to complete their flush. After that, proceed to
@@ -401,14 +427,24 @@ Suggested next steps:
   tk show <id>                      # review individual tickets
 ```
 
-3. Shut down the team (send to each role by name, then delete):
+3. Shut down the team using the `shutdown_request` protocol, then delete:
 
 ```
-SendMessage({ to: '<role-1>', content: 'Session complete. Shutting down.' })
-SendMessage({ to: '<role-2>', content: 'Session complete. Shutting down.' })
-...
+SendMessage({ to: '*', message: 'type: shutdown_request' })
+```
+
+Wait for a `shutdown_response` from every teammate before proceeding.
+If a teammate hasn't responded after ~60 seconds, use `TaskStop` on its
+background task so it doesn't keep looping. Only then:
+
+```
 TeamDelete()
 ```
+
+This matches the teardown sequence in the user's global CLAUDE.md
+(Agent Teams → "Shutdown before delete"). Do **not** end your final turn
+before `TeamDelete()` returns — role agents left alive will continue
+driving the browser until they blow their context budgets.
 
 ## Edge Cases
 
@@ -418,7 +454,7 @@ app doesn't appear to be running at `<url>`.
 **Coordination stall.** If joiners are waiting and the initiator hasn't sent
 anything, prompt it directly:
 ```
-SendMessage({ to: '<role-1>', content: 'Other agents are waiting — have you set up the session yet?' })
+SendMessage({ to: '<role-1>', message: 'Other agents are waiting — have you set up the session yet?' })
 ```
 
 **playwright-cli not available.** If a tester reports `playwright-cli` isn't
