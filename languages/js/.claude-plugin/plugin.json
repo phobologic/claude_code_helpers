@@ -1,0 +1,5 @@
+{
+  "name": "claude-js",
+  "version": "1.0.0",
+  "description": "JavaScript/TypeScript language support: Biome auto-formatting and lint-fix for JS/TS, Prettier for Svelte, coding conventions"
+}

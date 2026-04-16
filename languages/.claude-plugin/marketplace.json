@@ -16,6 +16,11 @@
       "name": "claude-python",
       "source": "./python",
       "description": "Python language support: ruff auto-formatting and lint-fix on file edits, Python coding conventions"
+    },
+    {
+      "name": "claude-js",
+      "source": "./js",
+      "description": "JavaScript/TypeScript language support: Biome auto-formatting and lint-fix for JS/TS, Prettier for Svelte, coding conventions"
     }
   ]
 }

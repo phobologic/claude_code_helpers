@@ -56,10 +56,10 @@ To add language auto-formatting hooks to a project:
 
 ### Language Plugins
 - Each language in `languages/` is a Claude Code plugin
-- Plugins provide PostToolUse hooks for auto-formatting (goimports, ruff)
+- Plugins provide PostToolUse hooks for auto-formatting (goimports, ruff, biome/prettier)
 - Installed per-project with `/plugin install` — no `settings.json` editing required
 - Rules (coding conventions) are loaded globally via `~/.claude/rules/` symlinks set up by `install.sh`
-- Rules are path-scoped: Go rules only load for `*.go` files, Python rules for `*.py` files
+- Rules are path-scoped: Go rules only load for `*.go` files, Python rules for `*.py` files, JS rules for `*.ts`/`*.js`/`*.svelte` files
 - See `languages/README.md` for details
 
 ### Tool Rules
@@ -88,6 +88,10 @@ To add language auto-formatting hooks to a project:
 
 ### Exploratory Testing
 - `/playwright-explore <url> [-- scenario]` - Spawn GM + player agents to explore a running app, with the team lead creating deduplicated tk tickets from their findings
+
+### Project Setup
+- `/setup-python-project [name]` - Scaffold a new Python project with uv, ruff, pytest, CI
+- `/setup-js-project [name]` - Scaffold a new SvelteKit project with Biome, Prettier, Vitest, CI
 
 ### Tool Setup
 - `/use-railway` - Symlink Railway CLI rules into this project's `.claude/rules/`

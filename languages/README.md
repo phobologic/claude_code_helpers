@@ -9,6 +9,7 @@ and coding conventions.
 |--------|-----------|-------------|
 | `go/` | `goimports` on every file edit | Go code conventions |
 | `python/` | `ruff check --fix` + `ruff format` on every file edit | Python code conventions |
+| `js/` | `biome check --write` for JS/TS + `prettier --write` for Svelte on every file edit | JS/TS/SvelteKit conventions |
 
 ## Installing into a Project
 
