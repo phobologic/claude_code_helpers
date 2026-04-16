@@ -342,25 +342,49 @@ fi
 STAGED_BIOME=$(echo "$STAGED_JS" | grep -E '\.(js|ts)$' || true)
 STAGED_SVELTE=$(echo "$STAGED_JS" | grep -E '\.svelte$' || true)
 
+# Save repo root before cd-ing into the frontend subdir
+REPO_ROOT=$(pwd)
+
 # cd to frontend dir for tooling to find config + node_modules
 if [[ -n "$FRONTEND_DIR" ]]; then
   cd "$FRONTEND_DIR"
 fi
 
+# Strip FRONTEND_DIR prefix so paths are relative to where tools run from.
+# Escape glob-special chars (SvelteKit bracket routes like [id]) so tools
+# treat them as literal paths.
+_rel() {
+  if [[ -n "$FRONTEND_DIR" ]]; then
+    sed "s|^${FRONTEND_DIR}/||g"
+  else
+    cat
+  fi
+}
+_esc() { sed 's/\[/\\[/g; s/\]/\\]/g'; }
+
+# Re-stage a list of repo-root-relative paths using :(literal) pathspec magic
+# so bracket-style SvelteKit route segments (e.g. [id]) aren't treated as globs.
+_restage() {
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    git -C "$REPO_ROOT" add ":(literal)$f"
+  done
+}
+
 # Fix what we can, then re-stage the fixes
 if [[ -n "$STAGED_BIOME" ]]; then
-  echo "$STAGED_BIOME" | xargs npx @biomejs/biome check --write 2>/dev/null || true
-  echo "$STAGED_BIOME" | xargs git add
+  echo "$STAGED_BIOME" | _rel | _esc | xargs npx @biomejs/biome check --write 2>/dev/null || true
+  echo "$STAGED_BIOME" | _restage
 fi
 
 if [[ -n "$STAGED_SVELTE" ]]; then
-  echo "$STAGED_SVELTE" | xargs npx prettier --write 2>/dev/null || true
-  echo "$STAGED_SVELTE" | xargs git add
+  echo "$STAGED_SVELTE" | _rel | _esc | xargs npx prettier --write 2>/dev/null || true
+  echo "$STAGED_SVELTE" | _restage
 fi
 
 # Check pass — fail the commit if anything remains unfixed
 if [[ -n "$STAGED_BIOME" ]]; then
-  if ! echo "$STAGED_BIOME" | xargs npx @biomejs/biome check 2>&1; then
+  if ! echo "$STAGED_BIOME" | _rel | _esc | xargs npx @biomejs/biome check 2>&1; then
     echo ""
     echo "pre-commit: biome check failed. Fix the issues above and retry."
     exit 1
@@ -368,7 +392,7 @@ if [[ -n "$STAGED_BIOME" ]]; then
 fi
 
 if [[ -n "$STAGED_SVELTE" ]]; then
-  if ! echo "$STAGED_SVELTE" | xargs npx prettier --check 2>&1; then
+  if ! echo "$STAGED_SVELTE" | _rel | _esc | xargs npx prettier --check 2>&1; then
     echo ""
     echo "pre-commit: prettier check failed (this shouldn't happen — file a bug)."
     exit 1
