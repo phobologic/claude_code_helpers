@@ -378,7 +378,7 @@ if [[ -n "$STAGED_BIOME" ]]; then
 fi
 
 if [[ -n "$STAGED_SVELTE" ]]; then
-  echo "$STAGED_SVELTE" | _rel | _esc | xargs npx prettier --write 2>/dev/null || true
+  echo "$STAGED_SVELTE" | _rel | _esc | xargs npx prettier --write --ignore-unknown 2>/dev/null || true
   echo "$STAGED_SVELTE" | _restage
 fi
 
@@ -392,7 +392,7 @@ if [[ -n "$STAGED_BIOME" ]]; then
 fi
 
 if [[ -n "$STAGED_SVELTE" ]]; then
-  if ! echo "$STAGED_SVELTE" | _rel | _esc | xargs npx prettier --check 2>&1; then
+  if ! echo "$STAGED_SVELTE" | _rel | _esc | xargs npx prettier --check --ignore-unknown 2>&1; then
     echo ""
     echo "pre-commit: prettier check failed (this shouldn't happen — file a bug)."
     exit 1
