@@ -72,6 +72,20 @@ available for manual checks or pre-commit verification.
 - Filesystem isolation via `tmp_path`
 - No network calls, no external service dependencies
 
+**Coverage** — Use `pytest-cov` for coverage measurement:
+- **Full suite with coverage:** `uv run pytest -q --tb=short --cov=<package_name> --cov-report=term-missing`
+- **Targeted run (no coverage):** `uv run pytest -v path/to/test.py` — coverage adds
+  overhead; skip it for quick iteration
+- **CI:** always run with `--cov` and fail under a threshold if one is configured
+
+**Coverage with greenlet-based concurrency** — Always configure
+`concurrency = ["greenlet"]` in `[tool.coverage.run]` (pyproject.toml) when the project
+uses SQLAlchemy async, gevent, or any other greenlet-based concurrency. Without this
+setting, coverage.py silently misses all code executed inside greenlet contexts —
+producing dramatically low numbers for any module that touches async DB sessions or
+greenlet-wrapped code. This affects projects using `pytest-cov` with `httpx`
+ASGITransport or similar in-process ASGI testing.
+
 ## Preferred Libraries
 
 When adding a dependency, default to these unless there's a specific reason not to.
@@ -98,5 +112,6 @@ When adding a dependency, default to these unless there's a specific reason not 
 - Structured outputs from LLMs: `instructor`
 
 **Testing extras**
+- `pytest-cov` — coverage measurement (already in default scaffold)
 - `pytest-asyncio` — async test support (already in default scaffold)
 - `pytest-socket` — disable accidental network calls in tests

@@ -35,6 +35,13 @@
   using `StaticPool` in tests. A shared in-memory connection exposes rows from parallel or
   sequential test cases — unscoped `COUNT(*)` queries will see them all.
 
+### Coverage Measurement
+
+- **Always set `concurrency = ["greenlet"]`** in `[tool.coverage.run]` (pyproject.toml).
+  SQLAlchemy's async engine uses greenlet internally; without this setting, coverage.py
+  silently misses all code executed inside async DB sessions. This produces dramatically
+  misleading coverage numbers for any module that touches the ORM.
+
 ---
 
 ## Alembic Migration Conventions
