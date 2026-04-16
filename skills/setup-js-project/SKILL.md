@@ -474,7 +474,18 @@ After install, make the git hooks executable (only if `.git/` exists):
 chmod +x .git/hooks/pre-commit .git/hooks/pre-commit.d/javascript.sh
 ```
 
-## Phase 5 — Report
+## Phase 5 — Commit
+
+If `.git/` exists, commit all scaffolded files:
+
+1. Stage all new files created in Phases 2–4 (config files, workflows, source files).
+   Do **not** stage files inside `.git/` (hooks are not tracked by git).
+2. Commit with message: `Add SvelteKit project scaffold`
+
+If `.git/` does not exist, skip this phase — the Report will tell the user to
+`git init` and commit manually.
+
+## Phase 6 — Report
 
 Print a summary of what was created. Then suggest next steps:
 

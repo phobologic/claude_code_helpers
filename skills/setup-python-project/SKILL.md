@@ -60,12 +60,20 @@ dependencies = []
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
+    "pytest-cov>=7.1.0",
     "ruff>=0.9.0",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["<package_name>"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
 
 [tool.ruff]
 target-version = "py313"
@@ -233,7 +241,7 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Test
-        run: uv run pytest -q --tb=short
+        run: uv run pytest -q --tb=short --cov=<package_name> --cov-report=term-missing
 ```
 
 > **Note for published libraries:** Add a `strategy.matrix` with multiple Python versions
@@ -257,7 +265,18 @@ After `uv sync`, make the git hooks executable (only if `.git/` exists):
 chmod +x .git/hooks/pre-commit .git/hooks/pre-commit.d/python.sh
 ```
 
-## Phase 5 — Report
+## Phase 5 — Commit
+
+If `.git/` exists, commit all scaffolded files:
+
+1. Stage all new files created in Phases 2–4 (config files, workflows, source files).
+   Do **not** stage files inside `.git/` (hooks are not tracked by git).
+2. Commit with message: `Add Python project scaffold`
+
+If `.git/` does not exist, skip this phase — the Report will tell the user to
+`git init` and commit manually.
+
+## Phase 6 — Report
 
 Print a summary of what was created. Then suggest next steps:
 
