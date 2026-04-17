@@ -93,7 +93,13 @@ Skipping this step is the number-one reason tickets come back from review.
 4. Run tests scoped to the changed area first for fast feedback
 5. Run the full test suite
 6. Fix any failures -- do not signal completion with a broken test suite
-7. Commit your changes with a message that references the ticket ID:
+7. Run a complexity check on the files you changed. Use the complexity tool
+   documented in the project's rules (e.g., `radon cc -nc -a` for Python,
+   Biome's `noExcessiveCognitiveComplexity` for JS/TS). If any function exceeds
+   the project's threshold, refactor before committing. If refactoring would
+   expand scope beyond the ticket, note the complex functions in your DONE
+   message so the team lead can decide.
+8. Commit your changes with a message that references the ticket ID:
    ```
    git add <files>
    git commit -m "<descriptive message>

@@ -58,6 +58,25 @@ Never use raw `pip install` or `python -m` directly — always go through `uv ru
 Ruff also runs automatically via hooks on file edits, but these commands are
 available for manual checks or pre-commit verification.
 
+## Complexity (Radon)
+
+Radon measures cyclomatic complexity, maintainability index, and raw metrics.
+
+- `uv run radon cc <path> -a` — cyclomatic complexity with average
+- `uv run radon cc <path> -nc` — show only functions grade C or worse (complexity > 10)
+- `uv run radon mi <path>` — maintainability index
+- `uv run radon cc <path> -a -nc --total-average` — filtered summary with total average
+
+**Complexity grades:** A (1-5), B (6-10), C (11-15), D (16-20), E (21-25), F (26+).
+Functions at grade C or worse warrant refactoring — extract helpers, simplify branching,
+or break into smaller units. Grade D or worse should not pass review without justification.
+
+When writing or modifying complex logic, check the affected files:
+
+```bash
+uv run radon cc path/to/file.py -a -nc
+```
+
 ## Testing Conventions
 
 - **Invocation strategy** — minimize context usage with tight output by default:

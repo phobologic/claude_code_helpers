@@ -76,6 +76,13 @@ Go through every changed file on all of these dimensions. Be thorough.
 - Large allocations in tight loops?
 - User-controlled input sizing an allocation without a bound?
 
+**Complexity**
+- Are there functions with high cyclomatic or cognitive complexity introduced
+  or worsened by this change? Use the project's complexity tooling if available
+  (e.g., `radon cc -nc` for Python, Biome's lint output for JS/TS).
+- Functions exceeding the project's threshold are Medium findings. Functions at
+  D/F grade (or cognitive complexity > 25) are High findings.
+
 **Convention violations**
 - Does this code violate any rules in CLAUDE.md?
 

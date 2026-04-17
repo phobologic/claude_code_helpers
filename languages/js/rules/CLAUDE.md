@@ -70,6 +70,19 @@ unless resolving a genuine conflict.
 
 These run automatically via hooks on file edits, but are available for manual use.
 
+## Complexity
+
+Biome's `noExcessiveCognitiveComplexity` rule enforces a complexity ceiling on functions.
+This is enabled in `biome.json` and reports during lint checks — no separate tool needed.
+
+- `npx @biomejs/biome check .` — includes complexity warnings
+- Configure the threshold in `biome.json` under `linter.rules.complexity.noExcessiveCognitiveComplexity`
+- Default threshold: 15 (cognitive complexity)
+
+Functions that exceed the threshold warrant refactoring — extract helpers, simplify
+branching, or break into smaller units. If the threshold fires on a function, treat
+it as a signal to restructure before committing.
+
 ## Testing Conventions
 
 This project uses **Vitest** for testing with `@testing-library/svelte` for

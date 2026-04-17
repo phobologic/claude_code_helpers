@@ -15,9 +15,11 @@ ruff for linting/formatting, pytest for testing, and GitHub Actions for CI.
 - Otherwise, infer from `basename $PWD`
 - Derive the Python package name by replacing hyphens with underscores (e.g. `my-app` → `my_app`)
 
-Present a brief summary to the user of what will be created, then ask for confirmation.
-If `.git/` exists, include the hook files in the list; otherwise omit them and note that
-hooks will be skipped until git is initialized.
+Present a brief summary to the user, then ask for confirmation. If `.git/` exists,
+include the hook files in the list; otherwise omit them and note that hooks will be
+skipped until git is initialized.
+
+For new projects:
 
 ```
 Project name:    <name>
@@ -32,18 +34,48 @@ Git hooks:       .git/hooks/pre-commit, .git/hooks/pre-commit.d/python.sh
 Proceed? [y/N]
 ```
 
+For existing projects (re-run), show what will be added/updated:
+
+```
+Project name:    <name> (existing project)
+
+Updates:
+  pyproject.toml:              add [tool.radon] section, add radon[toml] to dev deps
+  pre-commit.d/python.sh:     add complexity gate
+  .github/workflows/test.yml: add complexity check step
+  .python-version:             already up to date
+  .gitignore:                  already up to date
+
+Proceed? [y/N]
+```
+
 ## Phase 2 — Preflight checks
 
 Before writing anything:
 
-1. Check if any of the target files already exist. If conflicts exist, list them and ask
-   whether to overwrite. Do not overwrite silently.
+1. Check which target files already exist. Read each existing file so you understand
+   what's already configured.
 2. Check if git is initialized (`git rev-parse --git-dir 2>/dev/null`). If not, note it
    in the final report — don't run `git init` yourself.
 
+**Incremental updates.** This skill can be re-run on existing projects to bring them up
+to date. For each file below:
+- **Missing:** create it exactly as specified.
+- **Exists:** read it, compare against the spec, and add only what's missing. Do not
+  overwrite user customizations (custom deps, modified ruff rules, adjusted thresholds).
+  For config files like `pyproject.toml`, add missing sections and missing dependencies
+  without touching existing ones. For shell scripts like pre-commit hooks, add missing
+  check blocks without rewriting existing ones.
+
+If an existing setting directly contradicts the spec (e.g., the user has a different
+`target-version` for ruff, or a `[tool.radon]` section with different thresholds), do
+not silently overwrite it — ask the user how they want to handle the conflict.
+
+Present a summary of what will be created vs. updated, then ask for confirmation.
+
 ## Phase 3 — Scaffold files
 
-Write each file in order:
+For each file: create if missing, or update if it exists (see Phase 2).
 
 ### `pyproject.toml`
 
@@ -61,6 +93,7 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=7.1.0",
+    "radon[toml]>=6.0.0",
     "ruff>=0.9.0",
 ]
 
@@ -74,6 +107,10 @@ source = ["<package_name>"]
 [tool.coverage.report]
 show_missing = true
 skip_empty = true
+
+[tool.radon]
+cc_min = "C"
+exclude = "tests/*,.venv/*"
 
 [tool.ruff]
 target-version = "py313"
@@ -204,6 +241,17 @@ if ! echo "$STAGED_PY" | xargs uv run ruff format --check 2>&1; then
   echo "pre-commit: ruff format failed (this shouldn't happen — file a bug)."
   exit 1
 fi
+
+# Complexity gate — fail on D grade or worse (complexity > 15)
+COMPLEX=$(echo "$STAGED_PY" | xargs uv run radon cc -n D 2>/dev/null || true)
+if [[ -n "$COMPLEX" ]]; then
+  echo ""
+  echo "pre-commit: high complexity detected (grade D or worse):"
+  echo "$COMPLEX"
+  echo ""
+  echo "Refactor these functions before committing."
+  exit 1
+fi
 ```
 
 ### `.github/workflows/test.yml`
@@ -239,6 +287,9 @@ jobs:
 
       - name: Format check
         run: uv run ruff format --check .
+
+      - name: Complexity check
+        run: uv run radon cc . -a -nc --total-average
 
       - name: Test
         run: uv run pytest -q --tb=short --cov=<package_name> --cov-report=term-missing

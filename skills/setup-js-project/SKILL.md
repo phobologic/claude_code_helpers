@@ -15,9 +15,11 @@ and GitHub Actions for CI.
 - If `$ARGUMENTS` is non-empty, use it as the project name
 - Otherwise, infer from `basename $PWD`
 
-Present a brief summary to the user of what will be created, then ask for confirmation.
-If `.git/` exists, include the hook files in the list; otherwise omit them and note that
-hooks will be skipped until git is initialized.
+Present a brief summary to the user, then ask for confirmation. If `.git/` exists,
+include the hook files in the list; otherwise omit them and note that hooks will be
+skipped until git is initialized.
+
+For new projects:
 
 ```
 Project name:    <name>
@@ -33,18 +35,46 @@ Git hooks:       .git/hooks/pre-commit, .git/hooks/pre-commit.d/javascript.sh
 Proceed? [y/N]
 ```
 
+For existing projects (re-run), show what will be added/updated:
+
+```
+Project name:    <name> (existing project)
+
+Updates:
+  biome.json:    add noExcessiveCognitiveComplexity rule
+  package.json:  already up to date
+  tsconfig.json: already up to date
+
+Proceed? [y/N]
+```
+
 ## Phase 2 — Preflight checks
 
 Before writing anything:
 
-1. Check if any of the target files already exist. If conflicts exist, list them and ask
-   whether to overwrite. Do not overwrite silently.
+1. Check which target files already exist. Read each existing file so you understand
+   what's already configured.
 2. Check if git is initialized (`git rev-parse --git-dir 2>/dev/null`). If not, note it
    in the final report — don't run `git init` yourself.
 
+**Incremental updates.** This skill can be re-run on existing projects to bring them up
+to date. For each file below:
+- **Missing:** create it exactly as specified.
+- **Exists:** read it, compare against the spec, and add only what's missing. Do not
+  overwrite user customizations (custom deps, modified biome rules, adjusted thresholds).
+  For config files like `biome.json` and `package.json`, add missing sections, rules, and
+  dependencies without touching existing ones. For shell scripts like pre-commit hooks,
+  add missing check blocks without rewriting existing ones.
+
+If an existing setting directly contradicts the spec (e.g., the user has a different
+complexity threshold, or a conflicting biome rule configuration), do not silently
+overwrite it — ask the user how they want to handle the conflict.
+
+Present a summary of what will be created vs. updated, then ask for confirmation.
+
 ## Phase 3 — Scaffold files
 
-Write each file in order:
+For each file: create if missing, or update if it exists (see Phase 2).
 
 ### `package.json`
 
@@ -157,7 +187,13 @@ export default defineConfig({
     "rules": {
       "recommended": true,
       "complexity": {
-        "noForEach": "off"
+        "noForEach": "off",
+        "noExcessiveCognitiveComplexity": {
+          "level": "warn",
+          "options": {
+            "maxAllowedComplexity": 15
+          }
+        }
       },
       "style": {
         "noNonNullAssertion": "warn",
