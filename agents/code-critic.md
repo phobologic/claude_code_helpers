@@ -63,6 +63,13 @@ Interrogate every changed file on all of these dimensions. Be thorough. Do not s
 - Are large objects allocated in tight loops without reuse?
 - Is user-controlled input used to size an allocation without a bound?
 
+### Complexity
+- Are there functions with high cyclomatic or cognitive complexity introduced or
+  worsened by this change? Use the project's complexity tooling if available (e.g.,
+  `radon cc -nc` for Python, Biome's lint output for JS/TS).
+- Functions exceeding the project's threshold are Medium findings. Functions at D/F
+  grade (or cognitive complexity > 25) are High findings.
+
 ### Convention Violations
 - Does this code violate any rules in `.code-review/claude-md-context.txt`?
 
