@@ -87,7 +87,7 @@ To add language auto-formatting hooks to a project:
 - `/design-sprint [--scan] [--output <path>] [-- <guidance>]` - Three-round GAN-style design sprint: 3 sonnet designers propose independently, opus evaluator scores and issues shared briefs, team lead writes the final spec
 
 ### Exploratory Testing
-- `/playwright-explore <url> [-- scenario]` - Spawn GM + player agents to explore a running app, with the team lead creating deduplicated tk tickets from their findings
+- `/playwright-explore <url> [scenario:<name>] [roles:r1,r2] [time:30m] [-- scenario]` - Wave-based exploratory testing with agent recycling. Ad-hoc mode discovers routes from source code; catalog mode loads predefined scenarios from `docs/test-scenarios.md`. Agents get focused assignments per wave and are recycled between waves to prevent context exhaustion.
 
 ### Project Setup
 - `/setup-python-project [name]` - Scaffold a new Python project with uv, ruff, pytest, CI
