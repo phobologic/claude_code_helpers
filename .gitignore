@@ -1,6 +1,8 @@
 settings.local.json
 test-file.txt
 .claude/
+.tmp/
+.tickets/
 
 # Environment and secrets
 .env
