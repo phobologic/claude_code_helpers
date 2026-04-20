@@ -7,9 +7,9 @@ language plugins, tool rules, and working style rules for `~/.claude/`.
 
 | Directory / File | Purpose |
 |-----------------|---------|
-| `skills/` | Global skills: `/spec`, `/run-epic`, `/review`, `/multi-review`, `/implement-ticket`, `/use-railway`, `/use-sqlalchemy`, `/migrate-beads` |
-| `agents/` | Sub-agents: 4 ticket-execution agents (implementer, ac-verifier, quality-reviewer, spec-critic) + 5 code review agents |
-| `languages/` | Per-language Claude Code plugins (Go, Python) — auto-formatting hooks + coding rules |
+| `skills/` | Global skills: `/spec`, `/run-epic`, `/fix-tickets`, `/review`, `/multi-review`, `/implement-ticket`, `/design-sprint`, `/playwright-explore`, `/epic-tree`, `/ticket-triage`, `/setup-python-project`, `/setup-js-project`, `/use-railway`, `/use-sqlalchemy`, `/migrate-beads` |
+| `agents/` | Sub-agents: 4 ticket-execution agents (implementer, ac-verifier, quality-reviewer, spec-critic) + 5 code review agents + code-critic (adversarial single-pass reviewer) |
+| `languages/` | Per-language Claude Code plugins (Go, Python, JS/SvelteKit) — auto-formatting hooks + coding rules |
 | `plugins/` | General-purpose Claude Code plugins — workflow automation and tool integrations |
 | `tools/` | Per-tool rule files (Railway, SQLAlchemy) — loaded via `.claude/rules/` symlinks |
 | `bin/` | Utility scripts: tk plugins (`tk-show-multi`, `tk-epic-status`, `tk-triage`, `tk-set`) and `git-auto-commit.sh` |
@@ -30,6 +30,7 @@ This creates:
 - `~/.claude/agents/` → `agents/`
 - `~/.claude/rules/go.md` → `languages/go/rules/CLAUDE.md` *(path-scoped to `*.go` files)*
 - `~/.claude/rules/python.md` → `languages/python/rules/CLAUDE.md` *(path-scoped to `*.py` files)*
+- `~/.claude/rules/js.md` → `languages/js/rules/CLAUDE.md` *(path-scoped to `*.ts`/`*.js`/`*.svelte` files)*
 - `~/.local/bin/tk-show-multi` → `bin/tk-show-multi` *(tk plugin)*
 - `~/.local/bin/tk-epic-status` → `bin/tk-epic-status` *(tk plugin)*
 - `~/.local/bin/tk-triage` → `bin/tk-triage` *(tk plugin)*
@@ -51,8 +52,10 @@ are available globally:
 | `/multi-review` | Parallel review by 5 specialized agents |
 | `/implement-ticket [id ...]` | Pick up and implement one or more `tk` tickets |
 | `/design-sprint [--scan] [-- guidance]` | Multi-agent GAN-style design sprint producing a frontend spec |
-| `/playwright-explore <url> [-- scenario]` | Spawn simulated users to explore a running app and file `tk` tickets |
+| `/playwright-explore <url> [scenario:<name>] [roles:…] [time:…] [-- scenario]` | Spawn simulated users to explore a running app and file `tk` tickets |
+| `/epic-tree [--all] [epic-id ...]` | Show a tree of epics with open/closed ticket counts per level |
 | `/setup-python-project [name]` | Scaffold a new Python project with uv, ruff, pytest, and GitHub Actions CI |
+| `/setup-js-project [name]` | Scaffold a new SvelteKit project with Biome, Prettier, Vitest, and GitHub Actions CI |
 | `/use-railway` | Symlink Railway CLI rules into the current project |
 | `/use-sqlalchemy` | Symlink SQLAlchemy/Alembic rules into the current project |
 | `/migrate-beads` | Migrate a project's issue tracking from `bd` (beads) to `tk` |
@@ -284,39 +287,60 @@ to an implementer or use as a prompt for `/run-epic`.
 ## Playwright Explore
 
 `/playwright-explore` spawns a team of Playwright-driven agents to explore a running
-web app as simulated users. Each agent operates the browser independently; findings
-are reported back to the team lead, deduplicated, and filed as `tk` tickets.
+web app as simulated users. Execution runs in **waves**: each wave, the team lead
+hands out focused assignments, collects findings, and then **recycles** the agents
+before the next wave — this prevents context exhaustion on long runs.
 
 ```bash
 /playwright-explore http://localhost:3000
 /playwright-explore http://localhost:3000 -- focus on the checkout flow
 /playwright-explore http://localhost:3000 roles:host,player1,player2
-/playwright-explore http://localhost:3000 roles:host,player1 -- multiplayer session setup
+/playwright-explore http://localhost:3000 time:30m
+/playwright-explore http://localhost:3000 scenario:checkout-flow
 ```
 
+**Two modes:**
+
+- **Ad-hoc** (default) — routes are discovered from the source code, and agents
+  improvise based on the guidance you pass after `--`.
+- **Catalog** (`scenario:<name>`) — loads a predefined scenario from
+  `docs/test-scenarios.md` in the target repo. Useful for reproducible runs and
+  scenarios that need specific setup/teardown.
+
 **Roles** control what each agent is trying to do. The first role is always the
-session initiator (sets up state, shares join links). Remaining roles are joiners.
+session initiator (sets up state, shares join links); the rest are joiners.
 Default roles: `participant-1, participant-2, participant-3`.
 
-Findings are filed as `tk` tickets with reproduction steps. Run after major feature
+**`time:`** bounds the full run (e.g. `time:30m`, `time:2h`). Without it the team
+lead decides when to stop based on diminishing returns.
+
+Findings are deduplicated and filed as `tk` tickets with reproduction steps.
+Browser snapshots land in `.playwright-cli/snapshots/`. Run after major feature
 work or before a release to catch UX issues and broken flows.
 
-## Setup Python Project
+## Project Scaffolding
 
-`/setup-python-project` scaffolds a new Python project with opinionated defaults.
-Run it in an empty directory or pass a project name.
+`/setup-python-project` and `/setup-js-project` scaffold new projects with
+opinionated defaults. Run in an empty directory or pass a project name.
 
 ```bash
 /setup-python-project              # uses current directory name
 /setup-python-project my-api       # creates my-api/ with full scaffold
+/setup-js-project my-app           # SvelteKit scaffold
 ```
 
-Scaffold includes: `uv` for package management, `ruff` for linting + formatting,
-`pytest` for testing, and a GitHub Actions CI workflow.
+- **Python**: `uv` for package management, `ruff` for lint + format, `pytest`
+  for testing, pre-commit hooks, and a GitHub Actions CI workflow.
+- **JS**: SvelteKit with TypeScript strict mode, Biome for JS/TS lint + format,
+  Prettier for Svelte files, Vitest for testing, pre-commit hooks, and CI.
+
+Both skills finish with an initial commit so the scaffold is ready to push.
 
 ## Language Plugins
 
-Language plugins provide **auto-formatting hooks** (goimports for Go, ruff for Python).
+Language plugins provide **auto-formatting hooks** (goimports for Go, ruff for
+Python, Biome + Prettier for JS/TS/Svelte). Python and JS also run complexity
+checks on changed files (radon for Python, Biome's complexity lint for JS).
 Coding convention rules are installed globally by `./install.sh` — no extra step.
 
 To activate formatting hooks in a specific project:
@@ -330,6 +354,7 @@ To activate formatting hooks in a specific project:
 ```
 /plugin install claude-go@claude-languages
 /plugin install claude-python@claude-languages
+/plugin install claude-js@claude-languages
 ```
 
 See [`languages/README.md`](languages/README.md) for plugin structure details.
