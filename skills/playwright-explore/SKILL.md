@@ -7,7 +7,7 @@ description: >
   execution with agent recycling to prevent context exhaustion. Findings become
   tk tickets. Use when the user says "explore the app", "test the app with
   playwright", "simulate users", or similar.
-argument-hint: "<url> [scenario:<name>] [roles:r1,r2,r3] [time:30m] [-- <scenario>]"
+argument-hint: "[url] [scenario:<name>] [roles:r1,r2,r3] [time:30m] [-- <scenario>]"
 ---
 
 # Playwright Explore
@@ -30,9 +30,11 @@ disconnect it with `/mcp` before confirming the plan.
 
 Parse `$ARGUMENTS` in this order:
 
-1. **URL** — first token (required). If missing, ask the user.
+1. **URL** — first token. Optional. If missing, resolve via the URL picker
+   below.
 2. **Scenario catalog** — look for a `scenario:<name>` token. If present,
-   enter **catalog mode** (see Phase 1B). Otherwise, **ad-hoc mode** (Phase 1A).
+   enter **catalog mode** (see Phase 1B). If absent, resolve via the
+   scenario picker below.
 3. **Roles** — look for a `roles:` token (e.g. `roles:gm,player1,player2`).
    Split on commas to get the role list.
    - In catalog mode, the scenario defines roles — ignore any `roles:` token.
@@ -43,8 +45,83 @@ Parse `$ARGUMENTS` in this order:
 4. **Time limit** — look for a `time:` token (e.g. `time:30m`, `time:2h`).
    Parse to seconds. If absent, no limit.
 5. **Freeform scenario** — everything after `--` is a free-form description
-   (ad-hoc mode only). Default: "Explore the app as real users would,
-   exercising the core flows end-to-end."
+   (ad-hoc mode only). If present, it pins ad-hoc mode and bypasses the
+   scenario picker. Default when ad-hoc is chosen via the picker with no
+   `--` text: "Explore the app as real users would, exercising the core
+   flows end-to-end."
+
+### Scenario picker (when `scenario:` not given and no `--` text)
+
+Search for a scenario catalog in this order:
+
+1. `docs/test-scenarios.md`
+2. `tests/scenarios.md`
+3. `.playwright-explore/scenarios.md`
+
+If a catalog is found, parse out the `##` scenario headings and their
+**Goal** lines, then offer them via `AskUserQuestion`:
+
+```
+AskUserQuestion({
+  questions: [{
+    question: "Which scenario should we run?",
+    header: "Scenario",
+    multiSelect: false,
+    options: [
+      { label: "<Scenario Name 1>", description: "<Goal line>" },
+      { label: "<Scenario Name 2>", description: "<Goal line>" },
+      ...
+      { label: "Ad-hoc (no scenario)",
+        description: "Explore the app freeform, roles default to participant-1/2/3" }
+    ]
+  }]
+})
+```
+
+Cap at ~10 scenarios; if the catalog has more, show the first 10 and add
+an "Other — type scenario name" option. If the user picks a named scenario,
+switch to catalog mode. If they pick "Ad-hoc", continue ad-hoc.
+
+If no catalog file is found, skip the picker and default to ad-hoc mode.
+
+### URL picker (when URL not given as the first argument)
+
+Run the framework detection cascade from Phase 1A (SvelteKit, Next.js,
+Django, FastAPI, Express) to guess the dev-server URL:
+
+| Framework | Default URL |
+|---|---|
+| SvelteKit / Vite | `http://localhost:5173` |
+| Next.js | `http://localhost:3000` |
+| Express | `http://localhost:3000` |
+| Django | `http://localhost:8000` |
+| FastAPI | `http://localhost:8000` |
+| (none detected) | (no suggestion) |
+
+Also check `package.json` scripts for an explicit `--port N` and prefer
+that if present.
+
+Offer the guess via `AskUserQuestion`, always including an "Other" option
+so the user can type their own:
+
+```
+AskUserQuestion({
+  questions: [{
+    question: "Where is the app running?",
+    header: "URL",
+    multiSelect: false,
+    options: [
+      { label: "http://localhost:5173",
+        description: "Detected SvelteKit — default Vite dev port" },
+      { label: "Other",
+        description: "Type a different URL" }
+    ]
+  }]
+})
+```
+
+If no framework was detected, skip the suggestion and ask for the URL
+directly in plain text ("What URL is the app running at?").
 
 Derive agent names from the roles (e.g. role `gm` → agent name `gm`).
 
