@@ -61,6 +61,41 @@ are available globally:
 | `/migrate-beads` | Migrate a project's issue tracking from `bd` (beads) to `tk` |
 | `/ticket-triage` | Filter, sort, and review open tickets — use instead of inline Python/jq |
 
+## Common Workflows
+
+The skills are designed to compose. Four loops account for the bulk of real-world
+usage:
+
+**Feature kickoff** — turn an idea into running code:
+
+```
+/spec "your idea"  →  /run-epic <epic-id>  →  /multi-review
+```
+
+**Backlog grooming** — work down the open ticket list:
+
+```
+/epic-tree  →  /ticket-triage  →  /fix-tickets <ids…>
+```
+
+`/fix-tickets` is meant to run in tight bursts — several batches back-to-back
+over an hour is normal.
+
+**Post-review cleanup** — act on review findings:
+
+```
+/multi-review  →  /fix-tickets <review-epic-id>
+```
+
+`/multi-review` creates a `tk` epic with one child ticket per finding, which
+`/fix-tickets` can consume directly.
+
+**Build + validate + fix** — after a feature lands, poke it with simulated users:
+
+```
+/run-epic  →  /playwright-explore  →  /ticket-triage  →  /fix-tickets
+```
+
 ## Agent Team Workflow
 
 The `/spec` and `/run-epic` skills form a full spec-to-execution pipeline powered by
