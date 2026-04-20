@@ -63,6 +63,7 @@ are available globally:
 | `/design-sprint [--scan] [-- guidance]` | Multi-agent GAN-style design sprint producing a frontend spec |
 | `/playwright-explore <url> [scenario:<name>] [roles:…] [time:…] [-- scenario]` | Spawn simulated users to explore a running app and file `tk` tickets |
 | `/epic-tree [--all] [epic-id ...]` | Show a tree of epics with open/closed ticket counts per level |
+| `/wrap-epic [epic-id]` | Ship a finished `/run-epic` or `/fix-tickets`: merge, prune worktrees, close epic, report what's left |
 | `/setup-python-project [name]` | Scaffold a new Python project with uv, ruff, pytest, and GitHub Actions CI |
 | `/setup-js-project [name]` | Scaffold a new SvelteKit project with Biome, Prettier, Vitest, and GitHub Actions CI |
 | `/use-railway` | Symlink Railway CLI rules into the current project |
@@ -78,22 +79,22 @@ usage:
 **Feature kickoff** — turn an idea into running code:
 
 ```
-/spec "your idea"  →  /run-epic <epic-id>  →  /multi-review
+/spec "your idea"  →  /run-epic <epic-id>  →  /multi-review  →  /wrap-epic
 ```
 
 **Backlog grooming** — work down the open ticket list:
 
 ```
-/epic-tree  →  /ticket-triage  →  /fix-tickets <ids…>
+/epic-tree  →  /ticket-triage  →  /fix-tickets <ids…>  →  /wrap-epic
 ```
 
 `/fix-tickets` is meant to run in tight bursts — several batches back-to-back
-over an hour is normal.
+over an hour is normal. `/wrap-epic` ships each batch.
 
 **Post-review cleanup** — act on review findings:
 
 ```
-/multi-review  →  /fix-tickets <review-epic-id>
+/multi-review  →  /fix-tickets <review-epic-id>  →  /wrap-epic
 ```
 
 `/multi-review` creates a `tk` epic with one child ticket per finding, which
@@ -102,7 +103,7 @@ over an hour is normal.
 **Build + validate + fix** — after a feature lands, poke it with simulated users:
 
 ```
-/run-epic  →  /playwright-explore  →  /ticket-triage  →  /fix-tickets
+/run-epic  →  /playwright-explore  →  /ticket-triage  →  /fix-tickets  →  /wrap-epic
 ```
 
 ## Agent Team Workflow

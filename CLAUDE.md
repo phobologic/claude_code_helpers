@@ -73,6 +73,7 @@ To add language auto-formatting hooks to a project:
 ### Spec and Execution
 - `/spec [idea]` - Turn a rough idea into a phased plan with EARS ACs, adversarial review via spec-critic, and `tk` tickets
 - `/run-epic <epic-id>` - Execute a `tk` epic with an agent team (implementers + ac-verifier + quality-reviewer)
+- `/wrap-epic [epic-id]` - Ship a completed `/run-epic` or `/fix-tickets` batch: merge to main, prune worktrees, close epic with ship note, report remaining sub-epics. User-only (`disable-model-invocation: true`) — confirms before any destructive action.
 
 ### Review
 - `/review` - Perform standard code review of uncommitted changes
