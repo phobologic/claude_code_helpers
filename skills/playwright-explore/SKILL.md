@@ -364,6 +364,10 @@ Rules:
 - **Use `--filename <path>` to redirect big snapshots to a file** when you
   only need to confirm an action succeeded and don't want the tree in
   context. Don't `Read` the file afterward — that defeats the point.
+  Always write snapshot files under `.playwright-cli/snapshots/` (which is
+  already gitignored via `.playwright-cli/`), e.g.
+  `--filename .playwright-cli/snapshots/<role>-<label>.yml`. Never write
+  them to the repo root.
 
 ## Snapshot budget
 
