@@ -16,4 +16,4 @@ Examples:
 - `/epic-tree pbp-c0ll --all` → `tk epic-tree pbp-c0ll --all`
 - `/epic-tree abc-1 abc-2` → `tk epic-tree abc-1 abc-2`
 
-Run the command with the Bash tool and print the output. Do not summarize or reformat it.
+Run the command with the Bash tool, then **print the full command output verbatim as your text response** — inside a fenced code block so it renders as-is. The Bash tool result is often collapsed in the UI (e.g. "+N lines, ctrl+o to expand"), so you must reproduce it in your own message. Do not summarize, truncate, reformat, or add commentary.
