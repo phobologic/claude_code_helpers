@@ -161,6 +161,8 @@ build/
 .coverage
 htmlcov/
 tmp/
+.tmp/
+.DS_Store
 .code-review/
 .tickets/
 ```
