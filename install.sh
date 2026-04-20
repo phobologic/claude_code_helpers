@@ -50,15 +50,17 @@ link "$DOTFILES/languages/go/rules/CLAUDE.md"     "$CLAUDE/rules/go.md"
 link "$DOTFILES/languages/python/rules/CLAUDE.md" "$CLAUDE/rules/python.md"
 link "$DOTFILES/languages/js/rules/CLAUDE.md"     "$CLAUDE/rules/js.md"
 
-# Ensure .tickets/ is globally gitignored (tk stores tickets locally, not in git)
+# Ensure ephemeral dirs are globally gitignored
 GIT_IGNORE="${XDG_CONFIG_HOME:-$HOME/.config}/git/ignore"
 mkdir -p "$(dirname "$GIT_IGNORE")"
-if ! grep -qF '.tickets/' "$GIT_IGNORE" 2>/dev/null; then
-  echo '.tickets/' >> "$GIT_IGNORE"
-  echo "  add:  .tickets/ to $GIT_IGNORE"
-else
-  echo "  ok:   .tickets/ already in $GIT_IGNORE"
-fi
+for entry in '.tickets/' '.tmp/'; do
+  if ! grep -qF "$entry" "$GIT_IGNORE" 2>/dev/null; then
+    echo "$entry" >> "$GIT_IGNORE"
+    echo "  add:  $entry to $GIT_IGNORE"
+  else
+    echo "  ok:   $entry already in $GIT_IGNORE"
+  fi
+done
 
 echo ""
 echo "Done. ~/.claude/ is configured."

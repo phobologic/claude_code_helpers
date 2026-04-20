@@ -40,6 +40,21 @@ two sentences on what the command accomplishes, not a line-by-line breakdown.
 
 - **Never run `git push`**. The user will push manually.
 
+## Scratch Files
+
+When you need to write a temporary file — heredocs for long commit messages,
+SQL snippets, generated prompts, ad-hoc analysis output — prefer the project's
+`.tmp/` directory over `/tmp`. Create `.tmp/` in the repo root if it doesn't
+exist; it's globally gitignored. Keeping scratch files inside the repo means
+the working directory never has to leave the project, artifacts remain
+inspectable after the fact, and each project has its own isolated scratch
+space.
+
+Exceptions where `/tmp` is still appropriate:
+- Cross-repo operations (comparing or moving data between two projects)
+- Sensitive content that shouldn't exist near the repo even briefly
+- Files you explicitly want the OS to auto-clean on reboot
+
 ## Hooks
 
 **PostToolUse hooks report issues but do not block.** The framework marks them "non-blocking" — the tool result stands regardless. When a PostToolUse hook exits non-zero, treat the stderr output as a mandatory fix: stop what you're doing, read the full error, fix the file, and verify the hook passes before continuing. Do not proceed with other edits while hook errors are pending. Every unresolved hook error is a broken file that compounds the problem.
