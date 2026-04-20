@@ -93,6 +93,7 @@ To add language auto-formatting hooks to a project:
 ### Project Setup
 - `/setup-python-project [name]` - Scaffold a new Python project with uv, ruff, pytest, CI
 - `/setup-js-project [name]` - Scaffold a new SvelteKit project with Biome, Prettier, Vitest, CI
+- `/setup-go-project [name]` - Scaffold a new Go project with Makefile, golangci-lint, CI, and two-layer git hooks (pre-commit fast gate + pre-push full gate)
 
 ### Tool Setup
 - `/use-railway` - Symlink Railway CLI rules into this project's `.claude/rules/`
