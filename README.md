@@ -36,7 +36,16 @@ This creates:
 - `~/.local/bin/tk-triage` → `bin/tk-triage` *(tk plugin)*
 - `~/.local/bin/tk-set` → `bin/tk-set` *(tk plugin)*
 
-It also adds `.tickets/` to `~/.config/git/ignore` so ticket files are never accidentally committed.
+It also adds `.tickets/` and `.tmp/` to `~/.config/git/ignore` so ticket files
+and scratch files are never accidentally committed.
+
+### Scratch files
+
+When Claude needs to write a temporary file (long heredocs, generated prompts,
+ad-hoc analysis output), `CLAUDE.global.md` instructs it to prefer a project-local
+`.tmp/` directory over `/tmp`. This keeps the working directory inside the repo
+and makes the artifacts inspectable after the fact. `.tmp/` is globally
+gitignored by `install.sh` — no per-project setup needed.
 
 ## Skills
 
