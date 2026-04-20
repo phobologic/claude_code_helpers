@@ -107,9 +107,24 @@ Skipping this step is the number-one reason tickets come back from review.
    Ticket: <ticket-id>"
    ```
 
+## Before Signaling DONE
+
+Run this checklist every time — on initial implementation *and* on every rework
+pass. Skipping it is how regressions sneak through.
+
+1. **Lint clean.** Run the project's lint command to green. Do not rely on the
+   commit hook to catch lint errors — fix them first so the commit itself
+   doesn't bounce.
+2. **Full test suite green.** Not just the tests scoped to your change — the
+   whole suite. Adjacent edits and shared fixtures cause surprises.
+3. **Re-verify every acceptance criterion**, not just the one you were
+   reworking. Rework fixes routinely violate a previously-passing AC (e.g.
+   narrowing a toast to be conditional when the AC says "always"). Walk the
+   full AC list and confirm each still holds against your current code.
+
 ## Signaling Completion
 
-Once tests pass and changes are committed, message the team lead:
+Once the pre-DONE checklist passes and changes are committed, message the team lead:
 
 > Ticket <ticket-id> implemented and committed on branch <branch-name>.
 
@@ -166,6 +181,11 @@ You're free to claim the next available task.
   working on nearby code. If you discover something that needs fixing outside
   your scope, note it in your commit message or tell the team lead, but don't
   fix it yourself.
+- **No conditional behavior unless the AC says so.** If an AC says a toast,
+  response, log line, or side effect happens, it happens unconditionally.
+  Don't gate it on success flags, error types, or "silent" modes unless the
+  AC explicitly carves out the condition. Inventing conditions during rework
+  is a top source of AC regressions.
 - **Fix the bug class, not just the line cited.** Ticket descriptions point at
   one symptom. If the same pattern exists elsewhere in the *same file you
   touched*, either fix it in the same commit or flag it explicitly in your
