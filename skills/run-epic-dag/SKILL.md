@@ -544,13 +544,12 @@ When a quality reviewer sends `CLEAN <ticket-id>`:
      if [ -n "$(git -C $REPO_ROOT status --porcelain)" ]; then
        echo "ABORT: main repo working tree is dirty before merging <ticket-id>"
        git -C $REPO_ROOT status
-       # release merge_lock, process merge_queue next entry if any, escalate to user
+       # release merge_lock, escalate to user — halt all further merges
      fi
      ```
-     If the check fires: set `merge_lock = null`; if `merge_queue` is non-empty
-     pop the head and start that merge (the queue entry is clean — only this
-     merge is skipped); report the dirty status to the user and halt further
-     merges until they resolve it.
+     If the check fires: set `merge_lock = null`, report the dirty status to
+     the user, and halt all further merges until they resolve it. Do not
+     process the merge queue — the dirty tree must be cleaned first.
    - Run:
      ```bash
      git -C $REPO_ROOT checkout epic/<epic-id>
