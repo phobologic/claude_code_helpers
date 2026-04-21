@@ -53,7 +53,6 @@ quality_review_queue: Queue<VerificationJob>
 
 merge_lock: ticket_id | null          # ID of the ticket currently being merged, or null
 
-wave_number: int                      # increments when a new set of tickets is dispatched
 findings_parent: ticket_id            # parent epic for out-of-scope finding tickets
 
 # Counters per ticket
