@@ -140,7 +140,7 @@ Wait for the user's answer before creating the team.
 
 ```bash
 REPO_ROOT=$(pwd)
-git checkout -b epic/<epic-id> main 2>/dev/null || git checkout epic/<epic-id>
+git show-ref --verify --quiet refs/heads/epic/<epic-id> && git checkout epic/<epic-id> || git checkout -b epic/<epic-id> main
 git checkout main
 ```
 
@@ -248,7 +248,7 @@ claim tickets from the task list — the team lead routes all work.
 For each ticket assignment:
 1. Check out the ticket branch — resume if it exists, otherwise branch fresh
    from the latest integration state:
-   \`git checkout ticket/<ticket-id> 2>/dev/null || git checkout -b ticket/<ticket-id> epic/<epic-id>\`
+   \`git show-ref --verify --quiet refs/heads/ticket/<ticket-id> && git checkout ticket/<ticket-id> || git checkout -b ticket/<ticket-id> epic/<epic-id>\`
 2. Run \`tk show <ticket-id>\` for full context
 3. Send STATUS to team lead: 'STATUS dag-impl-<N>: read <ticket-id>, starting implementation'
 4. Implement the fix
@@ -347,7 +347,7 @@ SendMessage({
   message: "Ticket <ticket-id>: <ticket-title>
 
 Implement this ticket. Branch:
-  git checkout ticket/<ticket-id> 2>/dev/null || git checkout -b ticket/<ticket-id> epic/<epic-id>
+  git show-ref --verify --quiet refs/heads/ticket/<ticket-id> && git checkout ticket/<ticket-id> || git checkout -b ticket/<ticket-id> epic/<epic-id>
 
 Run \`tk show <ticket-id>\` for full context. Signal DONE when committed."
 })
@@ -746,7 +746,7 @@ procedure dispatch_ready_tickets():
       message: "Ticket <T>: <T title>
 
 Implement this ticket. Branch:
-  git checkout ticket/<T> 2>/dev/null || git checkout -b ticket/<T> epic/<epic-id>
+  git show-ref --verify --quiet refs/heads/ticket/<T> && git checkout ticket/<T> || git checkout -b ticket/<T> epic/<epic-id>
 
 Run `tk show <T>` for full context. Signal DONE when committed."
     })
