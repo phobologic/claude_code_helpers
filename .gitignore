@@ -3,6 +3,7 @@ test-file.txt
 .claude/
 .tmp/
 .tickets/
+.worktrees/
 
 # Environment and secrets
 .env
