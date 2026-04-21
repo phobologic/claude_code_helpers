@@ -478,8 +478,32 @@ When the AC verifier sends `FAIL <ticket-id> <detail>`:
    again after rework).
 4. Recycle the AC verifier (same procedure as PASS step 3). When ready, check
    `ac_verification_queue` and dispatch next if non-empty (same as PASS step 3).
-5. **[TODO: cc-euin]** If `ac_fail_count[ticket-id] >= 3`: escalate to user
-   (options: provide guidance / reassign / mark BLOCKED). Do not dispatch rework.
+5. If `ac_fail_count[ticket-id] >= 3`: escalate to the user. Do not dispatch
+   rework until the user responds.
+
+   > `<ticket-id>` has failed AC verification 3 times. Options:
+   > 1. **Provide guidance** — I will include your guidance in the rework message
+   > 2. **Reassign** — pick a different implementer (resets all counters)
+   > 3. **Mark BLOCKED** — skip this ticket and continue with others
+
+   - **Option 1 (guidance):** Include the user's text in the rework message at
+     step 10. Reset `ac_fail_count[ticket-id] = 0` and continue to steps 6–11.
+   - **Option 2 (reassign):** Reset `ac_fail_count[ticket-id] = 0` and
+     `rework_count[ticket-id] = 0`. Free slot S (`agent_pool[S].assignee = null`).
+     Select a different idle slot S'; if none is idle, wait for one to free up.
+     Re-dispatch the ticket to S' as a standard rework assignment.
+   - **Option 3 (BLOCKED):**
+     - `tk set <ticket-id> --status blocked`
+     - Run the [Worktree reset procedure](#worktree-reset-procedure) on slot S's
+       worktree — **do not** delete the `ticket/<id>` branch; leave it for
+       post-run inspection.
+     - `agent_pool[S].assignee = null`; slot S is now idle.
+     - Identify downstream tickets: any ticket with a direct or transitive
+       dependency on `<ticket-id>` will no longer appear in `tk ready`. Report
+       these stalled tickets to the user.
+     - Call `dispatch_ready_tickets()` to assign the freed slot to other work.
+     - Output dashboard with `<ticket-id>` in BLOCKED state. **Skip steps 6–11.**
+
 6. `ticket_state[ticket-id].state = REWORK`
 7. `ticket_state[ticket-id].verification_phase = null`
 8. Find the implementer slot S where `agent_pool[S].assignee == ticket-id`.
@@ -493,6 +517,9 @@ When the AC verifier sends `FAIL <ticket-id> <detail>`:
     })
     ```
 11. Output dashboard.
+12. **Livelock check.** If every slot in `agent_pool` has `assignee != null`
+    and every assigned ticket has `state == REWORK`: log a livelock warning
+    (see [Pool livelock](#pool-livelock) in Edge Cases) and continue waiting.
 
 ---
 
@@ -512,6 +539,18 @@ When a quality reviewer sends `CLEAN <ticket-id>`:
    - If `merge_lock` is non-null: append `ticket-id` to `merge_queue` and
      stop — this ticket will be merged when the lock is released.
    - Set `merge_lock = ticket-id`.
+   - **Dirty-tree pre-flight:** abort if the main repo working tree is dirty:
+     ```bash
+     if [ -n "$(git -C $REPO_ROOT status --porcelain)" ]; then
+       echo "ABORT: main repo working tree is dirty before merging <ticket-id>"
+       git -C $REPO_ROOT status
+       # release merge_lock, process merge_queue next entry if any, escalate to user
+     fi
+     ```
+     If the check fires: set `merge_lock = null`; if `merge_queue` is non-empty
+     pop the head and start that merge (the queue entry is clean — only this
+     merge is skipped); report the dirty status to the user and halt further
+     merges until they resolve it.
    - Run:
      ```bash
      git -C $REPO_ROOT checkout epic/<epic-id>
@@ -579,8 +618,29 @@ finding list:
 3. Recycle the quality reviewer (same procedure as CLEAN step 4). When ready,
    dispatch next from `quality_review_queue` if non-empty and head ticket has
    passed AC (same as CLEAN step 4).
-4. **[TODO: cc-euin]** If `rework_count[ticket-id] >= 3`: escalate to user
-   (options: provide guidance / reassign / mark BLOCKED). Do not dispatch rework.
+4. If `rework_count[ticket-id] >= 3`: escalate to the user. Do not dispatch
+   rework until the user responds.
+
+   > `<ticket-id>` has failed quality review 3 times. Options:
+   > 1. **Provide guidance** — I will include your guidance in the rework message
+   > 2. **Reassign** — pick a different implementer (resets all counters)
+   > 3. **Mark BLOCKED** — skip this ticket and continue with others
+
+   - **Option 1 (guidance):** Include the user's text in the rework message at
+     step 9. Reset `rework_count[ticket-id] = 0` and continue to steps 5–10.
+   - **Option 2 (reassign):** Reset `rework_count[ticket-id] = 0` and
+     `ac_fail_count[ticket-id] = 0`. Free slot S (`agent_pool[S].assignee = null`).
+     Select a different idle slot S'; if none is idle, wait for one to free up.
+     Re-dispatch the ticket to S' as a standard rework assignment.
+   - **Option 3 (BLOCKED):**
+     - `tk set <ticket-id> --status blocked`
+     - Run the [Worktree reset procedure](#worktree-reset-procedure) on slot S's
+       worktree — **do not** delete the `ticket/<id>` branch.
+     - `agent_pool[S].assignee = null`; slot S is now idle.
+     - Identify and report stalled downstream tickets to the user.
+     - Call `dispatch_ready_tickets()` to assign the freed slot to other work.
+     - Output dashboard with `<ticket-id>` in BLOCKED state. **Skip steps 5–10.**
+
 5. `ticket_state[ticket-id].state = REWORK`
 6. `ticket_state[ticket-id].verification_phase = null`
 7. Find the implementer slot S where `agent_pool[S].assignee == ticket-id`.
@@ -600,6 +660,9 @@ finding list:
    })
    ```
 10. Output dashboard.
+11. **Livelock check.** If every slot in `agent_pool` has `assignee != null`
+    and every assigned ticket has `state == REWORK`: log a livelock warning
+    (see [Pool livelock](#pool-livelock) in Edge Cases) and continue waiting.
 
 ---
 
@@ -718,9 +781,124 @@ status to the user.
 
 ---
 
-**[TODO: cc-euin]** Edge cases: AC fail escalation (>= 3), QR rework
-escalation (>= 3), BLOCKED ticket handling, pool livelock detection, stuck-
-agent heartbeat, partial shutdown on user stop request, epic completion report.
+## Phase 4 — Epic completion
+
+When all child tickets of the epic have reached CLOSED or BLOCKED state:
+
+1. Report to the user:
+   ```
+   Epic <epic-id> complete. N tickets closed, M tickets blocked.
+
+   Closed tickets:
+     [<id>] <title> — merged to epic/<epic-id>
+     ...
+
+   Blocked tickets (stalled, not merged):
+     [<id>] <title>
+     ...
+
+   Integration branch: epic/<epic-id>
+
+   Next steps:
+     1. Run deep review: /multi-review git diff main epic/<epic-id> --
+     2. Address any critical/high findings
+     3. Merge to main: git checkout main && git merge epic/<epic-id> --no-ff
+   ```
+
+2. If non-blocking finding tickets remain open, list them:
+   ```
+   Non-blocking findings left open (tracked as tk tickets):
+     <finding-ticket-ids>
+   ```
+
+3. Broadcast `shutdown_request` to all teammates:
+   ```
+   SendMessage({ to: "dag-impl-1",      message: { "type": "shutdown_request" } })
+   SendMessage({ to: "dag-impl-2",      message: { "type": "shutdown_request" } })
+   SendMessage({ to: "dag-impl-3",      message: { "type": "shutdown_request" } })
+   SendMessage({ to: "dag-impl-4",      message: { "type": "shutdown_request" } })
+   SendMessage({ to: "dag-ac-verifier", message: { "type": "shutdown_request" } })
+   SendMessage({ to: "dag-qr-1",        message: { "type": "shutdown_request" } })
+   SendMessage({ to: "dag-qr-2",        message: { "type": "shutdown_request" } })
+   ```
+
+4. Wait up to 30 seconds for `SHUTDOWN_ACK` from each teammate. Proceed after
+   timeout — agents should already be idle.
+
+5. Remove all worktrees:
+   ```bash
+   for N in 1 2 3 4; do
+     git worktree remove .worktrees/dag-impl-$N --force 2>/dev/null || true
+   done
+   git worktree remove .worktrees/dag-ac-verifier --force 2>/dev/null || true
+   git worktree remove .worktrees/dag-qr-1        --force 2>/dev/null || true
+   git worktree remove .worktrees/dag-qr-2        --force 2>/dev/null || true
+   ```
+
+6. Call `TeamDelete()`.
+
+---
+
+## Edge Cases
+
+### Pool livelock
+
+Livelock condition: all implementer slots have `assignee != null` and every
+assigned ticket is in REWORK state, meaning no slot can accept new ready work.
+
+Detection: after any REWORK dispatch (FAIL handler step 12, REWORK handler
+step 11), if every `agent_pool` slot is occupied and every assigned ticket is
+in REWORK state, livelock is active.
+
+Resolution:
+1. Do **not** spawn extra implementers.
+2. Log the livelock condition to the user, listing pinned tickets and any
+   queued-but-undispatched tickets from `ready_queue`:
+   > Pool livelock: all N implementer slots are pinned in rework.
+   > Pinned: <ticket-ids>. Waiting for rework cycles to complete.
+3. Continue waiting. As each rework cycle completes (implementer sends DONE),
+   the slot frees and accepts the next item from `ready_queue`.
+4. If no progress for >15 min, perform a heartbeat sweep: send a one-line
+   status check via `SendMessage` to each busy implementer; call `TaskOutput`
+   against each implementer's task to inspect recent tool output; report the
+   findings in the dashboard under event header `heartbeat: livelock stall`.
+   If any agent appears unresponsive, escalate to the user.
+
+### Stuck agents
+
+If any agent is marked busy and you have not received a message from anyone
+in ~5 minutes, actively sweep: send a one-line status check via `SendMessage`
+to each busy agent. If a specific agent has been busy on the same task for
+~15 minutes without a progress message, call `TaskOutput` against its task to
+inspect what it is actually doing. Report findings in the next dashboard update
+under event header `heartbeat sweep`. If any agent appears truly unresponsive
+(no tool output in 15 min), escalate to the user.
+
+**STATUS is not DONE.** Implementers send STATUS mid-ticket. `SendMessage` ends
+the sender's turn, so an implementer that sends STATUS and goes idle has not
+finished — it is waiting for acknowledgement. If an implementer is idle and its
+last message was STATUS, immediately send `continue working on <ticket-id>`.
+
+### Partial shutdown (user stops mid-run)
+
+1. Broadcast `shutdown_request` to all teammates.
+2. Wait up to 30 seconds for `SHUTDOWN_ACK` from each.
+3. Call `TeamDelete()`.
+
+In-progress tickets remain marked in-progress in `tk`. The user can resume
+by running `/run-epic-dag` again — in-progress tickets will be re-claimable.
+
+### Dirty working tree guard
+
+The main repo's working tree must stay clean for the entire run. The
+CLEAN handler pre-flight (`git status --porcelain` before each merge) catches
+any corruption since the last successful merge — typically caused by a sandboxed
+agent that ran `git checkout` or `git stash` in the main repo instead of its own
+worktree. Do not try to auto-recover. Stop further merges, report to the user
+with the offending status output, and let the user triage.
+
+The Phase 1.1 stash-list guard and per-agent worktrees prevent the root cause.
+This guard catches any new variant of the same class of bug.
 
 ---
 
