@@ -125,7 +125,7 @@ all epic work off main until the full epic is reviewed.
 ```bash
 REPO_ROOT=$(pwd)
 STAMP=$(date +%s | tail -c 7)  # short session discriminator for unique worktree names
-git checkout -b epic/<epic-id> main 2>/dev/null || git checkout epic/<epic-id>
+git show-ref --verify --quiet refs/heads/epic/<epic-id> && git checkout epic/<epic-id> || git checkout -b epic/<epic-id> main
 git checkout main  # return to main, implementers branch from here
 ```
 
@@ -234,7 +234,7 @@ Agent({
   For each ticket assignment:
   1. Check out the ticket branch — resume if it exists, otherwise branch fresh
      from the latest integration state:
-     `git checkout ticket/<ticket-id> 2>/dev/null || git checkout -b ticket/<ticket-id> epic/<epic-id>`
+     `git show-ref --verify --quiet refs/heads/ticket/<ticket-id> && git checkout ticket/<ticket-id> || git checkout -b ticket/<ticket-id> epic/<epic-id>`
      The first form preserves in-progress work if you were recycled mid-ticket;
      the second creates a fresh branch off the latest integration state for new work.
   2. Run `tk show <ticket-id>` for full context
@@ -486,8 +486,7 @@ per wave.)
 The other implementers, the integration branch, the AC verifier, the
 quality reviewer, and any in-flight reviews are untouched — this is a
 strictly per-implementer operation. Because the implementer prompt's first
-step is `git checkout ticket/<id> 2>/dev/null || git checkout -b
-ticket/<id> epic/<epic-id>`, a mid-ticket recycle resumes the existing
+step is `git show-ref --verify --quiet refs/heads/ticket/<id> && git checkout ticket/<id> || git checkout -b ticket/<id> epic/<epic-id>`, a mid-ticket recycle resumes the existing
 branch with all in-progress commits intact.
 
 ## Phase 3 -- Manage the validation loop
@@ -782,7 +781,7 @@ Agent({
   For each ticket assignment:
   1. Check out the ticket branch — resume if it exists, otherwise branch fresh
      from the latest integration state:
-     \`git checkout ticket/<ticket-id> 2>/dev/null || git checkout -b ticket/<ticket-id> epic/<epic-id>\`
+     \`git show-ref --verify --quiet refs/heads/ticket/<ticket-id> && git checkout ticket/<ticket-id> || git checkout -b ticket/<ticket-id> epic/<epic-id>\`
      The first form preserves in-progress work if you were recycled mid-ticket;
      the second creates a fresh branch off the latest integration state for new work.
   2. Run \`tk show <ticket-id>\` for full context
