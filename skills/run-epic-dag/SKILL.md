@@ -363,20 +363,282 @@ Mid-run pool expansion (spawning additional implementers) is not supported.
 
 ---
 
-## Phase 3 — Event loop (placeholder)
+## Phase 3 — Event loop
 
-<!-- Event loop logic is implemented in tickets cc-sw6p (dispatch + state
-     tracking), cc-dhvk (merge queue + recycle), and cc-euin (edge cases,
-     stuck-agent handling, shutdown). This section will be replaced when
-     those tickets are merged. -->
+Process incoming messages from all agents and drive ticket state transitions.
+The loop continues until every child ticket of the epic reaches CLOSED or BLOCKED.
 
-**[TODO: cc-sw6p]** Message routing: handle DONE, STATUS, OUT_OF_SCOPE from
-implementers; PASS/FAIL from AC verifier; CLEAN/REWORK/FINDINGS from quality
-reviewers. Drive all ticket state transitions per the DAG Execution Design.
+### Message routing
+
+Inspect the **first word** of every incoming message and route to the handler
+below. On every message arrival: record the current clock time as "Last heard"
+for the sending agent, then output the status dashboard after any state change.
+
+| First word | Source | Handler |
+|---|---|---|
+| `DONE` | implementer | [DONE handler](#done-ticket-id-branch) |
+| `STATUS` | implementer | Log time; update dashboard (no state change) |
+| `SHUTDOWN_ACK` | any | Record ack; continue shutdown sequence |
+| `PASS` | AC verifier | [PASS handler](#pass-ticket-id) |
+| `FAIL` | AC verifier | [FAIL handler](#fail-ticket-id) |
+| `CLEAN` | quality reviewer | [CLEAN handler](#clean-ticket-id) |
+| `REWORK` | quality reviewer | [REWORK handler](#rework-ticket-id) |
+| `FINDINGS` | quality reviewer | [FINDINGS handler](#findings-ticket-id) |
+| `OUT_OF_SCOPE` | implementer | [OUT_OF_SCOPE handler](#out_of_scope-n-reason) |
+
+---
+
+### DONE <ticket-id> <branch>
+
+When implementer slot S sends `DONE <ticket-id> ticket/<ticket-id>`:
+
+1. Set `ticket_state[ticket-id].state = IMPL_DONE`.
+2. Push an AC verification job to the back of `ac_verification_queue` (FIFO
+   by arrival time):
+   ```
+   ac_verification_queue.push({ ticket_id, branch: "ticket/<ticket-id>" })
+   ```
+3. Push a quality review job to the back of `quality_review_queue` (FIFO by
+   arrival time). QR entries sit in the queue until AC passes — they are
+   dispatched only after the ticket's AC phase completes:
+   ```
+   quality_review_queue.push({ ticket_id, branch: "ticket/<ticket-id>" })
+   ```
+4. **If the AC verifier is idle** (no ticket currently has
+   `verification_phase == "ac"`), dispatch the head of `ac_verification_queue`:
+   - Pop the head entry E.
+   - `ticket_state[E.ticket_id].state = VERIFYING`
+   - `ticket_state[E.ticket_id].verification_phase = "ac"`
+   - Send:
+     ```
+     SendMessage({
+       to: "dag-ac-verifier",
+       message: "Verify <E.ticket_id> on branch <E.branch>. Run `tk show <E.ticket_id>` for acceptance criteria. Write detailed results as a note on the ticket, then return PASS or FAIL as the first word of your reply."
+     })
+     ```
+5. Output dashboard.
+
+> The implementer slot S **remains assigned** to `ticket-id` throughout AC and
+> quality review. The slot is freed only after the ticket reaches CLOSED
+> (handled by the merge + recycle protocol in [TODO: cc-dhvk]). If quality
+> review returns REWORK, the implementer receives the rework assignment on the
+> same slot S — the slot is never idle between DONE and CLOSED.
+
+---
+
+### PASS <ticket-id>
+
+When the AC verifier sends `PASS <ticket-id>`:
+
+1. Verify `ticket_state[ticket-id].verification_phase == "ac"`.
+2. **[TODO: cc-dhvk]** Recycle the AC verifier (shutdown_request → SHUTDOWN_ACK
+   → re-spawn → WORKTREE OK). When the recycled AC verifier is ready:
+   - If `ac_verification_queue` is non-empty, pop the head entry E and dispatch
+     it (same as DONE step 4): set E's state to VERIFYING with phase "ac", send
+     the verify message.
+3. Find and remove `ticket-id`'s entry from `quality_review_queue`.
+4. **If the quality reviewer is idle** (no ticket currently has
+   `verification_phase == "quality"`), dispatch this ticket's QR job immediately:
+   - Find the idle QR slot (dag-qr-1 or dag-qr-2 — whichever is not currently
+     processing a job).
+   - `ticket_state[ticket-id].verification_phase = "quality"`
+   - Send:
+     ```
+     SendMessage({
+       to: "<idle-qr-slot>",
+       message: "Review <ticket-id> on branch ticket/<ticket-id>. Changes passed AC verification.
+     Diff against integration branch: git diff epic/<epic-id>...ticket/<ticket-id>
+
+     Findings parent: <findings_parent>. Out-of-scope findings and Lows must use `--parent <findings_parent>` when creating tickets.
+
+     Return one of:
+       CLEAN — no blocking issues
+       REWORK — numbered inline list of fixable findings
+       FINDINGS — all blockers were out-of-scope; list the ticket IDs you created"
+     })
+     ```
+5. **If the quality reviewer is busy**, the job stays removed from the queue.
+   It will be re-dispatched when the QR finishes its current job and recycles
+   (the recycle handler checks for the next queued job).
+6. Output dashboard.
+
+---
+
+### FAIL <ticket-id>
+
+When the AC verifier sends `FAIL <ticket-id> <detail>`:
+
+1. Verify `ticket_state[ticket-id].verification_phase == "ac"`.
+2. Increment `ac_fail_count[ticket-id]`.
+3. Remove `ticket-id`'s entry from `quality_review_queue` (AC failed — the QR
+   job is invalid; it will be re-enqueued when the implementer signals DONE
+   again after rework).
+4. **[TODO: cc-dhvk]** Recycle the AC verifier. When ready, check
+   `ac_verification_queue` and dispatch next if non-empty (same as PASS step 2).
+5. **[TODO: cc-euin]** If `ac_fail_count[ticket-id] >= 3`: escalate to user
+   (options: provide guidance / reassign / mark BLOCKED). Do not dispatch rework.
+6. `ticket_state[ticket-id].state = REWORK`
+7. `ticket_state[ticket-id].verification_phase = null`
+8. Find the implementer slot S where `agent_pool[S].assignee == ticket-id`.
+9. **[TODO: cc-dhvk]** If `agent_pool[S].assignments_since_spawn >= RECYCLE_CAP`:
+   recycle slot S before sending the rework message.
+10. Send:
+    ```
+    SendMessage({
+      to: "<slot-S>",
+      message: "AC verification failed for <ticket-id>. Run `tk show <ticket-id>` — the verifier wrote the specific failures as a note on the ticket. Fix, recommit, and signal DONE."
+    })
+    ```
+11. Output dashboard.
+
+---
+
+### CLEAN <ticket-id>
+
+When a quality reviewer sends `CLEAN <ticket-id>`:
+
+1. Verify `ticket_state[ticket-id].verification_phase == "quality"`.
+2. `ticket_state[ticket-id].state = MERGING`
+3. `ticket_state[ticket-id].verification_phase = null`
+4. **[TODO: cc-dhvk]** Recycle the quality reviewer. When ready, check
+   `quality_review_queue`. If non-empty and the head ticket has passed AC
+   (verification_phase is not "ac"), pop the head and dispatch it (same as
+   PASS step 4).
+5. **[TODO: cc-dhvk]** Acquire merge_lock; run:
+   ```bash
+   git -C $REPO_ROOT checkout epic/<epic-id>
+   git -C $REPO_ROOT merge ticket/<ticket-id> --no-ff -m "Merge <ticket-id>: <ticket title>"
+   ```
+   On success: set `ticket_state[ticket-id].state = MERGED`; run `tk close
+   <ticket-id>`; set state to CLOSED; release merge_lock; run
+   `dispatch_ready_tickets()` (see below). On conflict: see Merge Queue conflict
+   handling in cc-dhvk.
+6. Output dashboard.
+
+---
+
+### REWORK <ticket-id> <findings>
+
+When a quality reviewer sends `REWORK <ticket-id>` followed by a numbered
+finding list:
+
+1. Verify `ticket_state[ticket-id].verification_phase == "quality"`.
+2. Increment `rework_count[ticket-id]`.
+3. **[TODO: cc-dhvk]** Recycle the quality reviewer. When ready, dispatch next
+   from `quality_review_queue` if non-empty and head ticket has passed AC
+   (same as CLEAN step 4).
+4. **[TODO: cc-euin]** If `rework_count[ticket-id] >= 3`: escalate to user
+   (options: provide guidance / reassign / mark BLOCKED). Do not dispatch rework.
+5. `ticket_state[ticket-id].state = REWORK`
+6. `ticket_state[ticket-id].verification_phase = null`
+7. Find the implementer slot S where `agent_pool[S].assignee == ticket-id`.
+8. **[TODO: cc-dhvk]** If `agent_pool[S].assignments_since_spawn >= RECYCLE_CAP`:
+   recycle slot S before sending the rework message.
+9. Forward the numbered findings verbatim:
+   ```
+   SendMessage({
+     to: "<slot-S>",
+     message: "Quality review returned REWORK for <ticket-id>. Fix these findings in your branch and signal DONE again:
+
+   <numbered finding list verbatim from QR message>
+
+   If any finding is genuinely out of scope (would require touching files this ticket never named), reply with:
+     OUT_OF_SCOPE <n>: <one-sentence reason>
+   I will convert those to tickets. Fix every finding you do not push back on."
+   })
+   ```
+10. Output dashboard.
+
+---
+
+### FINDINGS <ticket-id>
+
+When a quality reviewer sends `FINDINGS <ticket-id>` (all findings were
+out-of-scope; the reviewer has already created finding tickets):
+
+Treat identically to CLEAN — no inline rework is needed. Proceed from
+[CLEAN step 1](#clean-ticket-id).
+
+---
+
+### OUT_OF_SCOPE <n>: <reason>
+
+When an implementer sends one or more `OUT_OF_SCOPE` lines in response to a
+REWORK message:
+
+1. For each `OUT_OF_SCOPE <n>: <reason>` line:
+   - Create a finding ticket:
+     ```bash
+     tk create "<reason>" -t task -p 3 --parent <findings_parent>
+     ```
+   - Record the new ticket ID in the dashboard.
+2. Remove the pushed-back finding numbers from the pending rework list for
+   `ticket-id`.
+3. **If inline findings remain** (at least one was not pushed back):
+   - Re-send the remaining findings (renumbered from 1) to slot S:
+     ```
+     SendMessage({
+       to: "<slot-S>",
+       message: "Quality review REWORK — remaining findings after OUT_OF_SCOPE acknowledgement for <ticket-id>:
+
+     <renumbered remaining finding list>
+
+     Fix these and signal DONE."
+     })
+     ```
+4. **If all findings were pushed back** (every finding was OUT_OF_SCOPE):
+   - No inline rework remains. Treat as CLEAN: proceed to MERGING
+     ([CLEAN step 2](#clean-ticket-id)).
+5. Output dashboard.
+
+---
+
+### Dispatch helper — assign next ready ticket to an idle slot
+
+Call `dispatch_ready_tickets()` whenever a slot is freed (post-CLOSED) and
+after the initial Phase 2 worktree-OK confirmation. This procedure is also
+the entry point called by the cc-dhvk merge protocol after each `tk close`.
+
+```
+procedure dispatch_ready_tickets():
+  # Re-query tk ready filtered to this epic's children
+  run: tk ready
+  filter: .parent == "<epic-id>"
+  → fresh_ready (ticket IDs not yet DISPATCHED/in-flight)
+
+  for each idle implementer slot S (agent_pool[S].assignee == null):
+    T = next ticket from fresh_ready not yet in ticket_state
+    if no such T exists: break
+
+    ticket_state[T] = { state: DISPATCHED, verification_phase: null }
+    ac_fail_count[T] = 0
+    rework_count[T] = 0
+    agent_pool[S].assignee = T
+    agent_pool[S].assignments_since_spawn += 1
+    # [TODO: cc-dhvk] If assignments_since_spawn >= RECYCLE_CAP: recycle S
+    #   before sending (shutdown_request → SHUTDOWN_ACK → re-spawn → WORKTREE OK;
+    #   reset assignments_since_spawn = 0).
+    SendMessage({
+      to: "<S>",
+      message: "Ticket <T>: <T title>
+
+Implement this ticket. Branch:
+  git checkout ticket/<T> 2>/dev/null || git checkout -b ticket/<T> epic/<epic-id>
+
+Run `tk show <T>` for full context. Signal DONE when committed."
+    })
+
+  output dashboard
+```
+
+This procedure re-queries `tk ready` on every call so that tickets whose last
+blocker just closed appear immediately — no shadow DAG is maintained.
+
+---
 
 **[TODO: cc-dhvk]** Merge queue: acquire/release merge_lock, FIFO merge
 serialization, implementer recycle (RECYCLE_CAP = 3), worktree reset between
-tickets.
+tickets, slot release after CLOSED, call `dispatch_ready_tickets()` post-close.
 
 **[TODO: cc-euin]** Edge cases: AC fail escalation (>= 3), QR rework
 escalation (>= 3), BLOCKED ticket handling, pool livelock detection, stuck-
