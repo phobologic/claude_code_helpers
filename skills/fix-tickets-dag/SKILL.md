@@ -109,6 +109,10 @@ agent_pool: Map<slot_name, AgentSlot>
   # assignments_since_spawn: int
   # worktree: "<REPO_ROOT>/.worktrees/dag-impl-<N>"
 
+qr_pool: Map<slot_name, QRSlot>
+  # slot_name: "dag-qr-1" | "dag-qr-2"
+  # assignee: ticket_id | null   # null = idle
+
 quality_review_queue: Queue<{ticket_id, branch}>   # FIFO
 
 merge_lock: ticket_id | null
@@ -394,13 +398,15 @@ When implementer slot S sends `DONE <ticket-id> fix/<ticket-id>`:
    ```
    quality_review_queue.push({ ticket_id, branch: "fix/<ticket-id>" })
    ```
-3. **If a quality reviewer is idle** (no ticket currently has
-   `verification_phase == "quality"`), dispatch the head of
-   `quality_review_queue`:
+3. **If a quality reviewer is idle** (count of tickets with
+   `verification_phase == "quality"` is less than 2), dispatch the head
+   of `quality_review_queue`:
    - Pop the head entry E.
+   - Find the idle QR slot: `qr_pool` entry where `assignee == null`
+     (dag-qr-1 or dag-qr-2 — whichever is not currently processing a job).
    - `ticket_state[E.ticket_id].state = VERIFYING`
    - `ticket_state[E.ticket_id].verification_phase = "quality"`
-   - Find the idle QR slot (dag-qr-1 or dag-qr-2).
+   - `qr_pool[<idle-qr-slot>].assignee = E.ticket_id`
    - Send:
      ```
      SendMessage({
@@ -417,9 +423,11 @@ When implementer slot S sends `DONE <ticket-id> fix/<ticket-id>`:
        FINDINGS — all blockers were out-of-scope; list the ticket IDs you created"
      })
      ```
-4. **If both quality reviewers are busy**, leave the entry in
-   `quality_review_queue`. The recycle handler in CLEAN/REWORK/FINDINGS
-   will pop it naturally when a QR becomes available.
+   If two QR slots are idle and `quality_review_queue` has two or more
+   entries, repeat this step for the second entry using the second idle slot.
+4. **If both quality reviewers are busy** (`qr_pool` has no idle slot),
+   leave the entry in `quality_review_queue`. The recycle handler in
+   CLEAN/REWORK/FINDINGS will pop it naturally when a QR becomes available.
 5. Output dashboard.
 
 > The implementer slot S **remains assigned** to `ticket-id` throughout
@@ -437,11 +445,13 @@ When a quality reviewer sends `CLEAN <ticket-id>`:
 1. Verify `ticket_state[ticket-id].verification_phase == "quality"`.
 2. `ticket_state[ticket-id].state = MERGING`
 3. `ticket_state[ticket-id].verification_phase = null`
-4. Recycle the quality reviewer (shutdown_request → SHUTDOWN_ACK →
+4. Clear the QR slot: `qr_pool[<sending-qr-slot>].assignee = null`.
+   Recycle the quality reviewer (shutdown_request → SHUTDOWN_ACK →
    re-spawn → WORKTREE OK; see [Recycle protocol](#recycle-protocol-reference)).
    When the recycled quality reviewer is ready: check
    `quality_review_queue`. If non-empty, pop the head and dispatch it
-   (same as DONE step 3).
+   (same as DONE step 3 — set `qr_pool[<slot>].assignee`, set
+   `verification_phase = "quality"`, send the review message).
 5. Acquire the merge lock and run the merge:
    - If `merge_lock` is non-null: append `ticket-id` to `merge_queue` and
      stop — this ticket will be merged when the lock is released.
@@ -739,7 +749,6 @@ When all input tickets have reached CLOSED or BLOCKED state:
    done
    git worktree remove .worktrees/dag-qr-1 --force 2>/dev/null || true
    git worktree remove .worktrees/dag-qr-2 --force 2>/dev/null || true
-   git worktree remove .worktrees/fix-batch-<stamp> --force 2>/dev/null || true
    ```
 
 6. Call `TeamDelete()`.
