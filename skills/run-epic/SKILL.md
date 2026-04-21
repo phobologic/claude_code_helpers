@@ -125,7 +125,7 @@ all epic work off main until the full epic is reviewed.
 ```bash
 REPO_ROOT=$(pwd)
 STAMP=$(date +%s | tail -c 7)  # short session discriminator for unique worktree names
-git checkout -b epic/<epic-id> main
+git checkout -b epic/<epic-id> main 2>/dev/null || git checkout epic/<epic-id>
 git checkout main  # return to main, implementers branch from here
 ```
 

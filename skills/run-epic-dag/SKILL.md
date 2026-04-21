@@ -141,7 +141,7 @@ Wait for the user's answer before creating the team.
 
 ```bash
 REPO_ROOT=$(pwd)
-git checkout -b epic/<epic-id> main
+git checkout -b epic/<epic-id> main 2>/dev/null || git checkout epic/<epic-id>
 git checkout main
 ```
 
