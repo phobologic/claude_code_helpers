@@ -53,7 +53,6 @@ quality_review_queue: Queue<VerificationJob>
 
 merge_lock: ticket_id | null          # ID of the ticket currently being merged, or null
 
-wave_number: int                      # increments when a new set of tickets is dispatched
 findings_parent: ticket_id            # parent epic for out-of-scope finding tickets
 
 # Counters per ticket
@@ -412,7 +411,7 @@ explicit merge lock necessary.
 
 A ticket is fully merged when:
 1. `git merge` exits 0 with no conflicts.
-2. `git checkout main` succeeds (team lead CWD restored).
+2. `git checkout main` succeeds (team lead active branch restored to main).
 3. `tk close <ticket-id>` completes.
 
 Only after all three steps is the ticket considered merged for DAG recomputation

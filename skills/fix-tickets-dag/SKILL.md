@@ -648,10 +648,11 @@ procedure dispatch_ready_tickets():
     ticket_state[T] = { state: DISPATCHED, verification_phase: null }
     rework_count[T] = 0
     agent_pool[S].assignee = T
-    agent_pool[S].assignments_since_spawn += 1
     if assignments_since_spawn >= RECYCLE_CAP:
       # Recycle S before sending (see Recycle protocol section)
-      # Then: assignments_since_spawn = 1 (this dispatch is the new agent's first)
+      # Recycle protocol step 6 resets assignments_since_spawn = 0
+    agent_pool[S].assignments_since_spawn += 1
+    # assignments_since_spawn = 1 after first dispatch to a recycled agent
     SendMessage({
       to: "<S>",
       message: "Ticket <T>: <T title>
