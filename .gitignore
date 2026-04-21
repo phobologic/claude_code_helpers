@@ -28,3 +28,4 @@ node_modules/
 
 # Logs
 *.log
+.permcop.local.toml
