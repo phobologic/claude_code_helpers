@@ -110,10 +110,13 @@ MERGING
                     action: release merge_lock; begin `tk close <ticket-id>`
 
   → REWORK          trigger: merge produces conflicts
-                    action: release merge_lock; route to implementer for resolution
-                            via merge-conflict message (see Message Protocol);
-                            after resolution, re-enter full validation cycle from
-                            DISPATCHED
+                    action: (1) run `git merge --abort` to clear the mid-merge state
+                            from the integration branch working tree (MERGE_HEAD and
+                            conflict markers must be cleared before any other ticket
+                            can merge); (2) release merge_lock; (3) route to
+                            implementer for resolution via merge-conflict message
+                            (see Message Protocol); after resolution, re-enter full
+                            validation cycle from DISPATCHED
 
 MERGED
   → CLOSED          trigger: `tk close` completes
@@ -212,21 +215,29 @@ I will convert those to tickets. Fix every finding you do not push back on.
 
 ```
 Merge conflict when integrating <ticket-id> into epic/<epic-id>.
+The team lead has already run `git merge --abort` to clear the mid-merge state.
 
-In your worktree:
+In your worktree, commit the resolution directly on the integration branch:
   git checkout epic/<epic-id>
   git merge ticket/<ticket-id>
   # resolve all conflicts, then:
   git add <resolved-files>
   git commit
 
-After committing the resolution, signal DONE again — the branch will go
-through the full validation cycle (AC + quality review) from the top.
+After committing the resolution, signal DONE again.
+
+Note on what happens next: the resolution commit lives on epic/<epic-id>,
+not on ticket/<ticket-id>. When the team lead re-merges ticket/<ticket-id>
+into epic after AC and QR pass, git will report "Already up to date" — this
+is expected and correct, because the ticket's commit is already an ancestor
+of the resolution commit. AC and QR re-run against the original ticket/<ticket-id>
+branch to verify the ticket's code still meets its contract after integration.
 ```
 
 Example:
 ```
 Merge conflict when integrating cc-1abc into epic/cc-28sz.
+The team lead has already run `git merge --abort`.
 
 In your worktree:
   git checkout epic/cc-28sz
@@ -235,7 +246,8 @@ In your worktree:
   git add src/router.py
   git commit
 
-Signal DONE when the resolution is committed.
+Signal DONE when the resolution is committed. The re-merge after validation
+will be a no-op by design.
 ```
 
 ### Team lead → implementer (stand-by after close)
