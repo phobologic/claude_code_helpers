@@ -412,7 +412,7 @@ explicit merge lock necessary.
 
 A ticket is fully merged when:
 1. `git merge` exits 0 with no conflicts.
-2. `git checkout main` succeeds (team lead CWD restored).
+2. `git checkout main` succeeds (team lead active branch restored to main).
 3. `tk close <ticket-id>` completes.
 
 Only after all three steps is the ticket considered merged for DAG recomputation
