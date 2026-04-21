@@ -85,7 +85,6 @@ quality_review_queue:  Queue<{ticket_id, branch}>   # FIFO
 merge_lock: ticket_id | null
 merge_queue: List<ticket_id>     # ordered waiting list
 
-wave_number: int = 1
 findings_parent: ticket_id = FINDINGS_PARENT
 
 ac_fail_count: Map<ticket_id, int>     # reset to 0 on each fresh dispatch
