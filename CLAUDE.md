@@ -73,6 +73,7 @@ To add language auto-formatting hooks to a project:
 ### Spec and Execution
 - `/spec [idea]` - Turn a rough idea into a phased plan with EARS ACs, adversarial review via spec-critic, and `tk` tickets
 - `/run-epic <epic-id>` - Execute a `tk` epic with an agent team (implementers + ac-verifier + quality-reviewer)
+- `/run-epic-dag <epic-id>` - **Experimental.** DAG-driven variant of `/run-epic` with continuous dispatching and a fixed agent pool (4 implementers, 2 quality reviewers, 1 AC verifier). Tickets unblock and dispatch without wave boundaries. File issues in this repo for problems encountered during real-world use.
 - `/wrap-epic [epic-id]` - Ship a completed `/run-epic` or `/fix-tickets` batch: merge to main, prune worktrees, close epic with ship note, report remaining sub-epics. User-only (`disable-model-invocation: true`) — confirms before any destructive action.
 
 ### Review
@@ -82,6 +83,7 @@ To add language auto-formatting hooks to a project:
 ### Ticket Workflow
 - `/implement-ticket [id ...] [-- extra instructions]` - Pick up and implement tk tickets (serial)
 - `/fix-tickets <id> [id ...] | <epic-id>` - Implement a set of tickets in parallel with quality review; designed for multi-review fix batches
+- `/fix-tickets-dag <id> [id ...] | <epic-id>` - **Experimental.** DAG-driven variant of `/fix-tickets` with continuous dispatching and a fixed agent pool (4 implementers, 2 quality reviewers). No AC verifier — designed for multi-review fix batches without formal acceptance criteria. File issues in this repo for problems encountered during real-world use.
 - `/epic-tree [--all] [epic-id ...]` - Show a tree of epics with open/closed ticket counts per level; omit IDs to show all root epics; `--all` includes closed sub-epics
 
 ### Design
