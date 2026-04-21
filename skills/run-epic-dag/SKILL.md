@@ -539,9 +539,10 @@ When a quality reviewer sends `CLEAN <ticket-id>`:
    a. Run `git -C $REPO_ROOT merge --abort` to clear MERGE_HEAD and
       conflict markers from the integration branch working tree.
    b. Release merge lock: `merge_lock = null`.
-   c. If `merge_queue` is non-empty: pop the head entry `next-id`, set
+   c. Complete steps d–g below first (route the conflict ticket to rework),
+      then if `merge_queue` is non-empty: pop the head entry `next-id`, set
       `merge_lock = next-id`, and run step 5 starting from the merge command
-      for `next-id` (in parallel with the steps below for the conflict ticket).
+      for `next-id`.
    d. Set `ticket_state[ticket-id].state = REWORK`.
    e. Find slot S where `agent_pool[S].assignee == ticket-id`.
    f. If `agent_pool[S].assignments_since_spawn >= RECYCLE_CAP`: recycle
@@ -669,7 +670,7 @@ procedure dispatch_ready_tickets():
     if assignments_since_spawn >= RECYCLE_CAP:
       # Recycle S before sending: shutdown_request → SHUTDOWN_ACK → re-spawn
       # (same Agent call, same worktree path) → WORKTREE OK.
-      # Then: assignments_since_spawn = 0
+      # Then: assignments_since_spawn = 1  (this dispatch is the new agent's first)
       # See Recycle protocol section for full procedure.
     SendMessage({
       to: "<S>",
