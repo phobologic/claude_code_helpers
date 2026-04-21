@@ -77,7 +77,7 @@ agent_pool: Map<slot_name, AgentSlot>
   # slot_name: "dag-impl-1" .. "dag-impl-4"
   # assignee: ticket_id | null
   # assignments_since_spawn: int
-  # worktree: "<REPO_ROOT>/.worktrees/dag-impl-<N>"
+  # worktree: "<REPO_ROOT>/.worktrees/epic-dag-<stamp>-impl-<N>"
 
 ac_verification_queue: Queue<{ticket_id, branch}>   # FIFO
 quality_review_queue:  Queue<{ticket_id, branch}>   # FIFO
@@ -139,10 +139,16 @@ Wait for the user's answer before creating the team.
 ### Step 1.1: Create integration branch and capture repo root
 
 ```bash
+STAMP=$(date +%Y%m%d-%H%M%S)
 REPO_ROOT=$(pwd)
 git show-ref --verify --quiet refs/heads/epic/<epic-id> && git checkout epic/<epic-id> || git checkout -b epic/<epic-id> main
 git checkout main
 ```
+
+The `$STAMP` is used only to namespace worktree directory paths so that two
+concurrent `/run-epic-dag` invocations on the same repo (e.g. different epics)
+never share filesystem state. Agent slot names (`dag-impl-1` etc.) stay short
+because they are scoped by `team_name`.
 
 Pre-flight the main repo state before proceeding:
 
@@ -155,33 +161,36 @@ If either produces output, stop and report to the user — do not auto-clean.
 
 ### Step 1.2: Pre-create worktrees for all agents
 
-Implementer worktrees use **deterministic paths** with no stamp suffix so they
-can be referenced by name across recycle cycles without coordination overhead.
+Worktree directory names are **stamp-scoped** (using the `$STAMP` from
+Phase 1.1) so concurrent `/run-epic-dag` invocations in the same repo never
+share worktrees. Within a single run, implementer slots stably map to the
+same worktree across recycle cycles.
 
 ```bash
 # 4 implementer worktrees
-worktree-init dag-impl-1 $REPO_ROOT
-worktree-init dag-impl-2 $REPO_ROOT
-worktree-init dag-impl-3 $REPO_ROOT
-worktree-init dag-impl-4 $REPO_ROOT
+worktree-init epic-dag-$STAMP-impl-1 $REPO_ROOT
+worktree-init epic-dag-$STAMP-impl-2 $REPO_ROOT
+worktree-init epic-dag-$STAMP-impl-3 $REPO_ROOT
+worktree-init epic-dag-$STAMP-impl-4 $REPO_ROOT
 
 # 1 AC verifier worktree
-worktree-init dag-ac-verifier $REPO_ROOT
+worktree-init epic-dag-$STAMP-ac-verifier $REPO_ROOT
 
 # 2 quality reviewer worktrees
-worktree-init dag-qr-1 $REPO_ROOT
-worktree-init dag-qr-2 $REPO_ROOT
+worktree-init epic-dag-$STAMP-qr-1 $REPO_ROOT
+worktree-init epic-dag-$STAMP-qr-2 $REPO_ROOT
 ```
 
-Verify all were created: `ls .worktrees/` must show all 7 directories.
+Verify all were created: `ls .worktrees/` must show all 7 `epic-dag-$STAMP-*`
+directories.
 
 Register worktree paths in `agent_pool`:
 
 ```
-agent_pool["dag-impl-1"].worktree = "$REPO_ROOT/.worktrees/dag-impl-1"
-agent_pool["dag-impl-2"].worktree = "$REPO_ROOT/.worktrees/dag-impl-2"
-agent_pool["dag-impl-3"].worktree = "$REPO_ROOT/.worktrees/dag-impl-3"
-agent_pool["dag-impl-4"].worktree = "$REPO_ROOT/.worktrees/dag-impl-4"
+agent_pool["dag-impl-1"].worktree = "$REPO_ROOT/.worktrees/epic-dag-$STAMP-impl-1"
+agent_pool["dag-impl-2"].worktree = "$REPO_ROOT/.worktrees/epic-dag-$STAMP-impl-2"
+agent_pool["dag-impl-3"].worktree = "$REPO_ROOT/.worktrees/epic-dag-$STAMP-impl-3"
+agent_pool["dag-impl-4"].worktree = "$REPO_ROOT/.worktrees/epic-dag-$STAMP-impl-4"
 ```
 
 ### Step 1.3: Create the team
@@ -224,20 +233,20 @@ Agent({
   name: "dag-impl-<N>",
   prompt: "You are an implementer on a team.
 
-WORKTREE: <REPO_ROOT>/.worktrees/dag-impl-<N>
+WORKTREE: <REPO_ROOT>/.worktrees/epic-dag-<stamp>-impl-<N>
 
 Before doing anything else, run this single Bash call to set your CWD
 and verify isolation:
 \`\`\`
-cd <REPO_ROOT>/.worktrees/dag-impl-<N> && pwd && [ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: not in worktree'
+cd <REPO_ROOT>/.worktrees/epic-dag-<stamp>-impl-<N> && pwd && [ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: not in worktree'
 \`\`\`
 Report the pwd output and result to the team lead via SendMessage.
 
 All tool calls MUST target your worktree, not the main repo:
 - Bash: your CWD is already set — just run commands directly
-- Read/Edit: absolute paths starting with <REPO_ROOT>/.worktrees/dag-impl-<N>/
-- Glob/Grep: pass path=<REPO_ROOT>/.worktrees/dag-impl-<N>
-Never reference <REPO_ROOT> without the .worktrees/dag-impl-<N> suffix.
+- Read/Edit: absolute paths starting with <REPO_ROOT>/.worktrees/epic-dag-<stamp>-impl-<N>/
+- Glob/Grep: pass path=<REPO_ROOT>/.worktrees/epic-dag-<stamp>-impl-<N>
+Never reference <REPO_ROOT> without the .worktrees/epic-dag-<stamp>-impl-<N> suffix.
 
 Git: your CWD is already the worktree — always use plain \`git\` with no -C flag.
 Never use \`git -C <path>\` in implementer code; that is reserved for the team lead.
@@ -271,17 +280,17 @@ Agent({
   name: "dag-ac-verifier",
   prompt: "You are the AC verifier on a team.
 
-WORKTREE: <REPO_ROOT>/.worktrees/dag-ac-verifier
+WORKTREE: <REPO_ROOT>/.worktrees/epic-dag-<stamp>-ac-verifier
 
 Before doing anything else, run this single Bash call to set your CWD
 and verify isolation:
 \`\`\`
-cd <REPO_ROOT>/.worktrees/dag-ac-verifier && pwd && [ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: not in worktree'
+cd <REPO_ROOT>/.worktrees/epic-dag-<stamp>-ac-verifier && pwd && [ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: not in worktree'
 \`\`\`
 Report the result to the team lead via SendMessage.
 
 All Bash/Read/Edit/Glob/Grep calls MUST target your worktree. Never
-reference <REPO_ROOT> without the .worktrees/dag-ac-verifier suffix.
+reference <REPO_ROOT> without the .worktrees/epic-dag-<stamp>-ac-verifier suffix.
 Git: your CWD is already the worktree — use plain \`git\` with no -C flag.
 
 Wait for the team lead to send you a ticket to verify. Do not claim tasks
@@ -302,17 +311,17 @@ Agent({
   name: "dag-qr-<K>",
   prompt: "You are a quality reviewer on a team.
 
-WORKTREE: <REPO_ROOT>/.worktrees/dag-qr-<K>
+WORKTREE: <REPO_ROOT>/.worktrees/epic-dag-<stamp>-qr-<K>
 
 Before doing anything else, run this single Bash call to set your CWD
 and verify isolation:
 \`\`\`
-cd <REPO_ROOT>/.worktrees/dag-qr-<K> && pwd && [ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: not in worktree'
+cd <REPO_ROOT>/.worktrees/epic-dag-<stamp>-qr-<K> && pwd && [ -f .git ] && echo 'WORKTREE OK' || echo 'WARNING: not in worktree'
 \`\`\`
 Report the result to the team lead via SendMessage.
 
 All Bash/Read/Edit/Glob/Grep calls MUST target your worktree. Never
-reference <REPO_ROOT> without the .worktrees/dag-qr-<K> suffix.
+reference <REPO_ROOT> without the .worktrees/epic-dag-<stamp>-qr-<K> suffix.
 Git: your CWD is already the worktree — use plain \`git\` with no -C flag.
 
 Wait for the team lead to send you a ticket to review. Do not claim tasks
@@ -834,11 +843,11 @@ When all child tickets of the epic have reached CLOSED or BLOCKED state:
 5. Remove all worktrees:
    ```bash
    for N in 1 2 3 4; do
-     git worktree remove .worktrees/dag-impl-$N --force 2>/dev/null || true
+     git worktree remove .worktrees/epic-dag-$STAMP-impl-$N --force 2>/dev/null || true
    done
-   git worktree remove .worktrees/dag-ac-verifier --force 2>/dev/null || true
-   git worktree remove .worktrees/dag-qr-1        --force 2>/dev/null || true
-   git worktree remove .worktrees/dag-qr-2        --force 2>/dev/null || true
+   git worktree remove .worktrees/epic-dag-$STAMP-ac-verifier --force 2>/dev/null || true
+   git worktree remove .worktrees/epic-dag-$STAMP-qr-1        --force 2>/dev/null || true
+   git worktree remove .worktrees/epic-dag-$STAMP-qr-2        --force 2>/dev/null || true
    ```
 
 6. Call `TeamDelete()`.
@@ -920,11 +929,14 @@ Before dispatching any work message to an implementer, check
    same `subagent_type`, no `isolation: "worktree"` (worktree already exists).
    For the worktree path in the prompt:
    - **Implementer slots** (`dag-impl-1` .. `dag-impl-4`): read from
-     `agent_pool[slot].worktree` (e.g. `$REPO_ROOT/.worktrees/dag-impl-2`).
+     `agent_pool[slot].worktree`
+     (e.g. `$REPO_ROOT/.worktrees/epic-dag-$STAMP-impl-2`).
    - **AC verifier and QR slots** (`dag-ac-verifier`, `dag-qr-1`, `dag-qr-2`):
-     not tracked in `agent_pool` — use `$REPO_ROOT/.worktrees/<slot-name>`
-     directly (e.g. `$REPO_ROOT/.worktrees/dag-qr-1`), matching the
-     deterministic names assigned in Step 1.2.
+     not tracked in `agent_pool` — derive from the stamp as
+     `$REPO_ROOT/.worktrees/epic-dag-$STAMP-ac-verifier`,
+     `$REPO_ROOT/.worktrees/epic-dag-$STAMP-qr-1`, or
+     `$REPO_ROOT/.worktrees/epic-dag-$STAMP-qr-2`, matching the paths
+     created in Step 1.2.
 5. Wait for `WORKTREE OK`. Wrong path or `WARNING` aborts the run.
 6. Reset `assignments_since_spawn = 0`.
 
