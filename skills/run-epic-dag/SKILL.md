@@ -420,9 +420,9 @@ When implementer slot S sends `DONE <ticket-id> ticket/<ticket-id>`:
 
 > The implementer slot S **remains assigned** to `ticket-id` throughout AC and
 > quality review. The slot is freed only after the ticket reaches CLOSED
-> (handled by the merge + recycle protocol in [TODO: cc-dhvk]). If quality
-> review returns REWORK, the implementer receives the rework assignment on the
-> same slot S — the slot is never idle between DONE and CLOSED.
+> (handled by the merge + recycle protocol in the CLEAN handler below). If
+> quality review returns REWORK, the implementer receives the rework assignment
+> on the same slot S — the slot is never idle between DONE and CLOSED.
 
 ---
 
@@ -433,8 +433,9 @@ When the AC verifier sends `PASS <ticket-id>`:
 1. Verify `ticket_state[ticket-id].verification_phase == "ac"`.
 2. Set `ticket_state[ticket-id].verification_phase = null` (releases the AC
    verifier's "busy" signal regardless of what happens with QR).
-3. **[TODO: cc-dhvk]** Recycle the AC verifier (shutdown_request → SHUTDOWN_ACK
-   → re-spawn → WORKTREE OK). When the recycled AC verifier is ready:
+3. Recycle the AC verifier (shutdown_request → SHUTDOWN_ACK → re-spawn →
+   WORKTREE OK; see [Recycle protocol](#recycle-protocol-reference)). When the
+   recycled AC verifier is ready:
    - If `ac_verification_queue` is non-empty, pop the head entry E and dispatch
      it (same as DONE step 4): set E's state to VERIFYING with phase "ac", send
      the verify message.
@@ -475,15 +476,15 @@ When the AC verifier sends `FAIL <ticket-id> <detail>`:
 3. Remove `ticket-id`'s entry from `quality_review_queue` (AC failed — the QR
    job is invalid; it will be re-enqueued when the implementer signals DONE
    again after rework).
-4. **[TODO: cc-dhvk]** Recycle the AC verifier. When ready, check
-   `ac_verification_queue` and dispatch next if non-empty (same as PASS step 2).
+4. Recycle the AC verifier (same procedure as PASS step 3). When ready, check
+   `ac_verification_queue` and dispatch next if non-empty (same as PASS step 3).
 5. **[TODO: cc-euin]** If `ac_fail_count[ticket-id] >= 3`: escalate to user
    (options: provide guidance / reassign / mark BLOCKED). Do not dispatch rework.
 6. `ticket_state[ticket-id].state = REWORK`
 7. `ticket_state[ticket-id].verification_phase = null`
 8. Find the implementer slot S where `agent_pool[S].assignee == ticket-id`.
-9. **[TODO: cc-dhvk]** If `agent_pool[S].assignments_since_spawn >= RECYCLE_CAP`:
-   recycle slot S before sending the rework message.
+9. If `agent_pool[S].assignments_since_spawn >= RECYCLE_CAP`: recycle slot S
+   before sending (see [Recycle protocol](#recycle-protocol-reference)).
 10. Send:
     ```
     SendMessage({
@@ -502,19 +503,68 @@ When a quality reviewer sends `CLEAN <ticket-id>`:
 1. Verify `ticket_state[ticket-id].verification_phase == "quality"`.
 2. `ticket_state[ticket-id].state = MERGING`
 3. `ticket_state[ticket-id].verification_phase = null`
-4. **[TODO: cc-dhvk]** Recycle the quality reviewer. When ready, check
-   `quality_review_queue`. If non-empty and the head ticket has passed AC
-   (verification_phase is not "ac"), pop the head and dispatch it (same as
-   PASS step 4).
-5. **[TODO: cc-dhvk]** Acquire merge_lock; run:
-   ```bash
-   git -C $REPO_ROOT checkout epic/<epic-id>
-   git -C $REPO_ROOT merge ticket/<ticket-id> --no-ff -m "Merge <ticket-id>: <ticket title>"
-   ```
-   On success: set `ticket_state[ticket-id].state = MERGED`; run `tk close
-   <ticket-id>`; set state to CLOSED; release merge_lock; run
-   `dispatch_ready_tickets()` (see below). On conflict: see Merge Queue conflict
-   handling in cc-dhvk.
+4. Recycle the quality reviewer (shutdown_request → SHUTDOWN_ACK → re-spawn →
+   WORKTREE OK; see [Recycle protocol](#recycle-protocol-reference)). When the
+   recycled quality reviewer is ready: check `quality_review_queue`. If
+   non-empty and the head ticket has passed AC (verification_phase is not
+   "ac"), pop the head and dispatch it (same as PASS step 4).
+5. Acquire the merge lock and run the merge:
+   - If `merge_lock` is non-null: append `ticket-id` to `merge_queue` and
+     stop — this ticket will be merged when the lock is released.
+   - Set `merge_lock = ticket-id`.
+   - Run:
+     ```bash
+     git -C $REPO_ROOT checkout epic/<epic-id>
+     git -C $REPO_ROOT merge ticket/<ticket-id> --no-ff -m "Merge <ticket-id>: <ticket title>"
+     git -C $REPO_ROOT checkout main
+     ```
+
+   **On success (exit 0, no conflicts):**
+   a. Set `ticket_state[ticket-id].state = MERGED`.
+   b. Run `tk close <ticket-id>`.
+   c. Set `ticket_state[ticket-id].state = CLOSED`; set
+      `verification_phase = null`.
+   d. Release merge lock: `merge_lock = null`.
+   e. Run the [Worktree reset procedure](#worktree-reset-procedure) on slot
+      S's worktree (`agent_pool[S].worktree`). If the reset verification
+      fails (dirty status), mark slot S unavailable and report to the user —
+      do not dispatch.
+   f. Free the slot: `agent_pool[S].assignee = null`.
+   g. If `merge_queue` is non-empty: pop the head entry `next-id`, set
+      `merge_lock = next-id`, and run step 5 starting from the merge command
+      for `next-id`.
+   h. Call `dispatch_ready_tickets()`.
+
+   **On conflict (non-zero exit or conflict markers):**
+   a. Run `git -C $REPO_ROOT merge --abort` to clear MERGE_HEAD and
+      conflict markers from the integration branch working tree.
+   b. Release merge lock: `merge_lock = null`.
+   c. Complete steps d–g below first (route the conflict ticket to rework),
+      then if `merge_queue` is non-empty: pop the head entry `next-id`, set
+      `merge_lock = next-id`, and run step 5 starting from the merge command
+      for `next-id`.
+   d. Set `ticket_state[ticket-id].state = REWORK`.
+   e. Find slot S where `agent_pool[S].assignee == ticket-id`.
+   f. If `agent_pool[S].assignments_since_spawn >= RECYCLE_CAP`: recycle
+      slot S before sending (see [Recycle protocol](#recycle-protocol-reference)).
+   g. Send the merge-conflict message to slot S:
+      ```
+      SendMessage({
+        to: "<slot-S>",
+        message: "Merge conflict when integrating <ticket-id> into epic/<epic-id>.
+      The team lead has already run `git merge --abort` to clear the mid-merge state.
+
+      In your worktree:
+        git checkout epic/<epic-id>
+        git merge ticket/<ticket-id>
+        # resolve all conflicts, then:
+        git add <resolved-files>
+        git commit
+
+      Signal DONE when the resolution is committed. The re-merge after validation
+      will be a no-op by design."
+      })
+      ```
 6. Output dashboard.
 
 ---
@@ -526,16 +576,16 @@ finding list:
 
 1. Verify `ticket_state[ticket-id].verification_phase == "quality"`.
 2. Increment `rework_count[ticket-id]`.
-3. **[TODO: cc-dhvk]** Recycle the quality reviewer. When ready, dispatch next
-   from `quality_review_queue` if non-empty and head ticket has passed AC
-   (same as CLEAN step 4).
+3. Recycle the quality reviewer (same procedure as CLEAN step 4). When ready,
+   dispatch next from `quality_review_queue` if non-empty and head ticket has
+   passed AC (same as CLEAN step 4).
 4. **[TODO: cc-euin]** If `rework_count[ticket-id] >= 3`: escalate to user
    (options: provide guidance / reassign / mark BLOCKED). Do not dispatch rework.
 5. `ticket_state[ticket-id].state = REWORK`
 6. `ticket_state[ticket-id].verification_phase = null`
 7. Find the implementer slot S where `agent_pool[S].assignee == ticket-id`.
-8. **[TODO: cc-dhvk]** If `agent_pool[S].assignments_since_spawn >= RECYCLE_CAP`:
-   recycle slot S before sending the rework message.
+8. If `agent_pool[S].assignments_since_spawn >= RECYCLE_CAP`: recycle slot S
+   before sending (see [Recycle protocol](#recycle-protocol-reference)).
 9. Forward the numbered findings verbatim:
    ```
    SendMessage({
@@ -599,7 +649,7 @@ REWORK message:
 
 Call `dispatch_ready_tickets()` whenever a slot is freed (post-CLOSED) and
 after the initial Phase 2 worktree-OK confirmation. This procedure is also
-the entry point called by the cc-dhvk merge protocol after each `tk close`.
+the entry point called by the CLEAN handler (merge protocol) after each `tk close`.
 
 ```
 procedure dispatch_ready_tickets():
@@ -617,9 +667,11 @@ procedure dispatch_ready_tickets():
     rework_count[T] = 0
     agent_pool[S].assignee = T
     agent_pool[S].assignments_since_spawn += 1
-    # [TODO: cc-dhvk] If assignments_since_spawn >= RECYCLE_CAP: recycle S
-    #   before sending (shutdown_request → SHUTDOWN_ACK → re-spawn → WORKTREE OK;
-    #   reset assignments_since_spawn = 0).
+    if assignments_since_spawn >= RECYCLE_CAP:
+      # Recycle S before sending: shutdown_request → SHUTDOWN_ACK → re-spawn
+      # (same Agent call, same worktree path) → WORKTREE OK.
+      # Then: assignments_since_spawn = 1  (this dispatch is the new agent's first)
+      # See Recycle protocol section for full procedure.
     SendMessage({
       to: "<S>",
       message: "Ticket <T>: <T title>
@@ -638,9 +690,33 @@ blocker just closed appear immediately — no shadow DAG is maintained.
 
 ---
 
-**[TODO: cc-dhvk]** Merge queue: acquire/release merge_lock, FIFO merge
-serialization, implementer recycle (RECYCLE_CAP = 3), worktree reset between
-tickets, slot release after CLOSED, call `dispatch_ready_tickets()` post-close.
+### Worktree reset procedure
+
+Run this after every ticket CLOSED transition, before freeing the slot.
+`<completed-id>` is the ticket just closed; `<worktree>` is `agent_pool[S].worktree`.
+
+```bash
+# 1. Checkout the merge target (integration branch)
+git -C <worktree> checkout epic/<epic-id>
+
+# 2. Hard-reset to HEAD of the integration branch
+git -C <worktree> reset --hard epic/<epic-id>
+
+# 3. Remove untracked files and directories
+git -C <worktree> clean -fd
+
+# 4. Remove the stale ticket branch from this worktree
+git -C <worktree> branch -D ticket/<completed-id> 2>/dev/null || true
+
+# 5. Verify clean before the next ticket is dispatched
+git -C <worktree> status --porcelain   # must produce empty output
+```
+
+If step 5 produces any output, the team lead does **not** dispatch the next
+ticket to this slot. It marks the slot unavailable and reports the dirty
+status to the user.
+
+---
 
 **[TODO: cc-euin]** Edge cases: AC fail escalation (>= 3), QR rework
 escalation (>= 3), BLOCKED ticket handling, pool livelock detection, stuck-
