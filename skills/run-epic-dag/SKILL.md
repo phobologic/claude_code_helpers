@@ -393,8 +393,14 @@ Before dispatching any work message to an implementer, check
 2. Wait up to 30 s for `SHUTDOWN_ACK <slot>`.
 3. Verify team lead CWD is still `REPO_ROOT`.
 4. Re-spawn with the **exact same Agent call** used at startup: same `name`,
-   same `subagent_type`, same `worktree` path from `agent_pool[slot].worktree`,
-   no `isolation: "worktree"` (worktree already exists).
+   same `subagent_type`, no `isolation: "worktree"` (worktree already exists).
+   For the worktree path in the prompt:
+   - **Implementer slots** (`dag-impl-1` .. `dag-impl-4`): read from
+     `agent_pool[slot].worktree` (e.g. `$REPO_ROOT/.worktrees/dag-impl-2`).
+   - **AC verifier and QR slots** (`dag-ac-verifier`, `dag-qr-1`, `dag-qr-2`):
+     not tracked in `agent_pool` — use `$REPO_ROOT/.worktrees/<slot-name>`
+     directly (e.g. `$REPO_ROOT/.worktrees/dag-qr-1`), matching the
+     deterministic names assigned in Step 1.2.
 5. Wait for `WORKTREE OK`. Wrong path or `WARNING` aborts the run.
 6. Reset `assignments_since_spawn = 0`.
 
