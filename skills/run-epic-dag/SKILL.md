@@ -489,9 +489,13 @@ When the AC verifier sends `FAIL <ticket-id> <detail>`:
    - **Option 1 (guidance):** Include the user's text in the rework message at
      step 10. Reset `ac_fail_count[ticket-id] = 0` and continue to steps 6–11.
    - **Option 2 (reassign):** Reset `ac_fail_count[ticket-id] = 0` and
-     `rework_count[ticket-id] = 0`. Free slot S (`agent_pool[S].assignee = null`).
-     Select a different idle slot S'; if none is idle, wait for one to free up.
-     Re-dispatch the ticket to S' as a standard rework assignment.
+     `rework_count[ticket-id] = 0`. Run the
+     [Worktree reset procedure](#worktree-reset-procedure) on slot S's worktree —
+     **skip step 4** (`branch -D`); preserve the `ticket/<id>` branch so the new
+     implementer in S' can check it out. Free slot S
+     (`agent_pool[S].assignee = null`). Select a different idle slot S'; if none
+     is idle, wait for one to free up. Re-dispatch the ticket to S' as a standard
+     rework assignment.
    - **Option 3 (BLOCKED):**
      - `tk set <ticket-id> --status blocked`
      - Run the [Worktree reset procedure](#worktree-reset-procedure) on slot S's
@@ -628,9 +632,13 @@ finding list:
    - **Option 1 (guidance):** Include the user's text in the rework message at
      step 9. Reset `rework_count[ticket-id] = 0` and continue to steps 5–10.
    - **Option 2 (reassign):** Reset `rework_count[ticket-id] = 0` and
-     `ac_fail_count[ticket-id] = 0`. Free slot S (`agent_pool[S].assignee = null`).
-     Select a different idle slot S'; if none is idle, wait for one to free up.
-     Re-dispatch the ticket to S' as a standard rework assignment.
+     `ac_fail_count[ticket-id] = 0`. Run the
+     [Worktree reset procedure](#worktree-reset-procedure) on slot S's worktree —
+     **skip step 4** (`branch -D`); preserve the `ticket/<id>` branch so the new
+     implementer in S' can check it out. Free slot S
+     (`agent_pool[S].assignee = null`). Select a different idle slot S'; if none
+     is idle, wait for one to free up. Re-dispatch the ticket to S' as a standard
+     rework assignment.
    - **Option 3 (BLOCKED):**
      - `tk set <ticket-id> --status blocked`
      - Run the [Worktree reset procedure](#worktree-reset-procedure) on slot S's
