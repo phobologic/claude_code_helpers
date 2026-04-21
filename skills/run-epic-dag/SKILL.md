@@ -431,14 +431,16 @@ When implementer slot S sends `DONE <ticket-id> ticket/<ticket-id>`:
 When the AC verifier sends `PASS <ticket-id>`:
 
 1. Verify `ticket_state[ticket-id].verification_phase == "ac"`.
-2. **[TODO: cc-dhvk]** Recycle the AC verifier (shutdown_request → SHUTDOWN_ACK
+2. Set `ticket_state[ticket-id].verification_phase = null` (releases the AC
+   verifier's "busy" signal regardless of what happens with QR).
+3. **[TODO: cc-dhvk]** Recycle the AC verifier (shutdown_request → SHUTDOWN_ACK
    → re-spawn → WORKTREE OK). When the recycled AC verifier is ready:
    - If `ac_verification_queue` is non-empty, pop the head entry E and dispatch
      it (same as DONE step 4): set E's state to VERIFYING with phase "ac", send
      the verify message.
-3. Find and remove `ticket-id`'s entry from `quality_review_queue`.
 4. **If the quality reviewer is idle** (no ticket currently has
-   `verification_phase == "quality"`), dispatch this ticket's QR job immediately:
+   `verification_phase == "quality"`), dispatch this ticket's QR job:
+   - Find and remove `ticket-id`'s entry from `quality_review_queue`.
    - Find the idle QR slot (dag-qr-1 or dag-qr-2 — whichever is not currently
      processing a job).
    - `ticket_state[ticket-id].verification_phase = "quality"`
@@ -457,9 +459,9 @@ When the AC verifier sends `PASS <ticket-id>`:
        FINDINGS — all blockers were out-of-scope; list the ticket IDs you created"
      })
      ```
-5. **If the quality reviewer is busy**, the job stays removed from the queue.
-   It will be re-dispatched when the QR finishes its current job and recycles
-   (the recycle handler checks for the next queued job).
+5. **If the quality reviewer is busy**, leave `ticket-id`'s entry in
+   `quality_review_queue`. The recycle handler in CLEAN/REWORK/FINDINGS
+   (step 4 of each) will pop it naturally when the QR becomes available.
 6. Output dashboard.
 
 ---
