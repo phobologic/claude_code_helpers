@@ -19,6 +19,12 @@ that `tk` owns. The only team-lead-owned state is the in-memory structures below
 ```
 ticket_state: Map<ticket_id, TicketState>
   # one entry per non-closed child ticket of the epic
+  # Fields per entry:
+  state: TicketState                  # see State Machine section
+  verification_phase: "ac" | "quality" | null
+    # null when ticket is not in VERIFYING state
+    # "ac" while the AC verifier is evaluating this ticket
+    # "quality" while the quality reviewer is evaluating this ticket
 
 agent_pool: Map<slot_name, AgentSlot>
   # one entry per implementer slot (implementer-1 … implementer-4)
@@ -27,10 +33,23 @@ agent_pool: Map<slot_name, AgentSlot>
   assignments_since_spawn: int        # recycle counter
   worktree: string                    # absolute path
 
-pending_verifications: Queue<VerificationJob>
+# Two separate queues, one per verification type.
+# Each queue is ordered by the time the team lead received the DONE message
+# that triggered the enqueue (FIFO within each queue).
+ac_verification_queue: Queue<VerificationJob>
   ticket_id: string
   branch: string
-  type: "ac" | "quality"
+
+quality_review_queue: Queue<VerificationJob>
+  ticket_id: string
+  branch: string
+
+# Dequeue algorithm:
+# When the AC verifier becomes idle (after recycle), take the head of
+# ac_verification_queue and dispatch it. When the quality reviewer becomes
+# idle (after recycle), take the head of quality_review_queue and dispatch
+# it. The two queues are served independently — a ticket can be in AC
+# verification while a different ticket is in quality review simultaneously.
 
 merge_lock: ticket_id | null          # ID of the ticket currently being merged, or null
 
@@ -75,7 +94,11 @@ VERIFYING
 
   Note: VERIFYING covers both AC verification and quality review phases.
   The AC phase runs first; if it passes, quality review runs second.
-  Both phases share this state label for simplicity.
+  Both phases share this state label. To distinguish which sub-phase a
+  VERIFYING ticket is in, read `ticket_state[id].verification_phase`:
+  "ac" while the AC verifier is evaluating it, "quality" while the quality
+  reviewer is evaluating it (set when the job is dispatched, cleared to null
+  on CLOSED). Do not inspect the verification queues to infer sub-phase.
 
 REWORK
   → DISPATCHED      trigger: implementer signals DONE again (after fixing rework
@@ -84,24 +107,35 @@ REWORK
 
 MERGING
   → MERGED          trigger: git merge completes without conflict
-                    action: release merge_lock; close ticket in tk;
-                            run DAG recomputation; dispatch newly unblocked tickets
+                    action: release merge_lock; begin `tk close <ticket-id>`
 
   → REWORK          trigger: merge produces conflicts
-                    action: release merge_lock; route to implementer for resolution;
+                    action: release merge_lock; route to implementer for resolution
+                            via merge-conflict message (see Message Protocol);
                             after resolution, re-enter full validation cycle from
                             DISPATCHED
 
 MERGED
-  → CLOSED          trigger: tk close completes
-                    action: update ticket_state; check for pool livelock;
-                            dispatch next available ticket if a slot is free
+  → CLOSED          trigger: `tk close` completes
+                    action: set verification_phase = null; run DAG recomputation
+                            (re-query `tk ready`); dispatch newly unblocked tickets
+                            if slots are free; check for pool livelock
 
 CLOSED              terminal state for this run
 
 BLOCKED             trigger: ac_fail_count >= 3 AND user says "mark blocked", OR
                              rework_count >= 3 AND user says "mark blocked"
                     action: see Rework & Pool Livelock section
+
+REASSIGNED          pseudo-transition (not a stable state): when the user responds
+                    "reassign to a different implementer" after an escalation:
+                    action: reset ac_fail_count[ticket] = 0 AND rework_count[ticket] = 0;
+                            transition ticket back to REWORK; free the current
+                            implementer slot; select a different idle slot;
+                            re-dispatch via the standard REWORK → DISPATCHED path
+                            (ticket enters the AC verification queue from the top as
+                            if newly done — the new implementer picks up the existing
+                            ticket/<id> branch and signals DONE after any adjustments)
 ```
 
 **Divergence from SKILL.md:** The current skill has no named per-ticket states. AC fail
@@ -172,6 +206,36 @@ If any finding is genuinely out of scope (would require touching files this tick
 never named), reply with:
   OUT_OF_SCOPE <n>: <one-sentence reason>
 I will convert those to tickets. Fix every finding you do not push back on.
+```
+
+### Team lead → implementer (merge conflict)
+
+```
+Merge conflict when integrating <ticket-id> into epic/<epic-id>.
+
+In your worktree:
+  git checkout epic/<epic-id>
+  git merge ticket/<ticket-id>
+  # resolve all conflicts, then:
+  git add <resolved-files>
+  git commit
+
+After committing the resolution, signal DONE again — the branch will go
+through the full validation cycle (AC + quality review) from the top.
+```
+
+Example:
+```
+Merge conflict when integrating cc-1abc into epic/cc-28sz.
+
+In your worktree:
+  git checkout epic/cc-28sz
+  git merge ticket/cc-1abc
+  # resolve conflicts in src/router.py, then:
+  git add src/router.py
+  git commit
+
+Signal DONE when the resolution is committed.
 ```
 
 ### Team lead → implementer (stand-by after close)
@@ -257,8 +321,12 @@ Ticketed: <finding-id-1>, <finding-id-2>
   recycle before dispatching.
 - **Recycle procedure:**
   1. Send `shutdown_request` to the implementer. Wait up to 30 s for `SHUTDOWN_ACK`.
-  2. Re-spawn with the **exact same Agent call** used at startup (same `name`, same
-     worktree path, no `isolation: "worktree"`).
+  2. Re-spawn with the **exact same Agent call** used at startup: same `name`, same
+     worktree path read from `agent_pool[slot].worktree`, no `isolation: "worktree"`.
+     The prompt must include the same `WORKTREE: <path>` header line and the same
+     `cd <path> && pwd && [ -f .git ] && echo 'WORKTREE OK'` verification block as the
+     original spawn — the recycled agent has no memory of its prior run and must be
+     told its worktree path explicitly.
   3. Wait for `WORKTREE OK`. If wrong path or `WARNING`, abort the run.
   4. Reset `assignments_since_spawn = 0`.
 - **Between tickets:** worktree is reset to a known-clean state before the next
@@ -272,7 +340,7 @@ Ticketed: <finding-id-1>, <finding-id-2>
   sends `shutdown_request`, waits for `SHUTDOWN_ACK`, then re-spawns before the next
   verification job.
 - **Serialization:** Only one AC verification runs at a time. Additional completed
-  tickets queue in `pending_verifications`.
+  tickets queue in `ac_verification_queue`.
 
 **Divergence from SKILL.md:** The current skill spawns a single AC verifier once and
 never recycles it. The new model recycles after every verdict to prevent context
@@ -284,7 +352,7 @@ accumulation across many tickets.
 - **Recycling:** Same as AC verifier — recycles after every verdict (CLEAN, REWORK, or
   FINDINGS), both initial and rework rounds.
 - **Serialization:** Only one quality review runs at a time. Tickets waiting for
-  quality review queue behind any in-progress review.
+  quality review queue in `quality_review_queue`.
 
 **Divergence from SKILL.md:** The current skill spawns a single quality reviewer once
 and never recycles it. The new model recycles after every verdict.
@@ -410,10 +478,11 @@ batch to complete.
 
 ### Dispatch timing
 
-Re-querying happens synchronously after `tk close` completes (step 3 of MERGING →
-CLOSED). If new tickets are unblocked and a slot is free, dispatch proceeds immediately.
-If no slots are free, the unblocked ticket IDs are held in a `ready_queue` and
-dispatched as slots become free.
+Re-querying happens synchronously after `tk close` completes (the MERGED → CLOSED
+transition). Only at this point does `tk` reflect the ticket as closed, so `tk ready`
+will correctly include any tickets whose last blocker was just closed. If new tickets
+are unblocked and a slot is free, dispatch proceeds immediately. If no slots are free,
+the unblocked ticket IDs are held in a `ready_queue` and dispatched as slots become free.
 
 ---
 
@@ -478,16 +547,20 @@ Resolution:
 3. The team lead continues to wait. As each rework cycle completes (implementer sends
    DONE for a rework ticket), that slot is freed and can take the next item from
    `ready_queue`.
-4. If all pinned tickets are stuck (no progress for >15 min), apply the heartbeat
-   sweep and escalate per the normal stuck-agent procedure.
+4. If all pinned tickets are stuck (no progress for >15 min), perform a heartbeat
+   sweep: send a one-line `SendMessage` status-check to each busy implementer; call
+   `TaskOutput` against each implementer's task to inspect recent tool output; report
+   the findings in the dashboard under event header `heartbeat: livelock stall`. If
+   any agent appears unresponsive (no tool output in 15 min), escalate to the user.
 
 ### AC-verifier queue discipline
 
 When multiple tickets reach IMPL_DONE simultaneously, the AC verifier serves them
-**FIFO** (first-in-queue, first-served). The `pending_verifications` queue is ordered
-by the time the team lead received the DONE message from the implementer. No priority
+**FIFO** (first-in-queue, first-served). `ac_verification_queue` is ordered by the
+time the team lead received the DONE message from the implementer. No priority
 reordering based on ticket priority is performed. This keeps the queue predictable and
-avoids starvation of lower-priority tickets.
+avoids starvation of lower-priority tickets. The same FIFO discipline applies to
+`quality_review_queue`.
 
 ---
 
