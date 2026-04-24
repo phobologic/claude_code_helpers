@@ -21,7 +21,7 @@ This review analyzed uncommitted changes across 5 files with approximately 500 l
 - **Line(s)**: 47
 - **Description**: The user search function concatenates unsanitized user input directly into a SQL query string
 - **Suggested Fix**: Use parameterized queries to prevent SQL injection attacks
-- **Importance**: Critical
+- **Priority**: Critical
 
 ```javascript
 // Current code (vulnerable)
@@ -42,7 +42,7 @@ function searchUsers(query) {
 - **Line(s)**: 128-131
 - **Description**: Event listeners are added in the `componentDidMount` method but not removed in `componentWillUnmount`, leading to memory leaks
 - **Suggested Fix**: Add a `componentWillUnmount` method to clean up event listeners
-- **Importance**: Critical
+- **Priority**: Critical
 
 ```javascript
 // Current code (problematic)
@@ -73,7 +73,7 @@ componentWillUnmount() {
 - **Line(s)**: 95-110
 - **Description**: The application loads all user data at once, including unnecessary fields, which slows down initial page load
 - **Suggested Fix**: Implement pagination and only request needed fields
-- **Importance**: High
+- **Priority**: High
 
 ### HIGH-LOGIC-001: Inadequate Error Handling
 - **ID**: HIGH-LOGIC-001
@@ -82,7 +82,7 @@ componentWillUnmount() {
 - **Line(s)**: 32-45
 - **Description**: API failures are silently caught with no proper error reporting to the user
 - **Suggested Fix**: Implement a comprehensive error handling strategy with user feedback
-- **Importance**: High
+- **Priority**: High
 
 ### HIGH-SEC-001: Insecure Authentication Cookie
 - **ID**: HIGH-SEC-001
@@ -91,7 +91,7 @@ componentWillUnmount() {
 - **Line(s)**: 78
 - **Description**: Authentication cookie is not using the secure or HttpOnly flags, making it vulnerable to XSS attacks
 - **Suggested Fix**: Set both Secure and HttpOnly flags on authentication cookies
-- **Importance**: High
+- **Priority**: High
 
 ```javascript
 // Current code
@@ -115,7 +115,7 @@ res.cookie('authToken', token, {
 - **Line(s)**: N/A
 - **Description**: Component naming conventions switch between PascalCase and camelCase, and some names don't reflect their purpose
 - **Suggested Fix**: Standardize on PascalCase for React components and use descriptive, consistent naming
-- **Importance**: Medium
+- **Priority**: Medium
 
 ### MED-READ-002: Missing Component Documentation
 - **ID**: MED-READ-002
@@ -124,7 +124,7 @@ res.cookie('authToken', token, {
 - **Line(s)**: 15-120
 - **Description**: Complex component with props and state lacks proper JSDoc documentation
 - **Suggested Fix**: Add JSDoc comments for the component, its props, and important methods
-- **Importance**: Medium
+- **Priority**: Medium
 
 ### MED-LOGIC-001: Duplicate Code in Rendering Logic
 - **ID**: MED-LOGIC-001
@@ -133,7 +133,7 @@ res.cookie('authToken', token, {
 - **Line(s)**: Multiple
 - **Description**: Similar card rendering logic is duplicated between components
 - **Suggested Fix**: Extract common card rendering into a shared component
-- **Importance**: Medium
+- **Priority**: Medium
 
 ### MED-PERF-001: Excessive Re-rendering
 - **ID**: MED-PERF-001
@@ -142,7 +142,7 @@ res.cookie('authToken', token, {
 - **Line(s)**: 53
 - **Description**: Component re-renders on every data update, even when the visible data hasn't changed
 - **Suggested Fix**: Implement React.memo or shouldComponentUpdate to prevent unnecessary renders
-- **Importance**: Medium
+- **Priority**: Medium
 
 ```javascript
 // Suggested fix example
@@ -158,7 +158,7 @@ export default React.memo(Dashboard, (prevProps, nextProps) => {
 - **Line(s)**: 25
 - **Description**: Password validation only requires 8 characters with no complexity requirements
 - **Suggested Fix**: Enhance password policy to require mixed case, numbers, and special characters
-- **Importance**: Medium
+- **Priority**: Medium
 
 ## Low Priority Issues
 
@@ -169,7 +169,7 @@ export default React.memo(Dashboard, (prevProps, nextProps) => {
 - **Line(s)**: N/A
 - **Description**: Inconsistent indentation and line length across files
 - **Suggested Fix**: Apply a code formatter like Prettier with a consistent configuration
-- **Importance**: Low
+- **Priority**: Low
 
 ### LOW-READ-002: Console Log Statements in Production Code
 - **ID**: LOW-READ-002
@@ -178,7 +178,7 @@ export default React.memo(Dashboard, (prevProps, nextProps) => {
 - **Line(s)**: Various
 - **Description**: Development console.log statements remain in code that would be shipped to production
 - **Suggested Fix**: Remove debug statements or use a logger that can be disabled in production
-- **Importance**: Low
+- **Priority**: Low
 
 ### LOW-LOGIC-001: Missing Alt Text on Images
 - **ID**: LOW-LOGIC-001
@@ -187,7 +187,7 @@ export default React.memo(Dashboard, (prevProps, nextProps) => {
 - **Line(s)**: Various
 - **Description**: Image elements are missing alt text for accessibility
 - **Suggested Fix**: Add descriptive alt text to all images
-- **Importance**: Low
+- **Priority**: Low
 
 ```javascript
 // Current code

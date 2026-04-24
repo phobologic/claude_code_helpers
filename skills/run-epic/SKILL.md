@@ -679,7 +679,7 @@ to the implementer with the OUT_OF_SCOPE escape hatch:
 2. When the implementer replies:
    - For each `OUT_OF_SCOPE <n>: <reason>` line, create a new tk ticket using
      the same format the quality-reviewer would have (title from the finding,
-     priority by severity, body with file/line/description), and parent it to
+     `-p` by the finding's priority word, body with file/line/description), and parent it to
      `FINDINGS_PARENT`: `tk create ... --parent <FINDINGS_PARENT>`. Note these
      tickets on the implementation ticket and remove them from the blocking set.
    - When the implementer signals DONE again, restart the full validation
@@ -832,9 +832,16 @@ When all child tickets of the epic are closed:
      1. Run deep review:
         /multi-review git diff main epic/<epic-id> --
      2. Address any critical/high findings from the deep review
-     3. Merge to main:
+     3. Review produced findings:
+        tk triage --epic <FINDINGS_PARENT> --sort priority,confidence
+     4. Merge to main:
         git checkout main && git merge epic/<epic-id> --no-ff
    ```
+
+   Findings carry a priority (Critical/High/Medium/Low → `-p 0..3`) and an
+   epistemic confidence score (0–100) — see the reviewer agents for the rubric.
+   `tk triage --sort priority,confidence` walks them highest-priority-first,
+   then highest-confidence within each priority band.
 
 2. If there are non-blocking quality finding tickets still open, list them:
    ```

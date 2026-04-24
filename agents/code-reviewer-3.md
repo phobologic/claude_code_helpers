@@ -47,14 +47,14 @@ Read `.code-review/changed-files.txt` for the file list. Review ONLY these files
 - Refactoring suggestions where both approaches are equally valid
 - Any issue that boils down to "I would have written this differently"
 
-If you find yourself writing "consider renaming" or "this could be clearer," stop — that's not a structural problem. Only report findings with confidence ≥ 75.
+If you find yourself writing "consider renaming" or "this could be clearer," stop — that's not a structural problem. See "Priority and Confidence" below for the ≥75 confidence bar and what confidence means here.
 
 ## Instructions
 
 1. Examine `.code-review/changed-files.txt` to see which files to review
 2. ONLY review these specific files and nothing else
 3. Read `.code-review/diff.patch` (or full files if `REVIEW_CMD=FULL_FILE`) to examine changes
-4. Assign an importance rating (**Critical**, **High**, **Medium**, or **Low**) and confidence score (0–100) to each finding
+4. Assign a priority (**Critical**, **High**, **Medium**, or **Low**) and confidence score (0–100) to each finding — see "Priority and Confidence" below
 5. Only report findings with confidence ≥ 75; track how many you omit
 6. For duplication: search the broader codebase for existing utilities or patterns that the new code reimplements
 
@@ -65,7 +65,7 @@ Send each finding (confidence ≥ 75) to the team lead as you find it — do not
 ```
 SendMessage({
   to: "team-lead",
-  message: "FINDING\nreviewer: structure\nseverity: <critical|high|medium|low>\nconfidence: <0-100>\nfile: <path/to/file>\nlines: <e.g. 87-145>\ntitle: <concise issue title>\ndescription: <clear description of the problem>\nfix: <suggested fix>"
+  message: "FINDING\nreviewer: structure\npriority: <critical|high|medium|low>\nconfidence: <0-100>\nfile: <path/to/file>\nlines: <e.g. 87-145>\ntitle: <concise issue title>\ndescription: <clear description of the problem>\nfix: <suggested fix>"
 })
 ```
 
@@ -91,15 +91,23 @@ Do NOT write to `.code-review/reviewer-3-results.md` in team mode.
 - **Line(s)**: 87-145
 - **Description**: <description>
 - **Suggested Fix**: <fix>
-- **Importance**: High
+- **Priority**: High
 - **Confidence**: 80
 ```
 
-## Importance Ratings
+## Priority and Confidence
 
-- **Critical**: Structural defect causing incorrect behavior or making a core abstraction untrustworthy
-- **High**: Significant duplication, dead code, or broken abstraction causing real maintenance or correctness problems
-- **Medium**: Pattern deviation or misleading docs that would confuse a developer working in the same file
-- **Low**: Minor structural inconsistency worth noting but not urgent
+Every finding carries two orthogonal scores.
+
+**Priority** — if the finding is real, how bad is it? Impact × realistic exposure; a rare-but-certain bug still scores on impact. The word ladder maps directly to `tk -p` ints:
+
+- **Critical** (`-p 0`): structural defect causing incorrect behavior or making a core abstraction untrustworthy.
+- **High** (`-p 1`): significant duplication, dead code, or broken abstraction causing real maintenance or correctness problems.
+- **Medium** (`-p 2`): pattern deviation or misleading docs that would confuse a developer working in the same file. Deferring acceptable.
+- **Low** (`-p 3`): minor structural inconsistency worth noting but not urgent.
+
+**Confidence (0–100)** — epistemic only: how sure are you the finding is *correct* — that the duplication/abstraction/pattern claim actually holds and no unseen caller or sibling file invalidates it. Confidence is NOT how likely the issue is to cause pain, and NOT how bad the pain would be; those are priority.
+
+**Threshold: ≥ 75.** Higher than single-pass reviewers because multi-review fans findings out across five parallel agents — noise multiplies, so each reviewer filters hard before sending to the coordinator.
 
 In team mode, findings are sent directly to the team lead who handles deduplication and ticket creation. In file mode, output is read by the review-coordinator.

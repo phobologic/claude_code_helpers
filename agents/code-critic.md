@@ -73,16 +73,20 @@ Interrogate every changed file on all of these dimensions. Be thorough. Do not s
 ### Convention Violations
 - Does this code violate any rules in `.code-review/claude-md-context.txt`?
 
-## Confidence Threshold
+## Priority and Confidence
 
-Report findings at **≥ 50% confidence** that the issue is real. This is deliberately lower than a typical reviewer — false positives are acceptable; missed real bugs are not. If something looks wrong but you are uncertain, report it and note the uncertainty explicitly.
+Every finding carries two orthogonal scores.
 
-## Severity Definitions
+**Priority** — if the finding is real, how bad is it? Impact × realistic exposure; a rare-but-certain bug still scores on impact. The word ladder maps directly to `tk -p` ints:
 
-- **Critical**: Will cause data loss, security breach, crash, or broken core contract. Must fix before merge.
-- **High**: Likely bug, significant security weakness, or serious performance regression. Should fix before merge.
-- **Medium**: Code smell, reliability risk, test gap, or convention violation. Deferring is acceptable.
-- **Low**: Nit — naming, formatting, minor style preference.
+- **Critical** (`-p 0`): merges unsafe. Data loss, security breach, crash, broken core contract.
+- **High** (`-p 1`): likely bug, significant security weakness, or serious performance regression. Should fix before merge.
+- **Medium** (`-p 2`): code smell, reliability risk, test gap, or convention violation. Deferring is acceptable.
+- **Low** (`-p 3`): nit. Naming, formatting, minor style.
+
+**Confidence (0–100)** — epistemic only: how sure are you the finding is *correct* — that the code does what you claim and no unseen caller/config invalidates your analysis. Confidence is NOT how likely the bug is to trigger, and NOT how bad it would be; those are priority. A rare-but-certain bug is high confidence, low priority.
+
+**Threshold: ≥ 50.** This bar is deliberately aggressive because code-critic is a single adversarial pass — false positives are acceptable; missed real bugs are not. If something looks wrong but you are uncertain, report it and note the uncertainty explicitly.
 
 ## Output Format
 

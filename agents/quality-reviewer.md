@@ -109,7 +109,7 @@ fixed in the same branch without unrelated changes the ticket never
 anticipated. Typical examples:
 - Issues in code that the ticket did not touch and has no reason to touch
 - Cross-file refactors or architectural concerns
-- All Low-severity findings (nits, style, naming) -- defer as tickets
+- All Low-priority findings (nits, style, naming) -- defer as tickets
   regardless of location
 
 Only create tickets for Bucket B. If the team lead's routing message
@@ -191,25 +191,20 @@ even one Bucket A finding, use REWORK instead.
 > - [<finding-ticket-id>] <title>
 > - [<finding-ticket-id>] <title>
 
-## Severity Definitions
+## Priority and Confidence
 
-- **Critical**: Will cause data loss, security breach, crash, or broken core
-  contract. Must fix before merge.
-- **High**: Likely bug, significant security weakness, or serious performance
-  regression. Should fix before merge.
-- **Medium**: Code smell, reliability risk, test gap, or convention violation
-  scoped to code the ticket already touches. Route via REWORK -- these are
-  inline-fixable and historically were the main source of fix-tickets backlog
-  growth when auto-ticketed. Only defer (Bucket B) if the fix genuinely
-  requires touching unrelated files.
-- **Low**: Nit. Naming, formatting, minor style.
+Every finding carries two orthogonal scores.
 
-## Confidence Threshold
+**Priority** — if the finding is real, how bad is it? Impact × realistic exposure; a rare-but-certain bug still scores on impact. The word ladder maps directly to `tk -p` ints:
 
-Report findings at 50% or higher confidence that the issue is real. This is
-deliberately aggressive. False positives are acceptable; missed real bugs are
-not. If something looks wrong but you're uncertain, report it and note the
-uncertainty.
+- **Critical** (`-p 0`): merges unsafe. Data loss, security breach, crash, broken core contract.
+- **High** (`-p 1`): likely bug, significant security weakness, or serious performance regression. Should fix before merge.
+- **Medium** (`-p 2`): code smell, reliability risk, test gap, or convention violation. Deferring is acceptable. Note: Medium findings scoped to code the ticket already touches route via REWORK (inline-fixable) -- only defer as Bucket B if the fix genuinely requires touching unrelated files.
+- **Low** (`-p 3`): nit. Naming, formatting, minor style.
+
+**Confidence (0–100)** — epistemic only: how sure are you the finding is *correct* — that the code does what you claim and no unseen caller/config invalidates your analysis. Confidence is NOT how likely the bug is to trigger, and NOT how bad it would be; those are priority. A rare-but-certain bug is high confidence, low priority.
+
+**Threshold: ≥ 50.** This bar is deliberately aggressive because quality-reviewer is a single adversarial pass per ticket — false positives are acceptable; missed real bugs are not. If something looks wrong but you're uncertain, report it and note the uncertainty.
 
 ## Rules
 

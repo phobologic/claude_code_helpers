@@ -544,7 +544,7 @@ When the implementer replies:
 
 - For each `OUT_OF_SCOPE <n>: <reason>` line, create a new tk ticket using
   the same format the quality-reviewer would have used (title from the
-  finding, priority by severity, body with file/line/description/reason),
+  finding, `-p` by the finding's priority word, body with file/line/description/reason),
   and parent it to the batch epic: `tk create ... --parent <FINDINGS_PARENT>`.
   Note these tickets in the source ticket's notes and remove them from the
   blocking set.
@@ -729,7 +729,13 @@ Next steps:
   Review the full batch diff:    git diff main fix/batch-<stamp>
   Deep review (optional):        /multi-review -- fix/batch-<stamp>
   Merge to main:                 git checkout main && git merge fix/batch-<stamp> --no-ff
+  Review produced findings:      tk triage --epic <FINDINGS_PARENT> --sort priority,confidence
 ```
+
+Findings carry a priority (Critical/High/Medium/Low → `-p 0..3`) and an
+epistemic confidence score (0–100) — see the reviewer agents for the rubric.
+`tk triage --sort priority,confidence` is the canonical way to walk them:
+highest priority first, then highest confidence within each priority band.
 
 Shut down all teammates:
 ```

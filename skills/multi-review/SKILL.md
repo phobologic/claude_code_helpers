@@ -90,7 +90,7 @@ This is your main loop. Track how many DONE messages you've received (target: 4)
 
 ### When you receive a finding from any reviewer:
 
-Findings arrive as plain-text messages starting with `FINDING`. Parse the `key: value` lines to extract: `title`, `file`, `lines`, `description`, `fix`, `severity`, `confidence`, `reviewer`.
+Findings arrive as plain-text messages starting with `FINDING`. Parse the `key: value` lines to extract: `title`, `file`, `lines`, `description`, `fix`, `priority`, `confidence`, `reviewer`. (If a reviewer still emits `severity:`, treat it as a synonym for `priority:`.)
 
 **Check for duplicates before acting:**
 
@@ -177,11 +177,15 @@ Analyzed X files. Found:
 
 Tell the user they can browse tickets with:
 - `tk show <id>` — view a specific ticket
-- `tk query '.[] | select(.parent=="<epic_id>")'` — list all review tickets
+- `tk triage --epic <epic_id> --sort priority,confidence` — walk findings highest-priority-first, then highest-confidence within each band (the canonical way to review produced findings)
+- `tk query '.[] | select(.parent=="<epic_id>")'` — raw list of review tickets
+
+Findings carry a priority (Critical/High/Medium/Low → `-p 0..3`) and an
+epistemic confidence score (0–100) — see the reviewer agents for the rubric.
 
 ### File mode — write and present report
 
-Organize accumulated findings by severity (critical → high → medium → low). Deduplicate anything that slipped through. Write to `.code-review/final-report.md` using this format:
+Organize accumulated findings by priority (critical → high → medium → low). Deduplicate anything that slipped through. Write to `.code-review/final-report.md` using this format:
 
 ```markdown
 # Code Review Summary
