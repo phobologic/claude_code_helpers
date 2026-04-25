@@ -34,9 +34,16 @@ remove_obsolete() {
 
 remove_obsolete "$CLAUDE/commands" "$DOTFILES/commands" "migrated to skills/"
 
-link "$DOTFILES/CLAUDE.global.md" "$CLAUDE/CLAUDE.md"
-link "$DOTFILES/skills"           "$CLAUDE/skills"
-link "$DOTFILES/agents"           "$CLAUDE/agents"
+link "$DOTFILES/CLAUDE.global.md"     "$CLAUDE/CLAUDE.md"
+link "$DOTFILES/settings.global.json" "$CLAUDE/settings.json"
+link "$DOTFILES/skills"               "$CLAUDE/skills"
+link "$DOTFILES/agents"               "$CLAUDE/agents"
+
+mkdir -p "$CLAUDE/hooks"
+for hook in "$DOTFILES/hooks"/*.sh; do
+  [[ -f "$hook" ]] || continue
+  link "$hook" "$CLAUDE/hooks/$(basename "$hook")"
+done
 
 # Symlink all scripts from bin/ into ~/.local/bin/
 mkdir -p "$HOME/.local/bin"

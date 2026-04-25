@@ -13,7 +13,9 @@ language plugins, tool rules, and working style rules for `~/.claude/`.
 | `plugins/` | General-purpose Claude Code plugins — workflow automation and tool integrations |
 | `tools/` | Per-tool rule files (Railway, SQLAlchemy) — loaded via `.claude/rules/` symlinks |
 | `bin/` | Utility scripts: tk plugins (`tk-show-multi`, `tk-epic-status`, `tk-triage`, `tk-set`) and `git-auto-commit.sh` |
+| `hooks/` | Global Claude Code hooks (e.g. `no-inline-scripts.sh` — denies inline-interpreter and heredoc-to-file Bash patterns) |
 | `CLAUDE.global.md` | Global CLAUDE.md with personal working style rules |
+| `settings.global.json` | Global Claude Code settings — env, permissions, hooks, statusLine |
 | `install.sh` | Sets up `~/.claude/` symlinks from scratch |
 
 ## Installation
@@ -26,6 +28,8 @@ cd ~/git/claude_code
 
 This creates:
 - `~/.claude/CLAUDE.md` → `CLAUDE.global.md`
+- `~/.claude/settings.json` → `settings.global.json`
+- `~/.claude/hooks/<name>.sh` → `hooks/<name>.sh` *(every script in `hooks/`)*
 - `~/.claude/skills/` → `skills/`
 - `~/.claude/agents/` → `agents/`
 - `~/.claude/rules/go.md` → `languages/go/rules/CLAUDE.md` *(path-scoped to `*.go` files)*
@@ -38,6 +42,11 @@ This creates:
 
 It also adds `.tickets/` and `.tmp/` to `~/.config/git/ignore` so ticket files
 and scratch files are never accidentally committed.
+
+**Machine-specific overrides** go in `~/.claude/settings.local.json` (gitignored,
+never tracked here). Claude Code deep-merges it on top of the symlinked
+`settings.json`. Use it for personal `enabledPlugins`, `extraKnownMarketplaces`
+with absolute paths, or anything you don't want in the public repo.
 
 ### Scratch files
 

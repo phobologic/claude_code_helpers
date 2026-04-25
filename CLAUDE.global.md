@@ -36,6 +36,36 @@ Simple commands (`git status`, `go test ./...`, `npm install`) do not need narra
 The explanation should appear as regular text immediately before the tool call — one or
 two sentences on what the command accomplishes, not a line-by-line breakdown.
 
+## Tool Selection
+
+Prefer dedicated tools over Bash whenever one fits. Inline scripts are noisy
+to review and can't be safely allowlisted because the body is arbitrary, so
+each one triggers a fresh permission prompt with code the user has to read.
+
+**Disallowed in `Bash` calls** (use the listed alternative instead):
+
+- `python -c`, `python3 -c`, `node -e`, `perl -e`, `ruby -e`, `deno eval`,
+  `bash -c "<multi-line script>"` — write a real script to `.tmp/` with the
+  `Write` tool and execute that, or use `Read`/`Grep`/`Glob`/`Edit` directly.
+- Heredocs piped to interpreters (`python3 <<EOF … EOF`, `node <<EOF`, etc.)
+  — same alternative as above.
+- Heredocs redirected to a file (`cat > file <<EOF`, `cat <<EOF > file`,
+  `tee file <<EOF`) — use the `Write` tool to create files and `Edit` to
+  modify them.
+- `sed -i` / `awk` rewrites for content changes — use `Edit` (or `Write` for
+  full rewrites).
+- `find` for file discovery — use `Glob`. `grep`/`rg` for searching — use
+  `Grep`. `cat`/`head`/`tail` for reading — use `Read`.
+
+The narrow exception is `git commit -m "$(cat <<'EOF' … EOF)"` for multi-line
+commit messages — that's heredoc inside command substitution, not a
+heredoc-to-file, and it's the documented pattern for commits.
+
+If you genuinely need a one-off script (e.g. complex data transformation that
+no built-in tool covers), write it to `.tmp/` as a real file first, then run
+it. The file is reviewable, re-runnable, and doesn't blow up the permission
+prompt with a wall of inline code.
+
 ## Git Safety
 
 - **Never run `git push`**. The user will push manually.
