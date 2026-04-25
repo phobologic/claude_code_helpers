@@ -33,5 +33,8 @@
   "effortLevel": "medium",
   "editorMode": "vim",
   "teammateMode": "tmux",
-  "agentPushNotifEnabled": true
+  "agentPushNotifEnabled": true,
+  "enabledPlugins": {
+    "claude-worktree@phobos-plugins": true
+  }
 }
