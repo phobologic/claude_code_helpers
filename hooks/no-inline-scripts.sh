@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Blocks Bash invocations that should use a dedicated tool (Write/Edit/Read/
-# Grep/Glob) or a real script file under .tmp/ instead. Prevents per-call
-# permission prompts on arbitrary script bodies.
+# Flags Bash invocations that should use a dedicated tool (Write/Edit/Read/
+# Grep/Glob) or a real script file under .tmp/ instead. Forces a user prompt
+# (permissionDecision: ask) so Claude can't quietly default to these patterns,
+# but the user can still approve case-by-case when nothing else fits.
 #
-# Patterns blocked:
+# Patterns flagged:
 #   - Inline interpreters: python -c, python3 -c, node -e, deno eval,
 #     perl -e, ruby -e
 #   - Heredocs piped to interpreters/shells: python3 <<EOF, bash <<EOF, etc.
@@ -49,12 +50,12 @@ fi
 
 [ -z "$REASON" ] && exit 0
 
-MSG="Blocked: $REASON. $ALT See the Tool Selection section in ~/.claude/CLAUDE.md."
+MSG="Discouraged: $REASON. $ALT Approve only if no built-in tool can do this. See the Tool Selection section in ~/.claude/CLAUDE.md."
 
 jq -n --arg msg "$MSG" '{
   "hookSpecificOutput": {
     "hookEventName": "PreToolUse",
-    "permissionDecision": "deny",
+    "permissionDecision": "ask",
     "permissionDecisionReason": $msg
   }
 }'

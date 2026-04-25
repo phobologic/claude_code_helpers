@@ -13,7 +13,7 @@ language plugins, tool rules, and working style rules for `~/.claude/`.
 | `plugins/` | General-purpose Claude Code plugins — workflow automation and tool integrations |
 | `tools/` | Per-tool rule files (Railway, SQLAlchemy) — loaded via `.claude/rules/` symlinks |
 | `bin/` | Utility scripts: tk plugins (`tk-show-multi`, `tk-epic-status`, `tk-triage`, `tk-set`) and `git-auto-commit.sh` |
-| `hooks/` | Global Claude Code hooks (e.g. `no-inline-scripts.sh` — denies inline-interpreter and heredoc-to-file Bash patterns) |
+| `hooks/` | Global Claude Code hooks (e.g. `no-inline-scripts.sh` — flags inline-interpreter and heredoc-to-file Bash patterns for user approval) |
 | `CLAUDE.global.md` | Global CLAUDE.md with personal working style rules |
 | `settings.global.json` | Global Claude Code settings — env, permissions, hooks, statusLine |
 | `install.sh` | Sets up `~/.claude/` symlinks from scratch |

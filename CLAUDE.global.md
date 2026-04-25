@@ -42,7 +42,8 @@ Prefer dedicated tools over Bash whenever one fits. Inline scripts are noisy
 to review and can't be safely allowlisted because the body is arbitrary, so
 each one triggers a fresh permission prompt with code the user has to read.
 
-**Disallowed in `Bash` calls** (use the listed alternative instead):
+**Discouraged in `Bash` calls** — these trigger an approval prompt; use the
+listed alternative whenever possible:
 
 - `python -c`, `python3 -c`, `node -e`, `perl -e`, `ruby -e`, `deno eval`,
   `bash -c "<multi-line script>"` — write a real script to `.tmp/` with the
