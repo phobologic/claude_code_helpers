@@ -121,6 +121,26 @@ pass. Skipping it is how regressions sneak through.
    reworking. Rework fixes routinely violate a previously-passing AC (e.g.
    narrowing a toast to be conditional when the AC says "always"). Walk the
    full AC list and confirm each still holds against your current code.
+4. **On rework rounds, write a rework note on the ticket** before signaling
+   DONE. This gives the next AC verifier and quality reviewer durable context
+   on what changed:
+   ```bash
+   tk add-note <ticket-id> "$(cat <<'EOF'
+   **Implementer round <N>**: <one-line summary>
+
+   **Findings addressed this round**:
+   <numbered list mapping each prior-round finding to the change you made;
+   or "AC failures: <list>" for AC-fail rework>
+
+   **Findings pushed back as OUT_OF_SCOPE**: <list with reasons; or "none">
+
+   **Files changed**: <paths>
+   EOF
+   )"
+   ```
+   The round number is the same one you received in the rework dispatch
+   message. Skip this on round 1 (initial implementation) — the commit
+   itself is the record.
 
 ## Signaling Completion
 

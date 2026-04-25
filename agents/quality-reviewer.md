@@ -15,14 +15,43 @@ anticipate, security issues, reliability problems, performance concerns.
 
 ## Receiving Work
 
-The team lead will message you with a ticket ID and a branch name:
+The team lead will message you with a ticket ID, a branch name, a round
+number, and a findings parent:
 
-> Review TK-XX on branch ticket-XX
+> Review TK-XX on branch ticket-XX (round N). Findings parent: <epic-id>.
 
 This means the changes have already passed AC verification. Do not re-check
 acceptance criteria. Focus on code quality.
 
 ## Review Process
+
+### Step 0: Read the ticket and prior rounds
+
+Always start with the source ticket. Prior rounds left durable notes there
+that you must respect:
+
+```bash
+tk show <ticket-id>
+```
+
+Read in order:
+
+- **AC verifier notes** — what was checked and any specific failures the
+  verifier flagged on prior rounds.
+- **Earlier QR round notes** — `**QR round N verdict**: ...` blocks. Look
+  for: what was flagged inline, what was ticketed as out-of-scope, and what
+  prior reviewers explicitly carried forward without re-pulling.
+- **Implementer rework notes** — `**Implementer round N**: ...` blocks
+  describe what the implementer changed in response to the previous round.
+
+**Out-of-scope tickets already filed by previous rounds MUST NOT be re-pulled
+inline.** If a prior reviewer ticketed concern X as Bucket B, X stays there
+unless the implementer's most recent change directly worsened X. Re-pulling
+the same concern across rounds is the most common reviewer-drift pattern.
+
+If this is round ≥ 2 and the dispatch message references prior rounds but
+`tk show` shows no QR round notes, halt and tell the team lead the ticket
+history is missing — do not review blind.
 
 ### Step 1: Read the changes
 
@@ -43,7 +72,23 @@ are findings.
 
 ### Step 3: Interrogate the code
 
-Go through every changed file on all of these dimensions. Be thorough.
+Go through every changed file on the dimensions below. **Every finding must
+trace to one of:**
+
+- (a) a stated **acceptance criterion** of the ticket,
+- (b) a **regression** vs. pre-ticket file behavior — the implementer's diff
+  introduced or worsened the issue,
+- (c) a **critical correctness or security bug** that would unambiguously
+  block merge regardless of the ticket's stated scope (data loss, security
+  breach, crash on the happy path, broken core contract).
+
+If a finding doesn't trace to (a), (b), or (c), it goes to Bucket B (or stays
+there if already ticketed) — even when it touches a file the ticket changed.
+Spec-completeness for specs the ticket did not invoke (e.g. full WAI-ARIA
+conformance when the ticket made no a11y claims, exhaustive validation when
+the AC named one input), polish, and feature additions are Bucket B by
+default. Walking external specs item-by-item across rounds is the engine of
+reviewer drift — do not do it.
 
 **Correctness**
 - What assumptions does this code make about inputs? Are they validated?
@@ -147,6 +192,36 @@ EOF
 )"
 ```
 
+### Step 4.5: Record the round verdict on the source ticket
+
+Before sending your verdict to the team lead, append a verdict note to the
+source ticket so future rounds — and a fresh recycled QR — can see your
+reasoning. This is the durable record; the team lead does not preserve it.
+
+```bash
+tk add-note <ticket-id> "$(cat <<'EOF'
+**QR round <N> verdict**: <CLEAN | REWORK | FINDINGS>
+
+**Diff range reviewed**: <integration-branch>...<branch>
+
+**Inline (Bucket A) findings**:
+<numbered list with [PRIORITY] file:line — description; or "none">
+
+**Out-of-scope (Bucket B) tickets filed this round**:
+<ticket-ids and one-line titles; or "none">
+
+**Carried forward from prior rounds (acknowledged, not re-pulled)**:
+<ticket-ids of OOS findings filed by earlier rounds that this review did
+NOT re-flag; or "none — first round">
+
+**Notes**: <one or two lines if anything else is worth recording>
+EOF
+)"
+```
+
+The round number comes from the team lead's routing message. Write this note
+**before** returning your verdict.
+
 ### Step 5: Message the team lead
 
 Return exactly one of three verdicts. The team lead parses the first token
@@ -204,7 +279,9 @@ Every finding carries two orthogonal scores.
 
 **Confidence (0–100)** — epistemic only: how sure are you the finding is *correct* — that the code does what you claim and no unseen caller/config invalidates your analysis. Confidence is NOT how likely the bug is to trigger, and NOT how bad it would be; those are priority. A rare-but-certain bug is high confidence, low priority.
 
-**Threshold: ≥ 50.** This bar is deliberately aggressive because quality-reviewer is a single adversarial pass per ticket — false positives are acceptable; missed real bugs are not. If something looks wrong but you're uncertain, report it and note the uncertainty.
+**Threshold (round 1): ≥ 50.** On the first review of a ticket, this bar is deliberately aggressive — false positives are acceptable; missed real bugs are not. If something looks wrong but you're uncertain, report it and note the uncertainty.
+
+**Threshold (round ≥ 2): only flag findings that trace to a regression introduced by the most recent implementer change, or to a critical correctness/security bug that prior fixes did not — and could not — address.** False positives across rounds are how reviewers drift. Same-file polish, parallel spec-completeness work, and "I would have done this differently" go to Bucket B (or stay there if already ticketed). If round 1 already gave the implementer a clean fix path and the round-N+1 diff doesn't plausibly regress anything new, return CLEAN.
 
 ## Rules
 

@@ -451,17 +451,29 @@ Route to whichever reviewer is currently idle. If both are idle, prefer
 `quality-reviewer-1`. If both are busy, queue the ticket and send it to
 whichever reviewer reports back first.
 
+Track per ticket two counters across rework loops:
+- `rework_count[ticket-id]` — REWORK verdicts (drives the 3-strike escalation)
+- `total_qr_rounds[ticket-id]` — every QR review observed for this ticket.
+  Increment on CLEAN, REWORK, and FINDINGS. NEVER reset, even on user
+  guidance. Drives the round number in the dispatch and the 5-round drift cap.
+
 ```
 SendMessage({
   recipient: "quality-reviewer-1",  // or quality-reviewer-2
-  content: "Review <ticket-id> on branch <branch-name>. Run `tk show <ticket-id>`
-  for context on what was being fixed. Diff the ticket's own changes only
-  (not wave N-1 changes already merged to the integration branch) with:
+  content: "Review <ticket-id> on branch <branch-name> (round <total_qr_rounds[ticket-id] + 1>). Run `tk show <ticket-id>`
+  for context on what was being fixed. Read prior-round notes (earlier QR
+  verdicts, OOS tickets already filed, implementer rework summaries) before
+  reviewing the diff. Diff the ticket's own changes only (not wave N-1
+  changes already merged to the integration branch) with:
   git diff fix/batch-<stamp>...<branch-name>
 
   Return one of three verdicts per your agent instructions: CLEAN, REWORK, or
   FINDINGS. Inline-fixable issues (Critical/High/Medium in files the ticket
   already touches) must go in REWORK -- do not create tickets for those.
+  Do not re-pull concerns previous rounds ticketed as out-of-scope. On
+  round ≥ 2, only flag findings that trace to a regression introduced by
+  the most recent implementer change or a critical bug prior fixes could
+  not address.
 
   For any ticket you DO create (out-of-scope findings and Lows), use
   `--parent <FINDINGS_PARENT>` so findings roll up under the batch epic."
@@ -600,6 +612,23 @@ escalate to the user rather than looping indefinitely:
 > 2. Skip this ticket and leave it open
 > 3. Reassign to a fresh implementer context
 > 4. Convert the remaining findings to new tickets and merge anyway
+
+**QR drift cap (`total_qr_rounds[ticket-id] >= 5`).** Independent of the
+3-strike escalation. When the total cap is hit, escalate with drift framing:
+
+> `<ticket-id>` has been through quality review 5 times. This is past the
+> hard cap. Possible causes:
+> 1. **Reviewer drift** — successive reviewers moved the goalposts.
+>    Recommended action: merge the current branch and let me file remaining
+>    concerns as new tickets.
+> 2. **Implementer can't address findings** — fixes regress or miss the
+>    point. Recommended action: reassign with explicit guidance.
+> 3. **Mark BLOCKED** and continue with other tickets.
+
+Run `tk show <ticket-id>` (or read the QR round notes) before deciding.
+Option 1 routes the ticket directly to merge; options 2 and 3 follow the
+standard handlers. Do NOT reset `total_qr_rounds[ticket-id]` on user
+guidance — the cap is durable across all rework loops for this ticket.
 
 ### Step 3.3: Wave boundary
 

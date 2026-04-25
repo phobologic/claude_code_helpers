@@ -120,9 +120,13 @@ merge_queue: List<ticket_id>     # ordered waiting list
 
 findings_parent: ticket_id = FINDINGS_PARENT
 
-rework_count: Map<ticket_id, int>     # reset to 0 on each fresh dispatch
+rework_count:    Map<ticket_id, int>  # reset to 0 on user-guidance rework
+total_qr_rounds: Map<ticket_id, int>  # NEVER reset; counts every QR review
+                                      # (CLEAN/REWORK/FINDINGS) for the ticket
+                                      # across the entire run
 
 RECYCLE_CAP = 3
+TOTAL_QR_ROUNDS_CAP = 5               # hard ceiling independent of rework_count
 ```
 
 ### Startup summary
@@ -415,11 +419,13 @@ When implementer slot S sends `DONE <ticket-id> fix/<ticket-id>`:
      ```
      SendMessage({
        to: "<idle-qr-slot>",
-       message: "Review <E.ticket_id> on branch fix/<E.ticket_id>.
+       message: "Review <E.ticket_id> on branch fix/<E.ticket_id> (round <total_qr_rounds[E.ticket_id] + 1>).
      Diff against integration branch: git diff fix/batch-<stamp>...fix/<E.ticket_id>
 
      Findings parent: <findings_parent>. Out-of-scope findings and Lows must use
      \`--parent <findings_parent>\` when creating tickets.
+
+     Run \`tk show <E.ticket_id>\` first and read prior-round notes — earlier QR verdicts, OOS tickets already filed, and implementer rework summaries. Do not re-pull concerns previous rounds ticketed as out-of-scope. On round ≥ 2, only flag findings that trace to a regression introduced by the most recent implementer change or a critical bug prior fixes could not address.
 
      Return one of:
        CLEAN — no blocking issues
@@ -447,6 +453,9 @@ When implementer slot S sends `DONE <ticket-id> fix/<ticket-id>`:
 When a quality reviewer sends `CLEAN <ticket-id>`:
 
 1. Verify `ticket_state[ticket-id].verification_phase == "quality"`.
+1a. Increment `total_qr_rounds[ticket-id]` (for accurate round numbering on
+    any subsequent dispatch — CLEAN normally ends the loop, but a later
+    merge conflict can re-route through QR).
 2. `ticket_state[ticket-id].state = MERGING`
 3. `ticket_state[ticket-id].verification_phase = null`
 4. Clear the QR slot: `qr_pool[<sending-qr-slot>].assignee = null`.
@@ -530,10 +539,30 @@ When a quality reviewer sends `REWORK <ticket-id>` followed by a numbered
 finding list:
 
 1. Verify `ticket_state[ticket-id].verification_phase == "quality"`.
-2. Increment `rework_count[ticket-id]`.
+2. Increment `rework_count[ticket-id]` and `total_qr_rounds[ticket-id]`.
 3. Recycle the quality reviewer (same procedure as CLEAN step 4). When
    ready, dispatch next from `quality_review_queue` if non-empty (same as
    CLEAN step 4).
+3a. **Total-rounds cap.** If `total_qr_rounds[ticket-id] >= TOTAL_QR_ROUNDS_CAP`,
+    escalate to the user with the drift framing (separate from the rework_count
+    escalation in step 4):
+
+   > `<ticket-id>` has been through quality review <total> times. This is past
+   > the hard cap of 5 rounds. Possible causes:
+   > 1. **Reviewer drift** — successive reviewers have moved the goalposts.
+   >    Recommended action: merge the current branch and let me file remaining
+   >    concerns as new tickets.
+   > 2. **Implementer can't address findings** — fixes keep regressing or
+   >    missing the point. Recommended action: reassign to a fresh implementer
+   >    with explicit guidance.
+   > 3. **Mark BLOCKED** and continue with other tickets.
+
+   Run `tk show <ticket-id>` (or read the QR round notes) before deciding.
+   Option 1 routes to CLEAN/MERGING immediately (skip steps 5–9); options 2
+   and 3 follow the same handlers as the rework_count escalation below. Do
+   NOT reset `total_qr_rounds[ticket-id]` on user guidance — the cap is
+   durable across all rework loops for this ticket.
+
 4. If `rework_count[ticket-id] >= 3`: escalate to the user. Do not
    dispatch rework until the user responds.
 
@@ -651,6 +680,7 @@ procedure dispatch_ready_tickets():
 
     ticket_state[T] = { state: DISPATCHED, verification_phase: null }
     rework_count[T] = 0
+    total_qr_rounds[T] = 0
     agent_pool[S].assignee = T
     if assignments_since_spawn >= RECYCLE_CAP:
       # Recycle S before sending (see Recycle protocol section)

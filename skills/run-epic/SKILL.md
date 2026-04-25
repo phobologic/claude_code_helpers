@@ -549,18 +549,34 @@ The implementer will send you a message with the ticket ID and branch name.
 
 ### When the AC verifier returns PASS:
 
-1. Send a message to the quality reviewer via SendMessage:
+Track per ticket two counters that you maintain across rework loops:
+- `rework_count[ticket-id]` — REWORK verdicts seen so far (resets on user
+  guidance, used by the 3-strike escalation below)
+- `total_qr_rounds[ticket-id]` — every QR review (CLEAN/REWORK/FINDINGS)
+  observed for this ticket. NEVER reset — drives the round number sent to
+  the QR and the hard 5-round cap.
+
+1. Send a message to the quality reviewer via SendMessage. Include the round
+   number so the reviewer can apply round-aware scope rules and read prior
+   round notes:
    ```
    SendMessage({
      recipient: "quality-reviewer",
-     content: "Review <ticket-id> on branch <branch-name>. Changes
-     have passed AC verification. Diff the ticket's own changes only
+     content: "Review <ticket-id> on branch <branch-name> (round <total_qr_rounds[ticket-id] + 1>).
+     Changes have passed AC verification. Diff the ticket's own changes only
      (not prior wave changes already merged to the integration branch)
      with: git diff epic/<epic-id>...<branch-name>
 
      Findings parent: <FINDINGS_PARENT>. Any ticket you create (out-of-scope
      findings and Lows) must be created with `--parent <FINDINGS_PARENT>`
-     so findings roll up under the right epic."
+     so findings roll up under the right epic.
+
+     Run `tk show <ticket-id>` first and read prior-round notes — earlier QR
+     verdicts, OOS tickets already filed, and implementer rework summaries.
+     Do not re-pull concerns previous rounds ticketed as out-of-scope. On
+     round ≥ 2, only flag findings that trace to a regression introduced by
+     the most recent implementer change or a critical bug prior fixes could
+     not address."
    })
    ```
 
@@ -685,8 +701,13 @@ to the implementer with the OUT_OF_SCOPE escape hatch:
    - When the implementer signals DONE again, restart the full validation
      cycle from AC verification.
 
-3. Count each REWORK cycle on the same ticket. After 3 REWORK verdicts,
-   escalate to the user (see "Ticket stuck in rework loop" in Edge Cases).
+3. Increment both `rework_count[ticket-id]` and `total_qr_rounds[ticket-id]`
+   on every REWORK verdict (also increment `total_qr_rounds` on CLEAN and
+   FINDINGS for accurate round numbering). After 3 REWORK verdicts (the
+   `rework_count` 3-strike), escalate per "Ticket stuck in rework loop" in
+   Edge Cases. Independently, if `total_qr_rounds[ticket-id] >= 5`, escalate
+   with the drift framing — see "QR drift cap" in Edge Cases. The
+   total-rounds cap is durable: do NOT reset it on user guidance.
 
 ### When the quality reviewer returns FINDINGS:
 
@@ -888,6 +909,25 @@ Escalate to the user:
 > 1. Review the AC and provide guidance
 > 2. Reassign to a different implementer (fresh context)
 > 3. Skip this ticket for now
+
+**QR drift cap (`total_qr_rounds[ticket-id] >= 5`).** Independent of the
+3-strike `rework_count` escalation. When the total cap is hit, escalate with
+drift framing:
+
+> `<ticket-id>` has been through quality review 5 times. This is past the
+> hard cap. Possible causes:
+> 1. **Reviewer drift** — successive reviewers moved the goalposts.
+>    Recommended action: merge the current branch and let me file remaining
+>    concerns as new tickets.
+> 2. **Implementer can't address findings** — fixes regress or miss the
+>    point. Recommended action: reassign with explicit guidance.
+> 3. **Mark BLOCKED** and continue with other tickets.
+
+Run `tk show <ticket-id>` (or read the QR round notes) before deciding.
+Option 1 routes the ticket directly to MERGING (skip remaining QR loops);
+options 2 and 3 follow the standard handlers. Do NOT reset
+`total_qr_rounds[ticket-id]` on user guidance — the cap is durable across
+all rework loops for this ticket.
 
 **Merge conflicts when merging to integration branch.** If merging a completed
 ticket branch into `epic/<epic-id>` produces conflicts, route them back to the
