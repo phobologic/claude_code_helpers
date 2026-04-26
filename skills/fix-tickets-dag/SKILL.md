@@ -108,7 +108,6 @@ ticket_state: Map<ticket_id, TicketState>
 agent_pool: Map<slot_name, AgentSlot>
   # slot_name: "dag-impl-1" .. "dag-impl-<IMPLEMENTERS>"
   # assignee: ticket_id | null
-  # assignments_since_spawn: int
   # worktree: "<REPO_ROOT>/.worktrees/fix-dag-<stamp>-impl-<N>"
 
 qr_pool: Map<slot_name, QRSlot>
@@ -127,7 +126,6 @@ total_qr_rounds: Map<ticket_id, int>  # NEVER reset; counts every QR review
                                       # (CLEAN/REWORK/FINDINGS) for the ticket
                                       # across the entire run
 
-RECYCLE_CAP = 3
 TOTAL_QR_ROUNDS_CAP = 5               # hard ceiling independent of rework_count
 ```
 
@@ -386,8 +384,8 @@ Run \`tk show <ticket-id>\` for full context. Signal DONE when committed."
 })
 ```
 
-Set `agent_pool["dag-impl-<N>"].assignee = <ticket-id>`,
-`assignments_since_spawn += 1`, and `ticket_state[<ticket-id>].state = DISPATCHED`.
+Set `agent_pool["dag-impl-<N>"].assignee = <ticket-id>` and
+`ticket_state[<ticket-id>].state = DISPATCHED`.
 
 If fewer than 4 ready tickets exist, the remaining implementer slots stay
 idle (assignee = null). They will receive work as tickets unblock during
@@ -521,11 +519,13 @@ When a quality reviewer sends `CLEAN <ticket-id>`:
       slot S's worktree (`agent_pool[S].worktree`). If the reset
       verification fails (dirty status), mark slot S unavailable and
       report to the user — do not dispatch.
-   f. Free the slot: `agent_pool[S].assignee = null`.
-   g. If `merge_queue` is non-empty: pop the head entry `next-id`, set
+   f. Recycle slot S (see [Recycle protocol](#recycle-protocol-reference))
+      so the next ticket dispatched to this slot starts with a fresh context.
+   g. Free the slot: `agent_pool[S].assignee = null`.
+   h. If `merge_queue` is non-empty: pop the head entry `next-id`, set
       `merge_lock = next-id`, and run step 5 starting from the
       dirty-tree pre-flight for `next-id`.
-   h. Call `dispatch_ready_tickets()`.
+   i. Call `dispatch_ready_tickets()`.
 
    **On conflict (non-zero exit or conflict markers):**
    a. Run `git -C $REPO_ROOT merge --abort`.
@@ -534,9 +534,7 @@ When a quality reviewer sends `CLEAN <ticket-id>`:
       `merge_lock = next-id`, and run step 5 for `next-id`.
    d. Set `ticket_state[ticket-id].state = REWORK`.
    e. Find slot S where `agent_pool[S].assignee == ticket-id`.
-   f. If `agent_pool[S].assignments_since_spawn >= RECYCLE_CAP`: recycle
-      slot S before sending (see [Recycle protocol](#recycle-protocol-reference)).
-   g. Send the merge-conflict message to slot S:
+   f. Send the merge-conflict message to slot S:
       ```
       SendMessage({
         to: "<slot-S>",
@@ -583,7 +581,7 @@ finding list:
    > 3. **Mark BLOCKED** and continue with other tickets.
 
    Run `tk show <ticket-id>` (or read the QR round notes) before deciding.
-   Option 1 routes to CLEAN/MERGING immediately (skip steps 5–9); options 2
+   Option 1 routes to CLEAN/MERGING immediately (skip steps 5–8); options 2
    and 3 follow the same handlers as the rework_count escalation below. Do
    NOT reset `total_qr_rounds[ticket-id]` on user guidance — the cap is
    durable across all rework loops for this ticket.
@@ -598,9 +596,10 @@ finding list:
 
    - **Option 1 (guidance):** Include the user's text in the rework
      message at step 8. Reset `rework_count[ticket-id] = 0` and continue
-     to steps 5–9.
-   - **Option 2 (reassign):** Reset `rework_count[ticket-id] = 0`. Free
-     slot S (`agent_pool[S].assignee = null`). Select a different idle
+     to steps 5–8.
+   - **Option 2 (reassign):** Reset `rework_count[ticket-id] = 0`. Recycle
+     slot S (see [Recycle protocol](#recycle-protocol-reference)) and free
+     it (`agent_pool[S].assignee = null`). Select a different idle
      slot S'; if none is idle, wait for one to free up. Re-dispatch the
      ticket to S' as a standard rework assignment.
    - **Option 3 (BLOCKED):**
@@ -608,20 +607,19 @@ finding list:
      - Run the [Worktree reset procedure](#worktree-reset-procedure) on
        slot S's worktree — **do not** delete the `fix/<id>` branch; leave
        it for post-run inspection.
+     - Recycle slot S (see [Recycle protocol](#recycle-protocol-reference)).
      - `agent_pool[S].assignee = null`; slot S is now idle.
      - Identify downstream tickets (any with a direct or transitive
        dependency on `<ticket-id>`) and report them as stalled to the
        user.
      - Call `dispatch_ready_tickets()`.
      - Output dashboard with `<ticket-id>` in BLOCKED state.
-       **Skip steps 5–9.**
+       **Skip steps 5–8.**
 
 5. `ticket_state[ticket-id].state = REWORK`
 6. `ticket_state[ticket-id].verification_phase = null`
 7. Find the implementer slot S where `agent_pool[S].assignee == ticket-id`.
-8. If `agent_pool[S].assignments_since_spawn >= RECYCLE_CAP`: recycle
-   slot S before sending (see [Recycle protocol](#recycle-protocol-reference)).
-9. Forward the numbered findings verbatim:
+8. Forward the numbered findings verbatim:
    ```
    SendMessage({
      to: "<slot-S>",
@@ -637,8 +635,8 @@ finding list:
    back on."
    })
    ```
-10. Output dashboard.
-11. **Livelock check.** If every slot in `agent_pool` has `assignee != null`
+9. Output dashboard.
+10. **Livelock check.** If every slot in `agent_pool` has `assignee != null`
     and every assigned ticket has `state == REWORK`: log a livelock warning
     (see [Pool livelock](#pool-livelock) in Edge Cases) and continue waiting.
 
@@ -707,11 +705,6 @@ procedure dispatch_ready_tickets():
     rework_count[T] = 0
     total_qr_rounds[T] = 0
     agent_pool[S].assignee = T
-    if assignments_since_spawn >= RECYCLE_CAP:
-      # Recycle S before sending (see Recycle protocol section)
-      # Recycle protocol step 6 resets assignments_since_spawn = 0
-    agent_pool[S].assignments_since_spawn += 1
-    # assignments_since_spawn = 1 after first dispatch to a recycled agent
     SendMessage({
       to: "<S>",
       message: "Ticket <T>: <T title>
@@ -823,7 +816,7 @@ When all input tickets have reached CLOSED or BLOCKED state:
 Livelock condition: all implementer slots have `assignee != null` and
 every assigned ticket is in REWORK state.
 
-Detection: after any REWORK dispatch (REWORK handler step 11), if every
+Detection: after any REWORK dispatch (REWORK handler step 10), if every
 `agent_pool` slot is occupied and every assigned ticket is in REWORK state,
 livelock is active.
 
@@ -879,8 +872,12 @@ status output, and let the user triage.
 
 ## Recycle protocol (reference)
 
-Before dispatching any work message to an implementer, check
-`assignments_since_spawn`. If `>= RECYCLE_CAP (3)`, recycle first:
+Implementers recycle once a ticket they were assigned to reaches CLOSED,
+BLOCKED, or is reassigned to a different slot — performed before the slot
+is reused. Mid-ticket rework keeps the same implementer (preserving
+in-flight context). Quality reviewers recycle after every verdict.
+
+Same procedure in all cases:
 
 1. `SendMessage({ to: "<slot>", message: { type: "shutdown_request" } })`
 2. Wait up to 30 s for `SHUTDOWN_ACK <slot>`.
@@ -894,11 +891,6 @@ Before dispatching any work message to an implementer, check
      `$REPO_ROOT/.worktrees/fix-dag-$STAMP-qr-<K>` (matching the paths
      created in Step 1.2).
 5. Wait for `WORKTREE OK`. Wrong path or `WARNING` aborts the run.
-6. Reset `assignments_since_spawn = 0`.
-
-Quality reviewers recycle after **every** verdict (CLEAN, REWORK, or
-FINDINGS). Same procedure: shutdown_request → SHUTDOWN_ACK → re-spawn
-same Agent call → WORKTREE OK.
 
 ---
 

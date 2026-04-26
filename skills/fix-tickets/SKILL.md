@@ -282,9 +282,6 @@ implementer will report back `WORKTREE OK` or `WARNING: in main repo`.
 Track implementer state throughout the run:
 - **idle**: waiting for work (all start idle)
 - **busy**: working on a ticket (map: implementer-name → ticket-id)
-- **`assignments_since_spawn[name]`**: count of work messages sent to each
-  implementer since (re)spawn. Increment on every dispatch (initial *or*
-  rework). Reset to 0 on respawn. Used by implementer recycling — see below.
 
 ## Status updates
 
@@ -369,13 +366,13 @@ turn state:
 ## Implementer recycling
 
 Long waves can push individual implementers toward context compaction even
-when no wave-boundary respawn is due. Recycle each implementer after a fixed
-number of work assignments to keep contexts fresh.
+when no wave-boundary respawn is due. Recycle each implementer once the
+ticket they just completed reaches CLOSED (merged) or BLOCKED, before they
+pick up a new ticket. Mid-ticket rework keeps the same implementer
+(preserving in-flight context).
 
-- **`RECYCLE_CAP`** — default `3`. Lower to `2` if your tickets are large.
-- **Trigger.** Before sending any work message to an implementer, if
-  `assignments_since_spawn[name] >= RECYCLE_CAP`, recycle that implementer
-  *before* dispatching the new assignment.
+**Trigger.** Once a ticket reaches CLOSED or BLOCKED, recycle the implementer
+that owned it before assigning the next ticket to that slot.
 
 **Recycle procedure (per implementer — clean teardown and rebuild):**
 
@@ -398,9 +395,8 @@ number of work assignments to keep contexts fresh.
    `isolation: "worktree"`.
 5. Wait for the new implementer's `WORKTREE OK` report. Apply the same abort
    logic as Phase 2 — wrong path or `WARNING` aborts the run.
-6. Reset `assignments_since_spawn[name] = 0`.
-7. Update the dashboard with event header `recycled <name>`.
-8. Now dispatch the queued work message to the fresh implementer.
+6. Update the dashboard with event header `recycled <name>`.
+7. Now dispatch the next work message to the fresh implementer.
 
 The other implementers, the integration worktree, the quality reviewers, and
 any in-flight reviews are untouched — this is a strictly per-implementer

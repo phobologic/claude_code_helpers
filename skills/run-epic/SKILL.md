@@ -439,21 +439,12 @@ turn state:
 
 Long-running tickets — especially those that go through several findings or
 AC-fail rework cycles — can push an implementer toward context compaction
-mid-ticket. Recycle each implementer after a fixed number of work
-assignments to keep contexts fresh.
+across tickets. Recycle each implementer once the ticket they just completed
+reaches CLOSED (merged) or BLOCKED, before they pick up a new ticket.
+Mid-ticket rework keeps the same implementer (preserving in-flight context).
 
-Track per implementer:
-
-- **`assignments_since_spawn[name]`** — increment by 1 every time you send a
-  work message to that implementer (initial dispatch *or* AC-fail rework
-  *or* findings rework). Reset to 0 on (re)spawn.
-- **`RECYCLE_CAP`** — default `3`. Lower to `2` if your tickets are large.
-
-**Trigger.** Before sending any work message to an implementer, if
-`assignments_since_spawn[name] >= RECYCLE_CAP`, recycle that implementer
-*before* dispatching the new assignment. (This typically fires mid-ticket
-during rework cycles, since each implementer does at most one fresh ticket
-per wave.)
+**Trigger.** Once a ticket reaches CLOSED or BLOCKED, recycle the implementer
+that owned it before assigning the next ticket to that slot.
 
 **Recycle procedure (per implementer — clean teardown and rebuild):**
 
@@ -476,12 +467,8 @@ per wave.)
    `isolation: "worktree"`.
 5. Wait for the new implementer's `WORKTREE OK` report. Apply the same
    abort logic as Phase 2 — wrong path or `WARNING` aborts the run.
-6. Reset `assignments_since_spawn[name] = 0`.
-7. Update the dashboard with event header `recycled <name>`.
-8. Now dispatch the queued work message to the fresh implementer. If the
-   recycle happened mid-ticket, that message should be the rework
-   instruction — the new implementer's prompt resumes the existing
-   `ticket/<id>` branch automatically.
+6. Update the dashboard with event header `recycled <name>`.
+7. Now dispatch the next work message to the fresh implementer.
 
 The other implementers, the integration branch, the AC verifier, the
 quality reviewer, and any in-flight reviews are untouched — this is a
