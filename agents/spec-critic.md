@@ -42,6 +42,17 @@ For each ticket's ACs, ask:
   "properly", and "correctly" are red flags without concrete definitions.
 - **Is the count right?** Fewer than 2 ACs per ticket suggests the ticket is
   underspecified. More than 5-6 suggests it should be split.
+- **Is there a regression AC where one is needed?** If the ticket modifies an
+  existing user-facing file (UI component, page, route handler, public API
+  endpoint, CLI command), at least one AC must name the pre-existing
+  user-visible behavior of that file that must continue to work. Without one,
+  the AC verifier has nothing to anchor against for the obvious behavior an
+  implementer can break in passing, and the quality reviewer ends up
+  improvising protections the spec failed to specify. Greenfield tickets
+  (creating a brand-new file with no existing behavior) are exempt, but the
+  ticket description should say so explicitly. **Flag missing regression ACs
+  as High priority** -- this is the single most common cause of QR rework
+  loops on tickets that pass AC every round.
 
 ### 2. Gaps Between Tickets
 

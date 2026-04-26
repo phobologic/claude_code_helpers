@@ -195,6 +195,36 @@ Write each AC using EARS (Easy Approach to Requirements Syntax) patterns:
 - If you cannot write even one concrete, testable AC for a task, that task is not understood
   well enough to ticket -- pause and ask
 
+**Regression ACs for tickets that modify existing user-facing files:**
+
+When a task modifies an existing user-facing file (a UI component, page, route
+handler, public API endpoint, CLI command, etc.), include at least one
+**regression AC** that names the existing user-visible behavior of that file
+which must continue to work. This anchors the AC verifier against the obvious
+behavior an implementer might break in passing, and stops the quality reviewer
+from drifting into AC-author territory looking for protections that nobody
+wrote down.
+
+A regression AC follows the same EARS patterns; it just protects pre-existing
+behavior rather than specifying new behavior. Examples:
+
+- "When a post body containing markdown is rendered through the new segment
+  path, the existing markdown formatting shall continue to render as before."
+- "When the user submits the existing form fields (title, body, tags), the
+  composer shall continue to POST to `/posts` and clear on success."
+- "While the dropdown is open, the existing textarea keyboard handling
+  (Enter to submit, Shift+Enter for newline) shall remain unchanged."
+
+**Test of a real regression AC:** name a specific behavior or interaction that
+already works in the file today, and assert it still works after the change.
+"The component shall remain accessible" is not a regression AC -- it has no
+named existing behavior. "The existing arrow-key navigation in the post list
+shall continue to move focus between posts" is.
+
+If the task is greenfield (creates a new file, no existing user-visible
+behavior to protect), regression ACs do not apply. Note this explicitly in the
+task description so the spec-critic doesn't flag it.
+
 ### Structural guidelines
 
 - **3-5 phases** is typical. One phase is fine for small ideas. More than 6 is a smell.
