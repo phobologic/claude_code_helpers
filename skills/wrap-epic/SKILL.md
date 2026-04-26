@@ -106,13 +106,20 @@ errors — do not attempt to recover silently.
    tk close <epic-id>
    ```
    If the epic has open non-finding children, skip close and say so.
-5. **Report remaining work.** If the epic has a parent:
+5. **Report remaining work.** Show the epic tree so the user sees what
+   sub-epics remain and how many tickets are open inside each:
    ```
-   tk epic-tree <parent-id>
+   tk epic-tree <parent-id>     # if the wrapped epic has a parent
+   tk epic-tree                 # otherwise — all root epics
    ```
-   Print the full output verbatim in a fenced code block.
-   Then run `tk ready` and surface the top 1–2 items in the parent epic (or
-   repo-wide if no parent) as suggested next steps.
+   Print the full output verbatim in a fenced code block. The tree already
+   shows open/closed ticket counts per epic; do not also dump `tk ready`.
+
+   If the parent epic itself has open non-epic children (tickets parented
+   directly to it, not nested in a sub-epic), list them separately with
+   `tk query '.parent == "<parent-id>" and .type != "epic" and .status != "closed"'`
+   and show ID + priority + title for each. These are work in the parent
+   that isn't grouped into a sub-epic.
 
 ## Phase 4 — Summary
 
@@ -124,9 +131,7 @@ Wrapped <epic-id>.
   ✓ Deleted branch <branch>
   ✓ Pruned <K> worktrees
   ✓ Closed epic (with ship note)
-  Remaining in <parent-id>: <count> open sub-epics
-
-Next up: <ticket-id> — <title>
+  Remaining in <parent-id>: <S> open sub-epics, <T> open direct tickets
 
 Remember to `git push` when ready.
 ```
