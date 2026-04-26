@@ -2,8 +2,10 @@
 name: fix-tickets-dag
 description: >
   Implement a set of tk tickets in parallel using a DAG-driven agent team with
-  continuous dispatching. Spawns a fixed pool of 4 implementers and 2 quality
-  reviewers at startup; dispatches tickets as they unblock without wave boundaries.
+  continuous dispatching. Spawns a pool of up to 4 implementers and up to 2
+  quality reviewers at startup (sized to the input ticket count, so a
+  single-ticket run gets 1 + 1); dispatches tickets as they unblock without
+  wave boundaries.
   Quality review is the sole verification gate — no AC verifier. Accepts the same
   ticket-ID and epic-ID argument forms as /fix-tickets. Use when the user says
   "fix tickets dag", "batch fix dag", "run fix tickets with dag", or similar.
@@ -104,13 +106,13 @@ ticket_state: Map<ticket_id, TicketState>
   # verification_phase: "quality" | null
 
 agent_pool: Map<slot_name, AgentSlot>
-  # slot_name: "dag-impl-1" .. "dag-impl-4"
+  # slot_name: "dag-impl-1" .. "dag-impl-<IMPLEMENTERS>"
   # assignee: ticket_id | null
   # assignments_since_spawn: int
   # worktree: "<REPO_ROOT>/.worktrees/fix-dag-<stamp>-impl-<N>"
 
 qr_pool: Map<slot_name, QRSlot>
-  # slot_name: "dag-qr-1" | "dag-qr-2"
+  # slot_name: "dag-qr-1" .. "dag-qr-<QRs>"
   # assignee: ticket_id | null   # null = idle
 
 quality_review_queue: Queue<{ticket_id, branch}>   # FIFO
@@ -129,6 +131,26 @@ RECYCLE_CAP = 3
 TOTAL_QR_ROUNDS_CAP = 5               # hard ceiling independent of rework_count
 ```
 
+### Pool sizing
+
+The implementer and quality-reviewer pool sizes are computed from the count of
+input tickets (after filtering out closed and in-progress, but **before**
+checking which are unblocked), captured once at startup. Mid-run pool
+expansion is not supported, so size on total open input tickets — not just
+initial-ready — to ensure capacity for tickets that unblock later in the run.
+
+```
+total_open   = count of input tickets after filter (closed/in-progress removed)
+IMPLEMENTERS = min(4, total_open)
+QRs          = min(2, ceil(IMPLEMENTERS / 2))   # 1 impl → 1 QR; 2 impl → 1 QR; 3-4 impl → 2 QR
+```
+
+Examples: 1-ticket run → 1 impl, 1 QR (3 total: lead + 2 teammates). 5+ ticket
+run → 4 impl, 2 QR (the prior fixed pool). Throughout the rest of this skill,
+`<IMPLEMENTERS>` and `<QRs>` refer to the values computed here; references to
+"all 4 implementers" and "both quality reviewers" should be read as
+"all `<IMPLEMENTERS>` implementers" and "all `<QRs>` quality reviewers."
+
 ### Startup summary
 
 Present a summary to the user:
@@ -144,7 +166,8 @@ Blocked tickets:
   [<id>] <title> (blocked by: <dep-ids>)
   ...
 
-Pool: 4 implementers · 2 quality reviewers (no AC verifier)
+Pool: <IMPLEMENTERS> implementer(s) · <QRs> quality reviewer(s) (no AC verifier)
+       (sized from <total_open> open input tickets)
 Findings parent: <FINDINGS_PARENT>
 ```
 
@@ -198,28 +221,28 @@ from Phase 1.1 is reused here. Agent slot names (`dag-impl-1` etc.) stay
 short because they are scoped by `team_name` — only filesystem paths need
 the stamp.
 
+Create exactly `<IMPLEMENTERS>` implementer worktrees and `<QRs>`
+quality-reviewer worktrees. For example, with `IMPLEMENTERS=1` and `QRs=1`
+(single-ticket run):
+
 ```bash
-# 4 implementer worktrees
+# Implementer worktrees: one per N in 1..<IMPLEMENTERS>
 worktree-init fix-dag-$STAMP-impl-1 $REPO_ROOT
-worktree-init fix-dag-$STAMP-impl-2 $REPO_ROOT
-worktree-init fix-dag-$STAMP-impl-3 $REPO_ROOT
-worktree-init fix-dag-$STAMP-impl-4 $REPO_ROOT
+# ... up to fix-dag-$STAMP-impl-<IMPLEMENTERS>
 
-# 2 quality reviewer worktrees
+# Quality reviewer worktrees: one per K in 1..<QRs>
 worktree-init fix-dag-$STAMP-qr-1 $REPO_ROOT
-worktree-init fix-dag-$STAMP-qr-2 $REPO_ROOT
+# ... up to fix-dag-$STAMP-qr-<QRs>
 ```
 
-Verify all were created: `ls .worktrees/` must show all 6 `fix-dag-$STAMP-*`
-directories.
+Verify all were created: `ls .worktrees/` must show all
+`<IMPLEMENTERS> + <QRs>` `fix-dag-$STAMP-*` directories.
 
-Register worktree paths in `agent_pool`:
+Register worktree paths in `agent_pool` for each implementer slot N in
+1..`<IMPLEMENTERS>`:
 
 ```
-agent_pool["dag-impl-1"].worktree = "$REPO_ROOT/.worktrees/fix-dag-$STAMP-impl-1"
-agent_pool["dag-impl-2"].worktree = "$REPO_ROOT/.worktrees/fix-dag-$STAMP-impl-2"
-agent_pool["dag-impl-3"].worktree = "$REPO_ROOT/.worktrees/fix-dag-$STAMP-impl-3"
-agent_pool["dag-impl-4"].worktree = "$REPO_ROOT/.worktrees/fix-dag-$STAMP-impl-4"
+agent_pool["dag-impl-<N>"].worktree = "$REPO_ROOT/.worktrees/fix-dag-$STAMP-impl-<N>"
 ```
 
 ### Step 1.3: Create the team
@@ -233,7 +256,7 @@ TeamCreate({
 
 ### Step 1.4: Create initial tasks
 
-Create a task for each ready ticket (up to 4):
+Create a task for each ready ticket (up to `<IMPLEMENTERS>`):
 
 ```
 TaskCreate({
@@ -247,13 +270,13 @@ TaskCreate({
 ### Step 1.5: Spawn teammates
 
 Spawn all agents using the `Agent` tool with `team_name: "fix-dag-<stamp>"`.
-All 4 implementers and both quality reviewers are spawned at startup
-regardless of the number of ready tickets — excess implementers will be
-idle until work arrives.
+All `<IMPLEMENTERS>` implementers and `<QRs>` quality reviewers are spawned at
+startup regardless of the number of ready tickets — any extra implementers
+(when ready tickets < `<IMPLEMENTERS>`) stay idle until tickets unblock.
 
-**Implementers** (spawn all 4 unconditionally):
+**Implementers** (spawn all `<IMPLEMENTERS>` unconditionally):
 
-For each slot N in 1..4:
+For each slot N in 1..`<IMPLEMENTERS>`:
 
 ```
 Agent({
@@ -300,9 +323,9 @@ Then wait for your next assignment. When you receive a message containing
 })
 ```
 
-**Quality reviewers** (2 instances):
+**Quality reviewers** (`<QRs>` instances):
 
-For each slot K in 1..2:
+For each slot K in 1..`<QRs>`:
 
 ```
 Agent({
@@ -335,7 +358,8 @@ with SHUTDOWN_ACK dag-qr-<K> then stop."
 
 ## Phase 2 — Verify worktree isolation
 
-After spawning all 6 agents, wait for `WORKTREE OK` from every teammate.
+After spawning all `<IMPLEMENTERS> + <QRs>` agents, wait for `WORKTREE OK` from
+every teammate.
 Each will report their `pwd` output and either `WORKTREE OK` or `WARNING:
 not in worktree`.
 
@@ -407,11 +431,12 @@ When implementer slot S sends `DONE <ticket-id> fix/<ticket-id>`:
    quality_review_queue.push({ ticket_id, branch: "fix/<ticket-id>" })
    ```
 3. **If a quality reviewer is idle** (count of tickets with
-   `verification_phase == "quality"` is less than 2), dispatch the head
-   of `quality_review_queue`:
+   `verification_phase == "quality"` is less than `<QRs>`), dispatch the
+   head of `quality_review_queue`:
    - Pop the head entry E.
    - Find the idle QR slot: `qr_pool` entry where `assignee == null`
-     (dag-qr-1 or dag-qr-2 — whichever is not currently processing a job).
+     (dag-qr-1 .. dag-qr-`<QRs>` — whichever is not currently processing a
+     job).
    - `ticket_state[E.ticket_id].state = VERIFYING`
    - `ticket_state[E.ticket_id].verification_phase = "quality"`
    - `qr_pool[<idle-qr-slot>].assignee = E.ticket_id`
@@ -435,7 +460,7 @@ When implementer slot S sends `DONE <ticket-id> fix/<ticket-id>`:
      ```
    If two QR slots are idle and `quality_review_queue` has two or more
    entries, repeat this step for the second entry using the second idle slot.
-4. **If both quality reviewers are busy** (`qr_pool` has no idle slot),
+4. **If all `<QRs>` quality reviewers are busy** (`qr_pool` has no idle slot),
    leave the entry in `quality_review_queue`. The recycle handler in
    CLEAN/REWORK/FINDINGS will pop it naturally when a QR becomes available.
 5. Output dashboard.
@@ -764,14 +789,14 @@ When all input tickets have reached CLOSED or BLOCKED state:
      <finding-ticket-ids>
    ```
 
-3. Broadcast `shutdown_request` to all teammates:
+3. Broadcast `shutdown_request` to every spawned slot. Iterate from the
+   `agent_pool` keys for implementers and each `dag-qr-K` for K in
+   1..`<QRs>`. Example with `IMPLEMENTERS=4`, `QRs=2`:
    ```
    SendMessage({ to: "dag-impl-1", message: { "type": "shutdown_request" } })
-   SendMessage({ to: "dag-impl-2", message: { "type": "shutdown_request" } })
-   SendMessage({ to: "dag-impl-3", message: { "type": "shutdown_request" } })
-   SendMessage({ to: "dag-impl-4", message: { "type": "shutdown_request" } })
+   # ...one per implementer slot up to dag-impl-<IMPLEMENTERS>...
    SendMessage({ to: "dag-qr-1",   message: { "type": "shutdown_request" } })
-   SendMessage({ to: "dag-qr-2",   message: { "type": "shutdown_request" } })
+   # ...one per QR slot up to dag-qr-<QRs>...
    ```
 
 4. Wait up to 30 seconds for `SHUTDOWN_ACK` from each teammate. Proceed
@@ -779,11 +804,12 @@ When all input tickets have reached CLOSED or BLOCKED state:
 
 5. Remove all worktrees:
    ```bash
-   for N in 1 2 3 4; do
+   for N in $(seq 1 <IMPLEMENTERS>); do
      git worktree remove .worktrees/fix-dag-$STAMP-impl-$N --force 2>/dev/null || true
    done
-   git worktree remove .worktrees/fix-dag-$STAMP-qr-1 --force 2>/dev/null || true
-   git worktree remove .worktrees/fix-dag-$STAMP-qr-2 --force 2>/dev/null || true
+   for K in $(seq 1 <QRs>); do
+     git worktree remove .worktrees/fix-dag-$STAMP-qr-$K --force 2>/dev/null || true
+   done
    ```
 
 6. Call `TeamDelete()`.
@@ -862,9 +888,9 @@ Before dispatching any work message to an implementer, check
 4. Re-spawn with the **exact same Agent call** used at startup: same
    `name`, same `subagent_type`, no `isolation: "worktree"` (worktree
    already exists).
-   - **Implementer slots** (`dag-impl-1` .. `dag-impl-4`): read path from
-     `agent_pool[slot].worktree`.
-   - **QR slots** (`dag-qr-1`, `dag-qr-2`): derive from the stamp —
+   - **Implementer slots** (`dag-impl-1` .. `dag-impl-<IMPLEMENTERS>`):
+     read path from `agent_pool[slot].worktree`.
+   - **QR slots** (`dag-qr-1` .. `dag-qr-<QRs>`): derive from the stamp —
      `$REPO_ROOT/.worktrees/fix-dag-$STAMP-qr-<K>` (matching the paths
      created in Step 1.2).
 5. Wait for `WORKTREE OK`. Wrong path or `WARNING` aborts the run.
