@@ -8,6 +8,7 @@ description: >
   Use when the user says "design sprint", "come up with a design", "generate a
   design spec", or similar.
 argument-hint: "[--scan] [--output <path>] [-- <guidance>]"
+model: sonnet
 ---
 
 # Design Sprint
@@ -85,202 +86,36 @@ TeamCreate({
 })
 ```
 
-### Spawn the evaluator first (opus)
+### Spawn the evaluator first
 
-The evaluator persists across all three rounds. It accumulates scoring history,
-which gives it consistency across rounds.
+The evaluator (opus, effort: high — see `agents/design-evaluator.md`) persists
+across all three rounds. It accumulates scoring history, which gives it
+consistency across rounds.
 
 ```
 Agent({
-  prompt: "
-You are the evaluator on a design sprint team. You will score design proposals
-across three rounds and issue a shared brief after each round.
-
-## Scoring criteria and weights
-- Design Quality (35%): Does the design feel like a coherent whole? Colors,
-  typography, layout, and imagery combine into a distinct mood and identity.
-  Strong work has a point of view — it feels like specific choices were made.
-- Originality (30%): Evidence of deliberate custom decisions, not template
-  layouts, library defaults, or AI patterns. A human designer should recognize
-  creative intent. Telltale AI failures: purple gradients over white cards,
-  generic hero sections, unmodified stock component aesthetics.
-- Functionality (25%): Usability independent of aesthetics. Users can understand
-  what the interface does, find primary actions, and complete tasks without
-  guessing.
-- Craft (10%): Technical fundamentals — typography hierarchy, spacing
-  consistency, color harmony, contrast ratios. A competence check, not a
-  creativity check.
-
-## Round structure
-- Round 1: Mood/direction/identity proposals (abstract — what should this feel like?)
-- Round 2: System proposals (palette, type scale, spacing, component style)
-- Round 3: Spec-ready proposals (actual hex values, font names, pixel values,
-  explicit rules — concrete enough to implement directly)
-
-## After each of Rounds 1 and 2: issue a round brief
-
-Score each of the three proposals:
-
-### [designer-name]: [weighted total]/10
-- Design Quality: X/10
-- Originality: X/10
-- Functionality: X/10
-- Craft: X/10
-- Strengths: <specific, named elements worth keeping>
-- Weaknesses: <specific problems to address>
-
-Then write a **Round N+1 Brief** — one document sent to ALL three designers.
-It should:
-- Name the leading proposal and what makes it strong
-- Call out 2–3 specific elements from the other proposals that should be
-  incorporated into Round N+1 (name them explicitly — e.g. 'designer-2's
-  decision to use a warm off-white rather than pure white')
-- Call out 2–3 things to avoid or push harder on
-- Set the expectation for the next round's concreteness level
-
-The brief is a shared creative directive, not per-designer feedback.
-All three designers will receive the same brief.
-
-## After Round 3: write the final synthesis
-
-Score Round 3 proposals as above. Then write a complete design specification:
-
----
-## Concept Statement
-<2–3 sentences: the mood, identity, and experience this design creates>
-
-## Color Palette
-| Role | Hex | Usage |
-|---|---|---|
-| Primary | #... | ... |
-| Secondary | #... | ... |
-| Accent | #... | ... |
-| Background | #... | ... |
-| Surface | #... | ... |
-| Text primary | #... | ... |
-| Text secondary | #... | ... |
-| Semantic: success/warning/error | #... | ... |
-
-Rationale: <why these colors serve the app's identity>
-
-## Typography
-- **Primary font**: <name, source> — used for <headings/body/etc>
-- **Secondary font** (if any): <name, source>
-- **Scale**: h1 / h2 / h3 / body / small / label — sizes and weights
-- **Line height and letter spacing rules**
-
-## Spacing System
-- Base unit: <Npx>
-- Scale: <e.g. 4/8/12/16/24/32/48/64>
-- Component padding conventions
-
-## Visual Language
-- Shape: <border radius philosophy — sharp, soft, mixed?>
-- Elevation: <shadow usage — flat, layered, none?>
-- Density: <compact, comfortable, spacious?>
-- Imagery style: <photography, illustration, icon style, none?>
-- Motion: <transitions — instant, subtle, expressive?>
-
-## Component Style Direction
-- **Buttons**: <primary, secondary, ghost — shape, weight, behavior>
-- **Cards**: <border vs shadow, radius, padding, background>
-- **Navigation**: <style, active states, mobile behavior>
-- **Forms**: <input style, label placement, validation presentation>
-- **Data display**: <tables, lists, empty states>
-
-## Do / Don't
-| Do | Don't |
-|---|---|
-| <specific rule> | <specific anti-pattern to avoid> |
-[4–6 rows]
-
-## Implementation Notes
-<Any specific guidance for the developer implementing this spec>
----
-
-Send the full synthesis to the team lead via:
-  SendMessage({ to: 'team-lead', content: '<full synthesis text>' })
-
-## How you receive proposals
-The team lead will send you all three proposals as a single message each round.
-Respond with scores + brief (Rounds 1–2) or scores + synthesis (Round 3).
-  ",
-  subagent_type: "general-purpose",
-  model: "opus",
+  prompt: "You are the evaluator for this design sprint. Wait for the team lead to send you the three Round 1 proposals.",
+  subagent_type: "design-evaluator",
   team_name: "<team_name>",
   name: "evaluator",
   run_in_background: true
 })
 ```
 
-### Spawn the three designers (sonnet, in parallel)
+### Spawn the three designers in parallel
 
-All three receive the same initial prompt — only their name and number differ.
+Designers (sonnet — see `agents/design-designer.md`). Each spawn passes the
+designer number and the full context brief from Phase 1 — that's all the
+dynamic context the agent body needs.
 
 ```
 Agent({
-  prompt: "
-You are designer-N, a creative UI/UX designer on a design sprint team.
-You will produce design proposals across three rounds of increasing concreteness.
+  prompt: "You are designer-N. Wait for the team lead's Round 1 start message before producing anything.
 
 ## App context
-<full context brief from Phase 1, including screenshots if available>
 
-## Round structure
-- Round 1: Mood, direction, identity. What should this feel like? No hex values
-  or specific fonts yet — focus on the experience, the emotion, the point of
-  view. Be specific about *why* your direction suits this app and its users.
-- Round 2: The system. Specific palette (described precisely), type choices
-  (named fonts), spacing philosophy, component style direction.
-- Round 3: Spec-ready. Actual hex codes, exact font names and weights, pixel
-  values, explicit do/don't rules. Concrete enough to implement directly.
-
-## Proposal format
-
-Use this structure every round (omit sections not yet applicable in Round 1):
-
-### Concept Statement
-<2–3 sentences: mood, identity, target experience>
-
-### Color Direction / Palette
-<Round 1: described; Round 2–3: specific values>
-
-### Typography
-<Round 1: intent; Round 2–3: named fonts and scale>
-
-### Visual Language
-<Shapes, density, motion, imagery>
-
-### Component Style
-<Buttons, cards, navigation, forms>
-
-### Rationale
-<Why this serves the app's purpose and users. Be specific — reference the app,
-not generic design principles.>
-
-## What to push on
-- Design Quality and Originality are weighted highest (35% and 30%).
-- Make deliberate, specific choices. Generic is the enemy.
-- Avoid: purple gradients over white cards, unmodified shadcn/material
-  defaults, generic hero sections, anything that looks like it came from a
-  template or an AI prompt.
-- A human designer should look at your proposal and see intent.
-
-## How each round works
-1. You will receive a message from the team lead containing the round number
-   and (from Round 2 onward) the evaluator's brief plus all prior proposals.
-2. Produce your proposal.
-3. Send it to the team lead:
-     SendMessage({
-       to: 'team-lead',
-       content: JSON.stringify({ round: N, designer: 'designer-N', proposal: '<your full proposal>' })
-     })
-4. Wait for the next round's brief.
-
-Do not begin Round 1 until the team lead sends you the start message.
-  ",
-  subagent_type: "general-purpose",
-  model: "sonnet",
+<full context brief from Phase 1, including screenshots if available>",
+  subagent_type: "design-designer",
   team_name: "<team_name>",
   name: "designer-N",
   run_in_background: true
