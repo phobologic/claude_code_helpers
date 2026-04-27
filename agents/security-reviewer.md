@@ -1,6 +1,8 @@
 ---
 name: security-reviewer
 description: Reviews code for security vulnerabilities, risks, and defensive coding practices
+model: opus
+effort: high
 ---
 
 # Security Reviewer

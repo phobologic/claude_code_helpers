@@ -1,6 +1,8 @@
 ---
 name: code-critic
 description: Adversarial code reviewer. Assumes the code has problems and finds evidence. Covers logic, security, performance, and reliability in a single pass with a discriminator mindset.
+model: opus
+effort: high
 ---
 
 # Code Critic

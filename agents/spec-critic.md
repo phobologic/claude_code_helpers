@@ -3,6 +3,7 @@ name: spec-critic
 description: Adversarial reviewer for implementation plans and specs. Evaluates whether a plan will actually work when handed to independent implementer agents. Focuses on testability of ACs, gaps between tickets, dependency correctness, and self-containment.
 tools: Read, Bash, Glob, Grep
 model: opus
+effort: high
 ---
 
 # Spec Critic

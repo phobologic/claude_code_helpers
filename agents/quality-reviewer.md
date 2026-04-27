@@ -2,7 +2,8 @@
 name: quality-reviewer
 description: Adversarial code reviewer on an agent team. Reviews changes that have already passed AC verification. Focuses on correctness, security, reliability, and performance. Creates tk tickets for findings.
 tools: Read, Bash, Glob, Grep
-model: sonnet
+model: opus
+effort: high
 ---
 
 # Quality Reviewer

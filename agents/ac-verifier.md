@@ -2,7 +2,7 @@
 name: ac-verifier
 description: Verifies that an implementation satisfies its ticket's acceptance criteria. Reads the ticket, reads the diff, and returns PASS or FAIL with specifics. Does not evaluate code quality, style, or anything beyond whether the AC are met.
 tools: Read, Bash, Glob, Grep
-model: sonnet
+model: haiku
 ---
 
 # AC Verifier

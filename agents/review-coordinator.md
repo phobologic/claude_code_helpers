@@ -1,6 +1,7 @@
 ---
 name: review-coordinator
 description: Aggregates and organizes code review findings from multiple reviewers
+model: sonnet
 ---
 
 # Review Coordinator

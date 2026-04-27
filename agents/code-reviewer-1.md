@@ -1,6 +1,7 @@
 ---
 name: code-reviewer-1
 description: Reviews code for logical errors, best practices, and architecture issues
+model: opus
 ---
 
 # Code Reviewer 1

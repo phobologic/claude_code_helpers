@@ -1,6 +1,7 @@
 ---
 name: code-reviewer-3
 description: Reviews code for structural problems — duplication, dead code, broken abstractions, and consistency violations
+model: opus
 ---
 
 # Code Reviewer 3
