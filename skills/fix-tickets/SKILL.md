@@ -8,6 +8,7 @@ description: >
   Use when the user says "fix these tickets", "batch fix", "run these tickets in
   parallel", or similar.
 argument-hint: "<ticket-id> [ticket-id ...] | <epic-id>"
+model: sonnet
 ---
 
 # Fix Tickets

@@ -1,6 +1,7 @@
 ---
 name: review
 description: Quick code review using an adversarial sub-agent. Surfaces Critical and High issues first. Creates tk tickets for Critical/High/Medium findings if tk is available.
+model: sonnet
 ---
 
 You are orchestrating a fast pre-merge code review. A dedicated adversarial sub-agent does the actual reviewing so it brings a fresh, unbiased perspective.

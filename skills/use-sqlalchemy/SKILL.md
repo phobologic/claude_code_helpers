@@ -2,6 +2,7 @@
 name: use-sqlalchemy
 description: Set up SQLAlchemy async + Alembic rules for this project by creating a symlink into .claude/rules/.
 disable-model-invocation: true
+model: haiku
 ---
 
 Set up SQLAlchemy async + Alembic rules for this project by creating a symlink into `.claude/rules/`.

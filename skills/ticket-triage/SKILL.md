@@ -2,6 +2,7 @@
 name: ticket-triage
 description: Triage, filter, and sort tk tickets for review. Use when the user asks to review open tickets, sort by priority/type/confidence, triage a backlog, go through P2 bugs, or any similar ticket review workflow. Always use tk triage instead of inline Python/jq for filtering and sorting.
 argument-hint: "[-- filter and sort instructions]"
+model: haiku
 ---
 
 # Ticket Triage

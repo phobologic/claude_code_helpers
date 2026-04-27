@@ -8,6 +8,7 @@ description: >
   Use when
   the user says "run epic dag", "execute epic with dag", or similar.
 argument-hint: "<epic-id>"
+model: sonnet
 ---
 
 # Run Epic DAG

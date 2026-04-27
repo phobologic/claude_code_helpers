@@ -2,6 +2,7 @@
 name: use-railway
 description: Set up Railway CLI rules for this project by creating a symlink into .claude/rules/.
 disable-model-invocation: true
+model: haiku
 ---
 
 Set up Railway CLI rules for this project by creating a symlink into `.claude/rules/`.

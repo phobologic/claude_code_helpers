@@ -6,6 +6,7 @@ description: >
   implementation, and manages the validation loop. Use when the user says
   "run epic", "execute epic", "start working on the epic", or similar.
 argument-hint: "<epic-id>"
+model: sonnet
 ---
 
 # Run Epic

@@ -2,6 +2,7 @@
 name: epic-tree
 description: Show a tree of epics with open/closed ticket counts. Use when the user asks to see an epic tree, visualize epic hierarchy, or show ticket counts by epic.
 disable-model-invocation: true
+model: haiku
 ---
 
 Run `tk epic-tree` with the arguments from the user's command and display the output verbatim.

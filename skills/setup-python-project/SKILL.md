@@ -2,6 +2,7 @@
 name: setup-python-project
 description: Scaffold a new Python project with uv, ruff, pytest, and GitHub Actions CI. Use when the user says "set up a new Python project", "scaffold a project", "create a new Python app", or similar.
 argument-hint: "[project-name]"
+model: sonnet
 ---
 
 # Setup Python Project

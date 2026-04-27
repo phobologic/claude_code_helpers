@@ -2,6 +2,7 @@
 name: setup-go-project
 description: Scaffold a new Go project with a Makefile, golangci-lint, GitHub Actions CI, and two-layer git hooks (pre-commit + pre-push). Use when the user says "set up a new Go project", "scaffold a Go project", "create a new Go CLI", or similar.
 argument-hint: "[project-name]"
+model: sonnet
 ---
 
 # Setup Go Project

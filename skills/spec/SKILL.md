@@ -7,6 +7,8 @@ description: >
   tickets after user approval.
 argument-hint: "[idea description]"
 disable-model-invocation: true
+model: opus
+effort: high
 ---
 
 # Spec

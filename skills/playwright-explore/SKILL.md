@@ -8,6 +8,7 @@ description: >
   tk tickets. Use when the user says "explore the app", "test the app with
   playwright", "simulate users", or similar.
 argument-hint: "[url] [scenario:<name>] [roles:r1,r2,r3] [time:30m] [-- <scenario>]"
+model: sonnet
 ---
 
 # Playwright Explore

@@ -3,6 +3,7 @@ name: wrap-epic
 description: Ship a completed /run-epic or /fix-tickets batch — merge the integration branch to main, prune worktrees, close the epic with a ship note, and report remaining work. Use only when the user types /wrap-epic.
 argument-hint: "[epic-id]"
 disable-model-invocation: true
+model: sonnet
 ---
 
 # Wrap Epic

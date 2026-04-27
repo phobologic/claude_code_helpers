@@ -10,6 +10,7 @@ description: >
   ticket-ID and epic-ID argument forms as /fix-tickets. Use when the user says
   "fix tickets dag", "batch fix dag", "run fix tickets with dag", or similar.
 argument-hint: "<ticket-id> [ticket-id ...] | <epic-id>"
+model: sonnet
 ---
 
 # Fix Tickets DAG

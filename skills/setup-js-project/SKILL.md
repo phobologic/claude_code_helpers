@@ -2,6 +2,7 @@
 name: setup-js-project
 description: Scaffold a new SvelteKit project with Biome, Prettier, Vitest, and GitHub Actions CI. Use when the user says "set up a new JS project", "scaffold a SvelteKit project", "create a new frontend app", or similar.
 argument-hint: "[project-name]"
+model: sonnet
 ---
 
 # Setup JavaScript/SvelteKit Project
