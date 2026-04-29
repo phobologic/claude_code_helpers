@@ -30,11 +30,12 @@
     "type": "command",
     "command": "jq -r '\"\\(.cwd | sub(\"^\" + env.HOME; \"~\")) | \\(.model.display_name) | ctx: \\(.context_window.used_percentage)%\"'"
   },
+  "enabledPlugins": {
+    "claude-worktree@phobos-plugins": true
+  },
   "effortLevel": "medium",
   "editorMode": "vim",
   "teammateMode": "tmux",
   "agentPushNotifEnabled": true,
-  "enabledPlugins": {
-    "claude-worktree@phobos-plugins": true
-  }
+  "skipAutoPermissionPrompt": true
 }
