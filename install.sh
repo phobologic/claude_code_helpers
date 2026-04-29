@@ -38,6 +38,7 @@ link "$DOTFILES/CLAUDE.global.md"     "$CLAUDE/CLAUDE.md"
 link "$DOTFILES/settings.global.json" "$CLAUDE/settings.json"
 link "$DOTFILES/skills"               "$CLAUDE/skills"
 link "$DOTFILES/agents"               "$CLAUDE/agents"
+link "$DOTFILES/optional_rules"       "$CLAUDE/optional_rules"
 
 mkdir -p "$CLAUDE/hooks"
 for hook in "$DOTFILES/hooks"/*.sh; do
