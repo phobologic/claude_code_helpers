@@ -150,12 +150,54 @@ run → 4 impl, 2 QR (the prior fixed pool). Throughout the rest of this skill,
 "all 4 implementers" and "both quality reviewers" should be read as
 "all `<IMPLEMENTERS>` implementers" and "all `<QRs>` quality reviewers."
 
+### Health check
+
+Before presenting the startup summary, scan the input ticket set for two
+conflict smells. Both produce warnings, not blockers — the user decides.
+
+1. **Fully-serial smell.** If the input tickets form a long dep chain (longest
+   chain ≥ 80% of input count and `tk ready` returns exactly 1), the run will
+   execute serially regardless of pool size. Most `/fix-tickets-dag` batches
+   from `/multi-review` should have *no* inter-deps — if they do, that's
+   suspicious. Surface the chain length.
+2. **File-overlap smell.** Parse the `**Files**:` line from each input ticket's
+   description. If two tickets that could otherwise run in parallel name the
+   same file, flag the pair — they will conflict at merge time. This is the
+   common case for `/fix-tickets-dag`: `/multi-review` tickets routinely
+   cluster on hot-spot files (multiple reviewers flagging the same module).
+   Sources of `**Files**:`:
+   - `quality-reviewer` Bucket B findings filed during prior runs
+   - `/multi-review` findings
+   - `/spec`-generated tickets (Files / Produces / Consumes block)
+
+   Tickets without a `**Files**:` line are reported separately as
+   "unannotated, could not check."
+
+Implementation sketch:
+
+```bash
+# For each input ticket, extract its Files annotation
+for id in $INPUT_IDS; do
+  body=$(tk show "$id" --raw 2>/dev/null || tk show "$id")
+  files=$(printf '%s' "$body" | awk 'match($0, /\*\*Files\*\*:[ ]*([^\n]+)/, m){print m[1]; exit}')
+  echo -e "$id\t$files"
+done
+# Then group by individual file path (split on commas / colons-with-line-numbers)
+# and report any path that appears in 2+ tickets without a dep relationship.
+```
+
+For each file with 2+ tickets, the warning recommends one of:
+- Add a `tk dep` between them so they sequence (cheapest)
+- Bundle into one ticket and re-run (cleanest, more user effort)
+- Proceed and accept the merge-conflict rework cycle (fine if rare)
+
 ### Startup summary
 
 Present a summary to the user:
 
 ```
 Tickets: N total, M ready (unblocked), K in-progress, J closed
+Dep-graph: longest chain = <L> tickets · max parallel width = <W>
 
 Ready tickets:
   [<id>] <title>
@@ -164,6 +206,9 @@ Ready tickets:
 Blocked tickets:
   [<id>] <title> (blocked by: <dep-ids>)
   ...
+
+Warnings:
+  - <fully-serial smell, file-overlap pairs, unannotated tickets, or "none">
 
 Pool: <IMPLEMENTERS> implementer(s) · <QRs> quality reviewer(s) (no AC verifier)
        (sized from <total_open> open input tickets)

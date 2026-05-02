@@ -151,7 +151,7 @@ discover the output shape, then design the interface against those findings.
 
 For each task, before writing its description, sketch three things in your scratch reasoning:
 
-- **Files:** the files this task creates or modifies (paths, even if approximate).
+- **Files**: the files this task creates or modifies (paths, even if approximate).
 - **Produces:** the contracts/artifacts other tasks may consume — a CSS class system,
   a DOM structure, a route, a function signature, a DB table.
 - **Consumes:** the contracts this task reads from — names a producing task or a
@@ -185,7 +185,7 @@ Phases 2 and 3 can be picked up simultaneously after Phase 1 ships.
 - [ ] Task 1.1: [Imperative title]
   *[Two to three sentence description of the work -- enough context to implement without
   reading other tickets. Include affected files/modules where known.]*
-  **Files:** [paths this task touches]
+  **Files**: [paths this task touches]
   **Produces:** [contracts other tasks may consume — or "none (terminal foundation)"]
   **Consumes:** [contracts this reads — or "none (greenfield)"]
   **AC:**
@@ -194,7 +194,7 @@ Phases 2 and 3 can be picked up simultaneously after Phase 1 ships.
 
 - [ ] Task 1.2: [Imperative title]
   *[Description]*
-  **Files:** ...
+  **Files**: ...
   **Produces:** ...
   **Consumes:** Task 1.1's [contract name]
   **AC:**
@@ -206,7 +206,7 @@ Phases 2 and 3 can be picked up simultaneously after Phase 1 ships.
 
 - [ ] Task 2.1: ...
   *[Description]*
-  **Files:** [disjoint from siblings 2.2, 2.3, ...]
+  **Files**: [disjoint from siblings 2.2, 2.3, ...]
   **Produces:** none (slice)
   **Consumes:** Phase 1's [contract name]
   **AC:**
@@ -214,7 +214,7 @@ Phases 2 and 3 can be picked up simultaneously after Phase 1 ships.
 
 - [ ] Task 2.2: ...
   *[Description]*
-  **Files:** [disjoint from 2.1, 2.3, ...]
+  **Files**: [disjoint from 2.1, 2.3, ...]
   **Produces:** none (slice)
   **Consumes:** Phase 1's [contract name]
   **AC:**
@@ -225,7 +225,7 @@ Phases 2 and 3 can be picked up simultaneously after Phase 1 ships.
 
 - [ ] Task 3.1: ...
   *[Description]*
-  **Files:** ...
+  **Files**: ...
   **Consumes:** all of Phase 2
   **AC:**
   - ...
@@ -421,7 +421,7 @@ T1_1=$(tk create "<Task 1.1 title>" -t task -p 2 --parent $P1 -d "$(cat <<'EOF'
 tickets.>
 
 ## Files / Produces / Consumes
-- **Files:** <paths this task creates or modifies>
+- **Files**: <paths this task creates or modifies>
 - **Produces:** <contracts/artifacts other tasks may consume, or "none">
 - **Consumes:** <contracts this reads, naming the producing task or pre-existing surface>
 

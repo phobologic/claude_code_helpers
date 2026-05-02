@@ -122,9 +122,10 @@ quality reviewers" should be read as "all `<IMPLEMENTERS>` implementers" and
 
 ### Dep-graph health check
 
-Before presenting the startup summary, scan the dep graph for two smells that
-suggest the spec under-parallelized or mis-wired deps. Both produce warnings,
-not blockers — the user decides whether to proceed.
+Before presenting the startup summary, scan the open ticket set for three smells
+that suggest the spec under-parallelized, mis-wired deps, or queued tickets that
+will collide at merge time. All produce warnings, not blockers — the user
+decides whether to proceed.
 
 1. **Fully-serial smell.** Walk the open-ticket dep graph. If the longest chain
    covers ≥ 80% of open tickets and `tk ready` returns exactly 1 ticket, this
@@ -136,6 +137,28 @@ not blockers — the user decides whether to proceed.
    `[SLICES]`, check whether its child tickets have `tk dep` edges between each
    other. If yes, those siblings will execute serially despite the SLICES tag.
    Report the offending pairs.
+3. **File-overlap smell.** Parse the `**Files**:` line from each open ticket's
+   description. If two tickets that could run in parallel (no dep relationship,
+   neither blocking the other) name the same file, flag the pair — they will
+   conflict at merge time. Tickets without a `**Files**:` line are reported
+   separately as "unannotated, could not check." Sources of `**Files**:`:
+   - `/spec`-generated tickets (Files / Produces / Consumes block)
+   - `quality-reviewer` Bucket B findings filed during prior runs
+   - `/multi-review` findings
+
+Implementation sketch — run from the team lead before the summary:
+
+```bash
+# Collect Files annotations from all open tickets in this epic
+tk query --epic <epic-id> '.status != "closed"' \
+  | jq -r '"\(.id)\t\(.body // .description // "")"' \
+  | awk -F'\t' '{
+      match($2, /\*\*Files\*\*:[ ]*([^\n]+)/, m);
+      if (m[1]) print $1 "\t" m[1];
+    }'
+# Then group by individual file path (split on commas / colons-with-line-numbers)
+# and report any path that appears in 2+ tickets that aren't in a dep relationship.
+```
 
 Print warnings inline with the startup summary as a `### Warnings` section. Do
 not abort — the user may have intentionally accepted these tradeoffs.

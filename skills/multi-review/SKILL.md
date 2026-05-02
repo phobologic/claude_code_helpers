@@ -111,7 +111,7 @@ Findings arrive as plain-text messages starting with `FINDING`. Parse the `key: 
     --parent <EPIC_ID> \
     -p <priority> \
     --tags "code-review,reviewer:<reviewer>" \
-    -d "**File**: <file>:<lines>
+    -d "**Files**: <file>:<lines>
   **Description**: <description>
   **Suggested Fix**: <fix>
   **Confidence**: <confidence>"
@@ -197,7 +197,7 @@ Analyzed X files. Found N issues across Y reviewers.
 ## Critical Issues
 ### <Title>
 - **Reviewer**: <reviewer>
-- **File**: <file>:<lines>
+- **Files**: <file>:<lines>
 - **Description**: <description>
 - **Suggested Fix**: <fix>
 - **Confidence**: <score>

@@ -169,7 +169,7 @@ tk create "<concise issue title>" \
   -p <priority> \
   --parent <findings-parent-epic-id> \
   --tags code-review,quality \
-  -d "**File**: <path>
+  -d "**Files**: <path>
 **Line(s)**: <lines>
 **Source ticket**: <ticket-id>
 **Description**: <description>
@@ -185,7 +185,7 @@ Low -> `-p 3`.
 ```bash
 FINDING_ID=$(tk create "<title>" -p <priority> --tags code-review,quality)
 tk add-note "$FINDING_ID" "$(cat << 'EOF'
-**File**: src/auth/handler.py:42-47
+**Files**: src/auth/handler.py:42-47
 **Source ticket**: <ticket-id>
 **Description**: <detailed description>
 **Suggested Fix**: <fix with code example>
