@@ -838,30 +838,50 @@ Run this after every ticket CLOSED transition, before freeing the slot.
 `<completed-id>` is the ticket just closed; `<worktree>` is `agent_pool[S].worktree`.
 
 ```bash
-# 1. Checkout the merge target (integration branch)
-git -C <worktree> checkout epic/<epic-id>
+# 1. Detach HEAD pointed at the integration branch.
+#    `--detach` is essential: a regular checkout would pin epic/<epic-id>
+#    to this worktree, and the next CLEAN handler's main-repo merge step
+#    (`git -C $REPO_ROOT checkout epic/<epic-id>`) would fail with
+#    "fatal: 'epic/<epic-id>' is already used by worktree at ...".
+git -C <worktree> checkout --detach epic/<epic-id>
 
 # 2. Hard-reset to HEAD of the integration branch
 git -C <worktree> reset --hard epic/<epic-id>
 
-# 3. Remove untracked files and directories
+# 3. Remove untracked files and directories.
+#    This also nukes the .worktreelinks symlinks (they're untracked from
+#    git's POV); they are restored in step 6 after the verify check passes.
 git -C <worktree> clean -fd
 
-# 4. Restore .worktreelinks symlinks that step 3 just removed
-#    (worktree-init is idempotent: skips `git worktree add` when the dir
-#    already exists, but always re-applies .worktreelinks / .worktreeinclude)
-worktree-init "$(basename <worktree>)" "$REPO_ROOT"
-
-# 5. Remove the stale ticket branch from this worktree
+# 4. Remove the stale ticket branch from this worktree
 git -C <worktree> branch -D ticket/<completed-id> 2>/dev/null || true
 
-# 6. Verify clean before the next ticket is dispatched
+# 5. Verify clean BEFORE restoring symlinks.
+#    Running this after step 6 would always fail in a healthy worktree
+#    because the restored symlinks register as untracked entries.
 git -C <worktree> status --porcelain   # must produce empty output
+
+# 6. Restore .worktreelinks symlinks that step 3 removed.
+#    worktree-init is idempotent: skips `git worktree add` when the dir
+#    already exists, but always re-applies .worktreelinks /
+#    .worktreeinclude. The authoritative symlink set lives in the
+#    `.worktreelinks` file at repo root — do not duplicate it here.
+worktree-init "$(basename <worktree>)" "$REPO_ROOT"
 ```
 
-If step 6 produces any output, the team lead does **not** dispatch the next
+If step 5 produces any output, the team lead does **not** dispatch the next
 ticket to this slot. It marks the slot unavailable and reports the dirty
 status to the user.
+
+> **Why detached HEAD in step 1?** `git worktree` enforces that any branch
+> ref is checked out in at most one worktree at a time. The CLEAN handler's
+> merge step does `git -C $REPO_ROOT checkout epic/<epic-id>` in the main
+> repo. If a freed implementer worktree were left on the integration branch,
+> the next merge would fail. Detached HEAD leaves the working tree on the
+> right commit without holding the branch ref. When a new ticket is later
+> dispatched to this slot, the dispatch script runs `git checkout
+> ticket/<id>` (or creates it from `epic/<epic-id>`), which works the same
+> from a detached HEAD.
 
 ---
 
@@ -975,6 +995,27 @@ last message was STATUS, immediately send `continue working on <ticket-id>`.
 
 In-progress tickets remain marked in-progress in `tk`. The user can resume
 by running `/run-epic-dag` again — in-progress tickets will be re-claimable.
+
+### Worktree-init symlinks (gotcha)
+
+`worktree-init` reads its symlink set from the `.worktreelinks` file at
+the repo root. Typical entries (`.tickets`, `.tmp`, `.venv`, `.env`,
+`.claude/rules`, ...) are symlinks back to the parent repo so the
+worktree can share the ticket DB, the venv, and per-project state. Three
+constraints follow from this:
+
+1. **`git clean -fd` deletes them.** The symlinks are untracked from
+   git's POV. The worktree reset procedure runs `clean -fd` deliberately,
+   then re-runs `worktree-init` afterward to restore them. Do not split
+   those two steps across separate code paths.
+2. **The verify-clean check must run before the symlink restore.** A
+   healthy worktree is "dirty" by `git status --porcelain` after
+   restoration because the symlinks register as `??` entries. Inverting
+   the order makes the check always fail.
+3. **The symlink set is authoritative in `.worktreelinks` + the
+   `worktree-init` script — not in this skill prompt.** If you find
+   yourself listing symlink names here, stop: update `.worktreelinks` in
+   the project instead.
 
 ### Dirty working tree guard
 
