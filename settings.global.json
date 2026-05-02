@@ -31,7 +31,8 @@
   },
   "enabledPlugins": {
     "claude-worktree@phobos-plugins": true,
-    "discord@claude-plugins-official": true
+    "discord@claude-plugins-official": true,
+    "frontend-design@claude-plugins-official": true
   },
   "effortLevel": "medium",
   "editorMode": "vim",
