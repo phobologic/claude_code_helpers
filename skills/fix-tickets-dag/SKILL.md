@@ -748,14 +748,19 @@ git -C <worktree> reset --hard fix/batch-<stamp>
 # 3. Remove untracked files and directories
 git -C <worktree> clean -fd
 
-# 4. Remove the stale ticket branch from this worktree
+# 4. Restore .worktreelinks symlinks that step 3 just removed
+#    (worktree-init is idempotent: skips `git worktree add` when the dir
+#    already exists, but always re-applies .worktreelinks / .worktreeinclude)
+worktree-init "$(basename <worktree>)" "$REPO_ROOT"
+
+# 5. Remove the stale ticket branch from this worktree
 git -C <worktree> branch -D fix/<completed-id> 2>/dev/null || true
 
-# 5. Verify clean before the next ticket is dispatched
+# 6. Verify clean before the next ticket is dispatched
 git -C <worktree> status --porcelain   # must produce empty output
 ```
 
-If step 5 produces any output, the team lead does **not** dispatch the
+If step 6 produces any output, the team lead does **not** dispatch the
 next ticket to this slot. It marks the slot unavailable and reports the
 dirty status to the user.
 
