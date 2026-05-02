@@ -543,11 +543,18 @@ At every heartbeat, check the current time before continuing:
    SendMessage({ to: 'team-lead', message: 'DONE' })
 
 ## Shutdown
-If you receive a `shutdown_request` or TIME_UP message from the team lead,
-finish your current action, save auth state, flush any unsent findings and
-theories, then reply:
-  SendMessage({ to: 'team-lead', message: 'SHUTDOWN_ACK <role>' })
-Then stop.
+If you receive a `shutdown_request` from the team lead, finish your current
+action, save auth state, flush any unsent findings and theories, then send the
+structured shutdown response:
+  SendMessage({
+    to: 'team-lead',
+    message: { type: 'shutdown_response', request_id: '<echo from request>', approve: true }
+  })
+The runtime terminates your process automatically once that response is sent.
+
+If instead you receive a plain TIME_UP message (not a structured
+`shutdown_request`), wrap up the same way and send a final SendMessage to the
+team lead so they can issue the `shutdown_request` next.
 
 ## Reporting findings
 Whenever you notice something broken, confusing, missing, or worth improving,
@@ -811,8 +818,9 @@ When all agents in this wave have sent `DONE` (or TIME_UP flush is complete):
      SendMessage({ to: '<role-2>', message: 'type: shutdown_request' })
      ...
      ```
-   - Wait up to 60 seconds for `SHUTDOWN_ACK` from each. If an agent
-     doesn't respond, use `TaskStop` on its task.
+   - Wait up to 60 seconds for a `shutdown_response` from each (the runtime
+     terminates each process when its response arrives). If an agent doesn't
+     respond, use `TaskStop` on its task.
    - Increment `current_wave`, reset `agents_done` to empty.
    - Spawn fresh agents for the next wave (Step 3.1) with updated coverage
      summary and the next wave's assignments.
@@ -855,7 +863,8 @@ SendMessage({ to: '<role-2>', message: 'type: shutdown_request' })
 ...
 ```
 
-Wait for `SHUTDOWN_ACK` from each (up to 60 seconds). If a teammate hasn't
+Wait for a `shutdown_response` from each (up to 60 seconds; the runtime
+terminates each process when its response arrives). If a teammate hasn't
 responded, use `TaskStop` on its background task. Only then:
 
 ```

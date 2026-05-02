@@ -295,8 +295,12 @@ For each ticket assignment:
 7. Commit to ticket/<ticket-id>
 8. Message the team lead: DONE <ticket-id> ticket/<ticket-id>
 
-Then wait for your next assignment. When you receive a message containing
-'type: shutdown_request', reply with SHUTDOWN_ACK dag-impl-<N> then stop."
+Then wait for your next assignment. When you receive a message with
+`type: \"shutdown_request\"`, send back via SendMessage:
+\`\`\`
+{ to: \"team-lead\", message: { type: \"shutdown_response\", request_id: <echo from request>, approve: true } }
+\`\`\`
+The runtime terminates your process automatically once that response is sent."
 })
 ```
 
@@ -324,8 +328,12 @@ Git: your CWD is already the worktree — use plain \`git\` with no -C flag.
 
 Wait for the team lead to send you a ticket to verify. Do not claim tasks
 from the task list. After you SendMessage your verdict (PASS or FAIL) back
-to the team lead, you will be recycled — wait for the shutdown_request and
-reply with SHUTDOWN_ACK dag-ac-verifier then stop."
+to the team lead, you will be recycled — wait for a message with
+`type: \"shutdown_request\"` and send back via SendMessage:
+\`\`\`
+{ to: \"team-lead\", message: { type: \"shutdown_response\", request_id: <echo from request>, approve: true } }
+\`\`\`
+The runtime terminates your process automatically once that response is sent."
 })
 ```
 
@@ -355,8 +363,12 @@ Git: your CWD is already the worktree — use plain \`git\` with no -C flag.
 
 Wait for the team lead to send you a ticket to review. Do not claim tasks
 from the task list. After you SendMessage your verdict (CLEAN, REWORK, or
-FINDINGS) back to the team lead, you will be recycled — wait for the
-shutdown_request and reply with SHUTDOWN_ACK dag-qr-<K> then stop."
+FINDINGS) back to the team lead, you will be recycled — wait for a message
+with `type: \"shutdown_request\"` and send back via SendMessage:
+\`\`\`
+{ to: \"team-lead\", message: { type: \"shutdown_response\", request_id: <echo from request>, approve: true } }
+\`\`\`
+The runtime terminates your process automatically once that response is sent."
 })
 ```
 
@@ -418,7 +430,7 @@ for the sending agent, then output the status dashboard after any state change.
 |---|---|---|
 | `DONE` | implementer | [DONE handler](#done-ticket-id-branch) |
 | `STATUS` | implementer | Log time; update dashboard (no state change) |
-| `SHUTDOWN_ACK` | any | Record ack; continue shutdown sequence |
+| `shutdown_response` (structured) | any | Record ack; the runtime terminates the teammate; continue shutdown sequence |
 | `PASS` | AC verifier | [PASS handler](#pass-ticket-id) |
 | `FAIL` | AC verifier | [FAIL handler](#fail-ticket-id) |
 | `CLEAN` | quality reviewer | [CLEAN handler](#clean-ticket-id) |
@@ -473,7 +485,7 @@ When the AC verifier sends `PASS <ticket-id>`:
 1. Verify `ticket_state[ticket-id].verification_phase == "ac"`.
 2. Set `ticket_state[ticket-id].verification_phase = null` (releases the AC
    verifier's "busy" signal regardless of what happens with QR).
-3. Recycle the AC verifier (shutdown_request → SHUTDOWN_ACK → re-spawn →
+3. Recycle the AC verifier (shutdown_request → shutdown_response → re-spawn →
    WORKTREE OK; see [Recycle protocol](#recycle-protocol-reference)). When the
    recycled AC verifier is ready:
    - If `ac_verification_queue` is non-empty, pop the head entry E and dispatch
@@ -579,7 +591,7 @@ When a quality reviewer sends `CLEAN <ticket-id>`:
     later merge conflict can re-route through QR).
 2. `ticket_state[ticket-id].state = MERGING`
 3. `ticket_state[ticket-id].verification_phase = null`
-4. Recycle the quality reviewer (shutdown_request → SHUTDOWN_ACK → re-spawn →
+4. Recycle the quality reviewer (shutdown_request → shutdown_response → re-spawn →
    WORKTREE OK; see [Recycle protocol](#recycle-protocol-reference)). When the
    recycled quality reviewer is ready: check `quality_review_queue`. If
    non-empty and the head ticket has passed AC (verification_phase is not
@@ -890,7 +902,8 @@ When all child tickets of the epic have reached CLOSED or BLOCKED state:
    # ...one per QR slot up to dag-qr-<QRs>...
    ```
 
-4. Wait up to 30 seconds for `SHUTDOWN_ACK` from each teammate. Proceed after
+4. Wait up to 30 seconds for a `shutdown_response` from each teammate (the
+   runtime terminates each process when its response arrives). Proceed after
    timeout — agents should already be idle.
 
 5. Remove all worktrees:
@@ -951,7 +964,8 @@ last message was STATUS, immediately send `continue working on <ticket-id>`.
 ### Partial shutdown (user stops mid-run)
 
 1. Broadcast `shutdown_request` to all teammates.
-2. Wait up to 30 seconds for `SHUTDOWN_ACK` from each.
+2. Wait up to 30 seconds for a `shutdown_response` from each (the runtime
+   terminates each process when its response arrives).
 3. Call `TeamDelete()`.
 
 In-progress tickets remain marked in-progress in `tk`. The user can resume
@@ -981,7 +995,8 @@ context). Quality reviewers and AC verifiers recycle after every verdict.
 Same procedure in all cases:
 
 1. `SendMessage({ to: "<slot>", message: { type: "shutdown_request" } })`
-2. Wait up to 30 s for `SHUTDOWN_ACK <slot>`.
+2. Wait up to 30 s for a `shutdown_response` from `<slot>` (the runtime
+   terminates the process when that response arrives).
 3. Verify team lead CWD is still `REPO_ROOT`.
 4. Re-spawn with the **exact same Agent call** used at startup: same `name`,
    same `subagent_type`, no `isolation: "worktree"` (worktree already exists).

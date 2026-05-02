@@ -246,8 +246,12 @@ Agent({
   7. Commit to ticket/<ticket-id>
   8. Message the team lead: DONE <ticket-id> ticket/<ticket-id>
 
-  Then wait for your next assignment. When you receive a message containing
-  'type: shutdown_request', reply with SHUTDOWN_ACK <name> then stop.",
+  Then wait for your next assignment. When you receive a message with
+  `type: \"shutdown_request\"`, send back via SendMessage:
+  \`\`\`
+  { to: \"team-lead\", message: { type: \"shutdown_response\", request_id: <echo from request>, approve: true } }
+  \`\`\`
+  The runtime terminates your process automatically once that response is sent.",
   subagent_type: "implementer",
   team_name: "epic-<epic-id>",
   name: "implementer-1-<STAMP>",
@@ -286,8 +290,12 @@ Agent({
     at all. Only check out a branch when you genuinely need to execute code.
 
   Wait for the team lead to send you tickets to verify. Do not claim tasks
-  from the task list. When you receive a message containing
-  'type: shutdown_request', reply with SHUTDOWN_ACK ac-verifier then stop.",
+  from the task list. When you receive a message with `type: \"shutdown_request\"`,
+  send back via SendMessage:
+  \`\`\`
+  { to: \"team-lead\", message: { type: \"shutdown_response\", request_id: <echo from request>, approve: true } }
+  \`\`\`
+  The runtime terminates your process automatically once that response is sent.",
   subagent_type: "ac-verifier",
   team_name: "epic-<epic-id>",
   name: "ac-verifier"
@@ -339,7 +347,11 @@ Agent({
      - REWORK — numbered inline list of findings for same-run rework
      - FINDINGS — all blockers were out-of-scope; list the ticketed IDs
 
-  When you receive a message containing 'type: shutdown_request', reply with SHUTDOWN_ACK quality-reviewer then stop.",
+  When you receive a message with `type: \"shutdown_request\"`, send back via SendMessage:
+  \`\`\`
+  { to: \"team-lead\", message: { type: \"shutdown_response\", request_id: <echo from request>, approve: true } }
+  \`\`\`
+  The runtime terminates your process automatically once that response is sent.",
   subagent_type: "quality-reviewer",
   team_name: "epic-<epic-id>",
   name: "quality-reviewer"
@@ -453,7 +465,8 @@ that owned it before assigning the next ticket to that slot.
    ```
    SendMessage({ to: "<name>", message: "type: shutdown_request" })
    ```
-2. Wait up to 30 seconds for `SHUTDOWN_ACK <name>`. The implementer is idle
+2. Wait up to 30 seconds for a `shutdown_response` from `<name>` (the runtime
+   terminates the process when that response arrives). The implementer is idle
    by definition (it just sent something to the lead and is waiting for the
    next instruction), so the ack should arrive quickly. Proceed regardless
    after the timeout.
@@ -733,7 +746,8 @@ Wave <N+1>: <K> new tickets unblocked — restarting agents for clean context
 ```
 
 **2. Shutdown all agents.** Send shutdown to each; wait up to 30 seconds for
-`SHUTDOWN_ACK <name>` from each. Proceed after timeout — agents should be idle.
+a `shutdown_response` from each (the runtime terminates each process when its
+response arrives). Proceed after timeout — agents should be idle.
 
 ```
 SendMessage({ to: "implementer-1-<STAMP>", message: "type: shutdown_request" })
@@ -801,8 +815,12 @@ Agent({
   7. Commit to ticket/<ticket-id>
   8. Message the team lead: DONE <ticket-id> ticket/<ticket-id>
 
-  Then wait for your next assignment. When you receive a message containing
-  'type: shutdown_request', reply with SHUTDOWN_ACK <name> then stop."
+  Then wait for your next assignment. When you receive a message with
+  `type: \"shutdown_request\"`, send back via SendMessage:
+  \`\`\`
+  { to: \"team-lead\", message: { type: \"shutdown_response\", request_id: <echo from request>, approve: true } }
+  \`\`\`
+  The runtime terminates your process automatically once that response is sent."
 })
 # ... repeat for needed implementer count
 Agent({ subagent_type: "ac-verifier",      team_name: "epic-<epic-id>", name: "ac-verifier",
