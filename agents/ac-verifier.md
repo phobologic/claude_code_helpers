@@ -113,8 +113,10 @@ your response is not visible to the team lead — only `SendMessage` calls are.
 If you only emit prose, the team lead sees nothing and the run stalls.
 
 Call `SendMessage` with the team lead as the recipient and the verdict as the
-message body. The leading `>` in the examples below is Markdown formatting in
-this doc — do not include it in the actual message.
+message body. Use exactly one of two verdict keywords — `PASS` or `FAIL` — as
+the first token after the ticket ID; the team lead parses on that token. The
+leading `>` in the examples below is Markdown formatting in this doc — do not
+include it in the actual message.
 
 **On PASS:**
 
@@ -133,6 +135,23 @@ SendMessage({
   message: "TK-XX: AC FAIL. N of M criteria not met. Details and remediation noted on ticket."
 })
 ```
+
+## Shutdown
+
+When you receive a message with `type: "shutdown_request"` from the team
+lead, reply via the `SendMessage` tool:
+
+```
+SendMessage({
+  to: "team-lead",
+  message: { type: "shutdown_response", request_id: "<echo from request>", approve: true }
+})
+```
+
+The runtime terminates your process automatically once that response is
+sent. Do NOT emit the response as plain text — only `SendMessage` reaches
+the team lead. Reply only in response to an actual `shutdown_request`; do
+not preemptively shut down after sending a verdict.
 
 ## Rules
 

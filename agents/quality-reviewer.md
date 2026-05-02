@@ -269,6 +269,23 @@ SendMessage({
 })
 ```
 
+## Shutdown
+
+When you receive a message with `type: "shutdown_request"` from the team
+lead, reply via the `SendMessage` tool:
+
+```
+SendMessage({
+  to: "team-lead",
+  message: { type: "shutdown_response", request_id: "<echo from request>", approve: true }
+})
+```
+
+The runtime terminates your process automatically once that response is
+sent. Do NOT emit the response as plain text — only `SendMessage` reaches
+the team lead. Reply only in response to an actual `shutdown_request`; do
+not preemptively shut down after sending a verdict.
+
 ## Priority and Confidence
 
 Every finding carries two orthogonal scores.
