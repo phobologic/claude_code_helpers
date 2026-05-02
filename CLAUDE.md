@@ -85,6 +85,7 @@ To add language auto-formatting hooks to a project:
 - `/fix-tickets <id> [id ...] | <epic-id>` - Implement a set of tickets in parallel with quality review; designed for multi-review fix batches
 - `/fix-tickets-dag <id> [id ...] | <epic-id>` - **Experimental.** DAG-driven variant of `/fix-tickets` with continuous dispatching and a fixed agent pool (4 implementers, 2 quality reviewers). No AC verifier — designed for multi-review fix batches without formal acceptance criteria. File issues in this repo for problems encountered during real-world use.
 - `/epic-tree [--all] [epic-id ...]` - Show a tree of epics with open/closed ticket counts per level; omit IDs to show all root epics; `--all` includes closed sub-epics
+- `/team-status [epic-id]` - Consistent status snapshot for an in-flight `/run-epic`, `/fix-tickets`, or DAG variant: progress, ticket table, per-agent state, and notable events. Read-only.
 
 ### Design
 - `/design-sprint [--scan] [--output <path>] [-- <guidance>]` - Three-round GAN-style design sprint: 3 sonnet designers propose independently, opus evaluator scores and issues shared briefs, team lead writes the final spec
