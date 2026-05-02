@@ -72,9 +72,65 @@ the working feature? Look for:
 
 ### 3. Dependency Correctness
 
-- **Over-serialization.** Are phases marked as sequential when they could run
-  in parallel? Does phase 3 truly depend on phase 2, or could they both start
-  after phase 1?
+This is one of the highest-value checks. Over-serialization is the most common
+spec failure mode — it produces plans that look reasonable but force `/run-epic-dag`
+to execute one ticket at a time when it could run six in parallel.
+
+**Phase shape vs. content (the foundational/slice classification check):**
+
+Every phase must declare a shape: `[FOUNDATIONAL]`, `[SLICES]`, or `[INTEGRATION]`.
+Verify the shape matches the content:
+
+- **FOUNDATIONAL phase** = each task produces something downstream consumers need
+  (tokens, schemas, contracts, base components, middleware, migrations). Tasks
+  within typically chain because each consumes the prior. **Red flag:** a phase
+  marked FOUNDATIONAL whose tasks share no `Produces` consumed by anything
+  downstream — that's just sequential work for no reason. Should it be SLICES?
+- **SLICES phase** = N independent tasks that all consume the same foundational
+  contract and share no files with each other. Tasks within must NOT have intra-
+  phase deps. **Red flags:**
+  - A SLICES phase whose tasks `Consume` each other — they aren't slices, they're
+    a chain mislabeled.
+  - A SLICES phase whose tasks share files in `Files` — they will conflict at
+    merge time. Either combine them or sequence them (and reclassify as
+    FOUNDATIONAL).
+  - A SLICES phase wired with `tk dep T2_2 T2_1` etc. between siblings —
+    silently serializes parallelizable work. This is the bug the new format
+    exists to prevent.
+- **INTEGRATION phase** = fans in after slices. Usually 1-2 tasks. **Red flag:**
+  an INTEGRATION phase with multiple unrelated tasks that aren't really doing
+  integration — those probably belong as their own slice or foundational phase.
+
+**Mixed-spec check.** If the spec has both foundational and slice work, verify
+the foundation phases come *before* the slice phases (they have to — slices
+consume foundations). If a "slice" task has a dep on another slice in a
+later phase, that's a routing bug.
+
+**Files / Produces / Consumes check.** Every task must have these three lines.
+Walk the graph:
+- For each pair of tasks that share a file in `Files`, verify there's a `tk dep`
+  between them (or a clear comment that one of them owns the file). Missing
+  dep on shared files = guaranteed merge conflict.
+- For each `Consumes` entry that names another task's `Produces`, verify the
+  dep exists.
+- For each `tk dep` in the plan, verify there's a real reason — either shared
+  files or a `Consumes` entry pointing at the producer. Deps without either are
+  over-serialization candidates and should be flagged High.
+
+**Classic over-serialization patterns to flag as High:**
+
+- "First task of phase N+1 depends on last task of phase N" with no shared
+  file or contract — the storyloom press.css bug. The next phase's first task
+  usually consumes something specific from the prior phase, and the dep should
+  point at *that* producer, not the last task.
+- A phase chain where each task depends on the previous but the `Consumes`
+  fields don't justify it — the implementer is just being conservative.
+- "Staged rollout" deps ("let X validate before Y starts") with no technical
+  blocker. Note these as a defensible choice but flag them so the user knows
+  they're trading parallelism for caution.
+
+**Other dependency issues:**
+
 - **Missing dependencies.** Can a ticket actually start without another ticket
   being complete first? If ticket 2.1 builds against an API contract defined
   in ticket 1.2, that dependency needs to be explicit.

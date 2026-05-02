@@ -120,6 +120,26 @@ to the values computed here; references to "all 4 implementers" and "both
 quality reviewers" should be read as "all `<IMPLEMENTERS>` implementers" and
 "all `<QRs>` quality reviewers."
 
+### Dep-graph health check
+
+Before presenting the startup summary, scan the dep graph for two smells that
+suggest the spec under-parallelized or mis-wired deps. Both produce warnings,
+not blockers — the user decides whether to proceed.
+
+1. **Fully-serial smell.** Walk the open-ticket dep graph. If the longest chain
+   covers ≥ 80% of open tickets and `tk ready` returns exactly 1 ticket, this
+   epic is structured as a single sequential queue. Likely either (a) all
+   genuinely foundational work, which is fine, or (b) over-serialization in the
+   spec. Surface the chain length and recommend the user check the spec's phase
+   shapes (`[FOUNDATIONAL]`, `[SLICES]`, `[INTEGRATION]`) before proceeding.
+2. **Mislabeled SLICES smell.** For each phase epic whose title contains
+   `[SLICES]`, check whether its child tickets have `tk dep` edges between each
+   other. If yes, those siblings will execute serially despite the SLICES tag.
+   Report the offending pairs.
+
+Print warnings inline with the startup summary as a `### Warnings` section. Do
+not abort — the user may have intentionally accepted these tradeoffs.
+
 ### Startup summary
 
 Present a summary to the user:
@@ -127,6 +147,7 @@ Present a summary to the user:
 ```
 Epic: <title>
 Tickets: N total, M ready (unblocked), K in-progress, J closed
+Dep-graph: longest chain = <L> tickets · <P> ready phases · max parallel width = <W>
 
 Ready tickets:
   [<id>] <title>
@@ -136,9 +157,16 @@ Blocked tickets:
   [<id>] <title> (blocked by: <dep-ids>)
   ...
 
+Warnings:
+  - <fully-serial smell, mislabeled SLICES, etc., or "none">
+
 Pool: <IMPLEMENTERS> implementer(s) · <QRs> quality reviewer(s) · 1 AC verifier
        (sized from <total_open> open tickets)
 ```
+
+`max parallel width` = the largest set of tickets simultaneously unblocked at
+any point in a topological walk. If this is 1 across the whole epic, the run
+will execute serially regardless of how many implementers you spawn — flag it.
 
 Then confirm via `AskUserQuestion`:
 

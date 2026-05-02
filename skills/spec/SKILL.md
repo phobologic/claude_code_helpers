@@ -90,34 +90,80 @@ before tickets can be created.
 
 Synthesize the idea and all answers into a structured plan.
 
+### Work classification
+
+Before drafting phases, classify each *unit of work* you're about to plan as one of:
+
+- **Foundational:** something downstream code consumes. Tokens, schemas, types, shared
+  components, base templates, middleware, contracts, migrations, renames-across-codebase.
+  Foundational work needs to land before its consumers can start. Multiple foundational
+  units may sequence against each other (schema → migration → ORM models).
+- **Slice:** one of N independent surfaces that share a recipe but not files. Converting
+  6 routes to a new layout, adding CRUD for 4 entities, building 5 detail pages. Slices
+  consume the same foundation but don't touch each other.
+- **Integration / cleanup:** fans in after slices land — flipping a flag, removing dead
+  code, end-to-end smoke tests. Usually one or two tasks at the end.
+
+A spec is **mixed** when it has both foundational and slice work — common when introducing
+a new system across an existing codebase. Storyloom's press.css rollout is the canonical
+mixed shape: tokens are foundational, the per-route conversions are slices.
+
+State the classification of each unit explicitly in your reasoning before drafting phases.
+If everything is foundational, the plan will be mostly serial — that's fine, don't force
+parallelism that doesn't exist. If you find yourself with 5+ slice units, the corresponding
+phase should be declared parallel-by-default, not chained.
+
 ### Parallelism reasoning
 
 Before drafting, reason about which phases can run in parallel and which have genuine
 blocking dependencies. Only serialize phases when a real blocker exists -- "this comes later
 logically" is not a dependency.
 
-**Default phasing approach -- interface first:**
-Prefer starting with the interface or contract as Phase 1. This means:
-- A UI or frontend with mocked data for user-facing features
-- An API spec or schema for services
-- An event format or protocol for data pipelines
+**Default phasing approach -- foundation first, then slices:**
 
-Starting with the interface validates usage patterns and ergonomics early -- before you're
-invested in backend design -- and gives all subsequent phases a shared contract to build
-against independently.
+1. **Foundational phases first**, sequenced by what consumes what. These are usually
+   small (1-4 tasks each) and serial within the phase because each task builds on the
+   previous one's output.
+2. **Slice phases next**, each containing N independent tasks that all consume the same
+   foundation. Tasks within a slice phase have **no intra-phase dependencies** — they
+   can all start the moment the foundational seam is ready.
+3. **Integration / cleanup phase last**, fans in after slices.
+
+For user-facing features with no clear "downstream consumers," the interface-first variant
+still applies: UI with mocks (foundational) → backend + data (slices that consume the
+contract) → integration (fan-in).
 
 ```
-Phase 1: Interface (UI with mocks, or API spec)  <- validates assumptions, unblocks parallel work
+Phase 1: Foundational (tokens, schema, contracts)  [SERIAL within phase]
     |
-Phase 2: Backend implementation  --+  (both build against Phase 1's contract)
-Phase 3: Data / infra layer      -+  (can run in parallel with Phase 2)
+Phase 2: Foundational (depends on P1's output)     [SERIAL within phase]
     |
-Phase 4: Integration (swap mocks for real implementations)
+Phase 3: Slices (N independent tasks)              [PARALLEL within phase]
+    |
+Phase 4: Integration / cleanup                     [fan-in]
 ```
 
 **Exception:** when the hard problem IS the backend -- a novel algorithm, data pipeline with
 unclear output format, or research-heavy exploration -- suggest a spike phase first to
 discover the output shape, then design the interface against those findings.
+
+### File / contract annotations
+
+For each task, before writing its description, sketch three things in your scratch reasoning:
+
+- **Files:** the files this task creates or modifies (paths, even if approximate).
+- **Produces:** the contracts/artifacts other tasks may consume — a CSS class system,
+  a DOM structure, a route, a function signature, a DB table.
+- **Consumes:** the contracts this task reads from — names a producing task or a
+  pre-existing surface.
+
+These three lines drive every dep decision below. They don't need to appear in the final
+ticket description verbatim, but the reasoning has to be visible enough that the
+spec-critic can check it. Record them under the task in your draft.
+
+If two tasks share files, they have a real dep (sequence them). If task B's `Consumes`
+names task A's `Produces`, they have a real dep. Otherwise they don't — even if they're
+"in the same phase."
 
 ### Plan format
 
@@ -133,48 +179,62 @@ Describe the parallelism shape explicitly. Example:
   Phase 1 -> {Phase 2 || Phase 3} -> Phase 4
 Phases 2 and 3 can be picked up simultaneously after Phase 1 ships.
 
-### Phase 1: [Name]  [SERIAL -- must complete first]
+### Phase 1: [Name]  [FOUNDATIONAL -- serial within phase, gates downstream]
 *Objective: what this phase accomplishes and why it gates everything else*
 
 - [ ] Task 1.1: [Imperative title]
   *[Two to three sentence description of the work -- enough context to implement without
   reading other tickets. Include affected files/modules where known.]*
+  **Files:** [paths this task touches]
+  **Produces:** [contracts other tasks may consume — or "none (terminal foundation)"]
+  **Consumes:** [contracts this reads — or "none (greenfield)"]
   **AC:**
   - When [trigger], the system shall [behavior]
   - The [component] shall [property]
 
 - [ ] Task 1.2: [Imperative title]
   *[Description]*
+  **Files:** ...
+  **Produces:** ...
+  **Consumes:** Task 1.1's [contract name]
   **AC:**
   - When [trigger], the system shall [behavior]
   - If [condition], the system shall [response]
 
-### Phase 2: [Name]  [parallel with Phase 3, starts after Phase 1]
-*Objective: ...*
+### Phase 2: [Name]  [SLICES -- parallel within phase, all consume Phase 1]
+*Objective: convert/build N independent surfaces against the Phase 1 foundation*
 
 - [ ] Task 2.1: ...
   *[Description]*
+  **Files:** [disjoint from siblings 2.2, 2.3, ...]
+  **Produces:** none (slice)
+  **Consumes:** Phase 1's [contract name]
   **AC:**
   - ...
 
-### Phase 3: [Name]  [parallel with Phase 2, starts after Phase 1]
-*Objective: ...*
+- [ ] Task 2.2: ...
+  *[Description]*
+  **Files:** [disjoint from 2.1, 2.3, ...]
+  **Produces:** none (slice)
+  **Consumes:** Phase 1's [contract name]
+  **AC:**
+  - ...
+
+### Phase 3: [Name]  [INTEGRATION / fan-in: requires Phase 2]
+*Objective: integration and validation, blocked until slices land*
 
 - [ ] Task 3.1: ...
   *[Description]*
-  **AC:**
-  - ...
-
-### Phase 4: [Name]  [fan-in: requires Phase 2 + Phase 3]
-*Objective: integration and validation, blocked until prior phases finish*
-
-- [ ] Task 4.1: ...
-  *[Description]*
+  **Files:** ...
+  **Consumes:** all of Phase 2
   **AC:**
   - ...
 
 **Open risks / spikes noted:** [list any unresolved uncertainties worth tracking]
 ```
+
+Phase headers must declare a shape: `[FOUNDATIONAL]`, `[SLICES]`, or `[INTEGRATION]`.
+This is what makes the parallelism visible to the user and to `/run-epic-dag`.
 
 ### Acceptance criteria format (EARS)
 
@@ -340,10 +400,11 @@ TOP=$(tk create "<Feature / Project Name>" -t epic -p 2 -d "<goal sentence from 
 Print: `"Creating phase epics (<N> phases)..."`
 
 ```bash
-P1=$(tk create "Phase 1: <name>" -t epic -p 2 --parent $TOP -d "<phase objective>")
-P2=$(tk create "Phase 2: <name>" -t epic -p 2 --parent $TOP -d "<phase objective>")
-P3=$(tk create "Phase 3: <name>" -t epic -p 2 --parent $TOP -d "<phase objective>")
-# ... etc for all phases
+P1=$(tk create "Phase 1: <name> [FOUNDATIONAL]" -t epic -p 2 --parent $TOP -d "<phase objective>")
+P2=$(tk create "Phase 2: <name> [SLICES]" -t epic -p 2 --parent $TOP -d "<phase objective>")
+P3=$(tk create "Phase 3: <name> [INTEGRATION]" -t epic -p 2 --parent $TOP -d "<phase objective>")
+# ... etc for all phases. The bracketed shape tag becomes part of the title so /run-epic-dag
+# and humans can see the parallelism intent at a glance.
 ```
 
 ### Step 6.3: Task tickets (children of their phase epic)
@@ -357,7 +418,12 @@ description and EARS acceptance criteria -- never truncate to a one-liner.
 # Phase 1
 T1_1=$(tk create "<Task 1.1 title>" -t task -p 2 --parent $P1 -d "$(cat <<'EOF'
 <Two to three sentence description of the work, enough to implement without reading other
-tickets. Include affected files/modules.>
+tickets.>
+
+## Files / Produces / Consumes
+- **Files:** <paths this task creates or modifies>
+- **Produces:** <contracts/artifacts other tasks may consume, or "none">
+- **Consumes:** <contracts this reads, naming the producing task or pre-existing surface>
 
 ## Acceptance Criteria
 - When <trigger>, the system shall <behavior>
@@ -386,49 +452,59 @@ EOF
 # ... etc
 ```
 
-### Step 6.4: Intra-phase dependencies (sequential ordering within each phase)
+### Step 6.4: Dependencies — derive from Files / Produces / Consumes
 
-Print: `"Wiring intra-phase dependencies..."`
+Print: `"Wiring dependencies from file and contract overlap..."`
 
-Tasks within a phase usually build on each other -- chain them:
+Deps are mechanical, not template-based. For each pair of tasks (A, B):
 
+- If A and B share any file in `Files`, sequence them. The order should follow which one
+  *defines* the shared surface (usually the foundational one first).
+- If B's `Consumes` names something A `Produces`, add `tk dep B A`.
+- Otherwise: **no dep**, even if they're "in the same phase."
+
+**FOUNDATIONAL phases** typically chain naturally because each task produces something the
+next consumes:
 ```bash
-tk dep $T1_2 $T1_1   # T1_2 blocked until T1_1 done
-tk dep $T1_3 $T1_2   # T1_3 blocked until T1_2 done
-
-tk dep $T2_2 $T2_1
-
-# ... etc for each phase
+# Phase 1 (FOUNDATIONAL): T1_2 consumes T1_1's output, T1_3 consumes T1_2's
+tk dep $T1_2 $T1_1
+tk dep $T1_3 $T1_2
 ```
 
-### Step 6.5: Cross-phase dependencies -- ONLY for genuine blockers
-
-Print: `"Wiring cross-phase dependencies..."`
-
-Wire the start of each phase to the end of the phase(s) it actually depends on.
-
-**Sequential example** (P2 depends on P1, P3 depends on P2):
+**SLICE phases** explicitly do not chain — every slice consumes the same foundational
+contract and nothing else:
 ```bash
-tk dep $T2_1 $T1_3
+# Phase 2 (SLICES): each slice depends on the producing foundational task, NOT siblings
+tk dep $T2_1 $T1_3   # slice consumes Phase 1's last foundational output
+tk dep $T2_2 $T1_3   # ...as does this one
+tk dep $T2_3 $T1_3   # ...and this one
+# NO tk dep between T2_1, T2_2, T2_3 — they're independent
+```
+
+**INTEGRATION phases** fan in — they depend on the union of producers, not "the last task
+of the prior phase":
+```bash
+# Phase 3 (INTEGRATION): waits on all slices
+tk dep $T3_1 $T2_1
 tk dep $T3_1 $T2_2
+tk dep $T3_1 $T2_3
 ```
 
-**Parallel example** (P2 and P3 both start after P1, then P4 depends on both):
+**Forbidden patterns:**
+- ❌ `tk dep $T2_1 $T1_<last>` reflexively because "phase 2 comes after phase 1." Look at
+  what T2_1 actually consumes. If it consumes T1_2's output, depend on T1_2, not T1_3.
+- ❌ Chaining slices to each other. If you find yourself writing `tk dep $T2_2 $T2_1` and
+  Task 2.1 doesn't appear in Task 2.2's `Consumes` list, delete the dep.
+- ❌ Defaulting to "first task of next phase depends on last task of prior phase." That
+  template silently serializes parallelizable work — it's the bug we're trying to avoid.
+
+After all `tk dep` calls, sanity-check the result:
+
 ```bash
-# P2 and P3 both unblock after P1 -- but NOT on each other
-tk dep $T2_1 $T1_3
-tk dep $T3_1 $T1_3
-
-# P4 is a fan-in: depends on the last task of BOTH P2 and P3
-tk dep $T4_1 $T2_2
-tk dep $T4_1 $T3_1
+tk ready --epic <TOP>   # should surface multiple parallel tasks if your plan declared SLICES
 ```
 
-Do **not** add `tk dep $T3_1 $T2_2` in the parallel case -- that would silently serialize
-phases that were designed to run concurrently.
-
-With correct wiring, `tk ready` will surface P2 and P3 tasks simultaneously once P1 is
-done, making the parallel opportunity visible to anyone picking up work.
+If a SLICES phase shows only one ready task, you have a stray dep — re-check.
 
 ## Phase 7 -- Summary
 
