@@ -1,8 +1,7 @@
 {
   "env": {
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
-    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "85",
-    "DISABLE_AUTOUPDATER": "1"
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "85"
   },
   "permissions": {
     "allow": [
@@ -31,7 +30,8 @@
     "command": "jq -r '\"\\(.cwd | sub(\"^\" + env.HOME; \"~\")) | \\(.model.display_name) | ctx: \\(.context_window.used_percentage)%\"'"
   },
   "enabledPlugins": {
-    "claude-worktree@phobos-plugins": true
+    "claude-worktree@phobos-plugins": true,
+    "discord@claude-plugins-official": true
   },
   "effortLevel": "medium",
   "editorMode": "vim",
