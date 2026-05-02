@@ -323,9 +323,9 @@ reference <REPO_ROOT> without the .worktrees/epic-dag-<stamp>-ac-verifier suffix
 Git: your CWD is already the worktree — use plain \`git\` with no -C flag.
 
 Wait for the team lead to send you a ticket to verify. Do not claim tasks
-from the task list. After you return your verdict (PASS or FAIL), you will
-be recycled — wait for the shutdown_request and reply with SHUTDOWN_ACK
-dag-ac-verifier then stop."
+from the task list. After you SendMessage your verdict (PASS or FAIL) back
+to the team lead, you will be recycled — wait for the shutdown_request and
+reply with SHUTDOWN_ACK dag-ac-verifier then stop."
 })
 ```
 
@@ -354,9 +354,9 @@ reference <REPO_ROOT> without the .worktrees/epic-dag-<stamp>-qr-<K> suffix.
 Git: your CWD is already the worktree — use plain \`git\` with no -C flag.
 
 Wait for the team lead to send you a ticket to review. Do not claim tasks
-from the task list. After you return your verdict (CLEAN, REWORK, or
-FINDINGS), you will be recycled — wait for the shutdown_request and reply
-with SHUTDOWN_ACK dag-qr-<K> then stop."
+from the task list. After you SendMessage your verdict (CLEAN, REWORK, or
+FINDINGS) back to the team lead, you will be recycled — wait for the
+shutdown_request and reply with SHUTDOWN_ACK dag-qr-<K> then stop."
 })
 ```
 
@@ -453,7 +453,7 @@ When implementer slot S sends `DONE <ticket-id> ticket/<ticket-id>`:
      ```
      SendMessage({
        to: "dag-ac-verifier",
-       message: "Verify <E.ticket_id> on branch <E.branch>. Run `tk show <E.ticket_id>` for acceptance criteria. Write detailed results as a note on the ticket, then return PASS or FAIL as the first word of your reply."
+       message: "Verify <E.ticket_id> on branch <E.branch>. Run `tk show <E.ticket_id>` for acceptance criteria. Write detailed results as a note on the ticket, then SendMessage the team lead with PASS or FAIL as the first word of the message."
      })
      ```
 5. Output dashboard.
@@ -496,7 +496,7 @@ When the AC verifier sends `PASS <ticket-id>`:
 
      Run `tk show <ticket-id>` first and read prior-round notes — earlier QR verdicts, OOS tickets already filed, and implementer rework summaries. Do not re-pull concerns previous rounds ticketed as out-of-scope. On round ≥ 2, only flag findings that trace to a regression introduced by the most recent implementer change or a critical bug prior fixes could not address.
 
-     Return one of:
+     SendMessage the team lead with one of these as the first token of the message body:
        CLEAN — no blocking issues
        REWORK — numbered inline list of fixable findings
        FINDINGS — all blockers were out-of-scope; list the ticket IDs you created"

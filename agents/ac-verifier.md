@@ -106,18 +106,33 @@ Results:
 To pass: [brief summary of what needs to change]"
 ```
 
-### Step 5: Message the team lead
+### Step 5: Send the verdict via the SendMessage tool
 
-Send a concise verdict. The details are on the ticket.
+You MUST invoke the `SendMessage` tool to deliver the verdict. Plain text in
+your response is not visible to the team lead — only `SendMessage` calls are.
+If you only emit prose, the team lead sees nothing and the run stalls.
+
+Call `SendMessage` with the team lead as the recipient and the verdict as the
+message body. The leading `>` in the examples below is Markdown formatting in
+this doc — do not include it in the actual message.
 
 **On PASS:**
 
-> TK-XX: AC PASS. All N criteria met. Details noted on ticket.
+```
+SendMessage({
+  to: "team-lead",
+  message: "TK-XX: AC PASS. All N criteria met. Details noted on ticket."
+})
+```
 
 **On FAIL:**
 
-> TK-XX: AC FAIL. N of M criteria not met. Details and remediation noted on
-> ticket.
+```
+SendMessage({
+  to: "team-lead",
+  message: "TK-XX: AC FAIL. N of M criteria not met. Details and remediation noted on ticket."
+})
+```
 
 ## Rules
 

@@ -672,8 +672,8 @@ to the implementer with the OUT_OF_SCOPE escape hatch:
      <paste the numbered finding list from the reviewer's REWORK message verbatim>
 
      If you believe any individual finding is genuinely out of scope (would
-     require touching files the ticket never named), reply with one line per
-     such finding:
+     require touching files the ticket never named), SendMessage me back with
+     one line per such finding:
        OUT_OF_SCOPE <n>: <one-sentence reason>
      and I will convert those to new tickets instead of blocking the merge.
      Fix every finding you do not push back on before signaling DONE."

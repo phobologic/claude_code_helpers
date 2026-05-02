@@ -542,7 +542,7 @@ SendMessage({
 
   If you believe any individual finding is genuinely out of scope for this
   ticket (requires touching unrelated files, or is about code the ticket
-  never modified), reply with one line per such finding:
+  never modified), SendMessage me back with one line per such finding:
     OUT_OF_SCOPE <n>: <one-sentence reason>
   and I will convert those to new tickets instead of blocking the merge.
   Fix every finding you do not push back on before signaling DONE."

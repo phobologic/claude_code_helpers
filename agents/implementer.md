@@ -144,9 +144,19 @@ pass. Skipping it is how regressions sneak through.
 
 ## Signaling Completion
 
-Once the pre-DONE checklist passes and changes are committed, message the team lead:
+All communication with the team lead happens via the `SendMessage` tool. Plain
+text in your response is not visible to the team lead — only `SendMessage`
+calls are. If you only emit prose, the team lead sees nothing and the run
+stalls.
 
-> Ticket <ticket-id> implemented and committed on branch <branch-name>.
+Once the pre-DONE checklist passes and changes are committed, send DONE:
+
+```
+SendMessage({
+  to: "team-lead",
+  message: "Ticket <ticket-id> implemented and committed on branch <branch-name>."
+})
+```
 
 Then wait. The team lead will route your work to validation. You may receive
 one of these responses:
@@ -161,10 +171,15 @@ inline findings (file, line, description, suggested fix). No ticket IDs --
 the findings are described directly in the message. Fix each one in the same
 branch and signal completion again. If you genuinely believe a specific
 finding is out of scope for this ticket (it would require touching files the
-ticket never named, or is about code the ticket never modified), reply with
-one line per such finding:
+ticket never named, or is about code the ticket never modified), push back
+via `SendMessage` with one line per such finding:
 
-> OUT_OF_SCOPE <n>: <one-sentence reason>
+```
+SendMessage({
+  to: "team-lead",
+  message: "OUT_OF_SCOPE <n>: <one-sentence reason>"
+})
+```
 
 The team lead will convert those to new tickets instead of blocking the
 merge. Fix every finding you do not push back on before signaling DONE.

@@ -223,49 +223,51 @@ EOF
 The round number comes from the team lead's routing message. Write this note
 **before** returning your verdict.
 
-### Step 5: Message the team lead
+### Step 5: Send the verdict via the SendMessage tool
 
-Return exactly one of three verdicts. The team lead parses the first token
-after the ticket ID, so use the exact keywords `CLEAN`, `REWORK`, or
-`FINDINGS`.
+You MUST invoke the `SendMessage` tool to deliver the verdict. Plain text in
+your response is not visible to the team lead — only `SendMessage` calls are.
+If you only emit prose, the team lead sees nothing and the run stalls.
+
+Call `SendMessage` with the team lead as the recipient and the verdict as the
+message body. Use exactly one of three verdict keywords — `CLEAN`, `REWORK`,
+or `FINDINGS` — as the first token after the ticket ID; the team lead parses
+on that token. The leading `>` in the examples is Markdown formatting in this
+doc; do not include it in the actual message.
 
 **CLEAN** -- no critical, high, or medium findings in Bucket A. Lows may
 still have been ticketed as Bucket B.
 
-> TK-XX: CLEAN
->
-> No blocking issues.
-> [If Bucket B tickets were created: Out-of-scope findings ticketed:
-> <ticket-ids>]
+```
+SendMessage({
+  to: "team-lead",
+  message: "TK-XX: CLEAN\n\nNo blocking issues.\n[If Bucket B tickets were created: Out-of-scope findings ticketed: <ticket-ids>]"
+})
+```
 
 **REWORK** -- one or more Bucket A findings (critical, high, or medium)
 that the implementer should fix in the same branch. Do NOT create tickets
 for these. List each finding inline with enough detail for the implementer
 to act:
 
-> TK-XX: REWORK
->
-> Fix these in fix/TK-XX and signal DONE again:
->
-> 1. **[HIGH]** `path/to/file.py:42` -- Description of issue. Suggested fix.
-> 2. **[MEDIUM]** `path/to/other.py:17` -- Description of issue. Suggested fix.
-> 3. **[MEDIUM]** `path/to/test.py:88` -- Missing regression test for null
->    branch at handler.py:51. Suggested: add test that PATCHes `null` and
->    asserts <expected>.
->
-> [If Bucket B tickets were also created: Out-of-scope findings ticketed
-> separately: <ticket-ids>]
+```
+SendMessage({
+  to: "team-lead",
+  message: "TK-XX: REWORK\n\nFix these in fix/TK-XX and signal DONE again:\n\n1. **[HIGH]** `path/to/file.py:42` -- Description of issue. Suggested fix.\n2. **[MEDIUM]** `path/to/other.py:17` -- Description of issue. Suggested fix.\n3. **[MEDIUM]** `path/to/test.py:88` -- Missing regression test for null branch at handler.py:51. Suggested: add test that PATCHes `null` and asserts <expected>.\n\n[If Bucket B tickets were also created: Out-of-scope findings ticketed separately: <ticket-ids>]"
+})
+```
 
 **FINDINGS** -- reserved for the rare case where every blocking issue is
 genuinely out of scope and has been ticketed as Bucket B. This does NOT
 block merge; the team lead logs the ticket IDs and proceeds. If you have
 even one Bucket A finding, use REWORK instead.
 
-> TK-XX: FINDINGS
->
-> No inline rework needed. Out-of-scope findings ticketed:
-> - [<finding-ticket-id>] <title>
-> - [<finding-ticket-id>] <title>
+```
+SendMessage({
+  to: "team-lead",
+  message: "TK-XX: FINDINGS\n\nNo inline rework needed. Out-of-scope findings ticketed:\n- [<finding-ticket-id>] <title>\n- [<finding-ticket-id>] <title>"
+})
+```
 
 ## Priority and Confidence
 

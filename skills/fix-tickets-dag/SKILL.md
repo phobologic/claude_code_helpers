@@ -347,9 +347,9 @@ reference <REPO_ROOT> without the .worktrees/fix-dag-<stamp>-qr-<K> suffix.
 Git: your CWD is already the worktree — use plain \`git\` with no -C flag.
 
 Wait for the team lead to send you a ticket to review. Do not claim tasks
-from the task list. After you return your verdict (CLEAN, REWORK, or
-FINDINGS), you will be recycled — wait for the shutdown_request and reply
-with SHUTDOWN_ACK dag-qr-<K> then stop."
+from the task list. After you SendMessage your verdict (CLEAN, REWORK, or
+FINDINGS) back to the team lead, you will be recycled — wait for the
+shutdown_request and reply with SHUTDOWN_ACK dag-qr-<K> then stop."
 })
 ```
 
@@ -451,7 +451,7 @@ When implementer slot S sends `DONE <ticket-id> fix/<ticket-id>`:
 
      Run \`tk show <E.ticket_id>\` first and read prior-round notes — earlier QR verdicts, OOS tickets already filed, and implementer rework summaries. Do not re-pull concerns previous rounds ticketed as out-of-scope. On round ≥ 2, only flag findings that trace to a regression introduced by the most recent implementer change or a critical bug prior fixes could not address.
 
-     Return one of:
+     SendMessage the team lead with one of these as the first token of the message body:
        CLEAN — no blocking issues
        REWORK — numbered inline list of fixable findings
        FINDINGS — all blockers were out-of-scope; list the ticket IDs you created"
@@ -630,7 +630,7 @@ finding list:
    <numbered finding list verbatim from QR message>
 
    If any finding is genuinely out of scope (would require touching files
-   this ticket never named), reply with:
+   this ticket never named), SendMessage me back with:
      OUT_OF_SCOPE <n>: <one-sentence reason>
    I will convert those to tickets. Fix every finding you do not push
    back on."
