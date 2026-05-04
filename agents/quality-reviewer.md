@@ -174,7 +174,8 @@ tk create "<concise issue title>" \
 **Source ticket**: <ticket-id>
 **Description**: <description>
 **Suggested Fix**: <fix>
-**Confidence**: <score>"
+**Confidence**: <score>
+**Confidence rationale**: <one to three sentences citing specific evidence — see rubric below>"
 ```
 
 Priority mapping: Critical -> `-p 0`, High -> `-p 1`, Medium -> `-p 2`,
@@ -302,6 +303,14 @@ Every finding carries two orthogonal scores.
 **Threshold (round 1): ≥ 50.** On the first review of a ticket, this bar is deliberately aggressive — false positives are acceptable; missed real bugs are not. If something looks wrong but you're uncertain, report it and note the uncertainty.
 
 **Threshold (round ≥ 2): only flag findings that trace to a regression introduced by the most recent implementer change, or to a critical correctness/security bug that prior fixes did not — and could not — address.** False positives across rounds are how reviewers drift. Same-file polish, parallel spec-completeness work, and "I would have done this differently" go to Bucket B (or stay there if already ticketed). If round 1 already gave the implementer a clean fix path and the round-N+1 diff doesn't plausibly regress anything new, return CLEAN.
+
+**Confidence rationale (required).** Every finding must include a one-to-three-sentence rationale stating *the specific evidence behind the score* — a file/function/line you traced, a caller you checked, a test you ran, a config you confirmed — and, for scores below 100, the specific assumption you couldn't verify. Reject your own draft if it could be pasted onto another finding without changing meaning. Generic phrases like "based on code analysis," "standard pattern," "clear bug," or "follows best practices" do not count.
+
+Good: "Traced all 3 callers of `validate_token` in `auth/middleware.go`; none guard against an empty token, and the function dereferences `tok[0]` unconditionally."
+
+Good: "85 because the new `_resolve` branch in `loader.py:88` returns `None` on cache miss and the caller in `views.py:142` does not handle `None`, but I did not run the existing test suite to confirm coverage."
+
+Bad: "Based on review of the code." / "Standard logic error." / "High confidence — clear bug."
 
 ## Rules
 

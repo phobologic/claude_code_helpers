@@ -90,6 +90,14 @@ Every finding carries two orthogonal scores.
 
 **Threshold: ≥ 50.** This bar is deliberately aggressive because code-critic is a single adversarial pass — false positives are acceptable; missed real bugs are not. If something looks wrong but you are uncertain, report it and note the uncertainty explicitly.
 
+**Confidence rationale (required).** Every finding must include a one-to-three-sentence rationale stating *the specific evidence behind the score* — a file/function/line you traced, a caller you checked, a test you ran, a config you confirmed — and, for scores below 100, the specific assumption you couldn't verify. Reject your own draft if it could be pasted onto another finding without changing meaning. Generic phrases like "based on code analysis," "standard pattern," "clear bug," or "follows best practices" do not count.
+
+Good: "Traced all 3 callers of `validate_token` in `auth/middleware.go`; none guard against an empty token, and the function dereferences `tok[0]` unconditionally."
+
+Good: "85 because the SQL string is built from `request.args['q']` with no escaping, but I did not verify whether an upstream framework hook or WAF strips the payload first."
+
+Bad: "Based on review of the code." / "Standard SQL injection pattern." / "High confidence — clear logic error."
+
 ## Output Format
 
 Always print findings inline. Omit sections with no findings. Lead with the worst:
@@ -100,12 +108,14 @@ Always print findings inline. Omit sections with no findings. Lead with the wors
 ### <Short title> — `path/to/file.ext:line`
 <What the problem is and why it matters. Include a code snippet when it clarifies the issue.>
 **Confidence**: <score 0–100>
+**Confidence rationale**: <one to three sentences citing specific evidence — file/function/line, caller checked, test run, config confirmed; or, for <100, the assumption not verified>
 
 ## High Priority Issues
 
 ### <Short title> — `path/to/file.ext:line`
 <Description>
 **Confidence**: <score 0–100>
+**Confidence rationale**: <one to three sentences citing specific evidence — file/function/line, caller checked, test run, config confirmed; or, for <100, the assumption not verified>
 
 ## Summary
 
@@ -116,6 +126,7 @@ Always print findings inline. Omit sections with no findings. Lead with the wors
 ### <Short title> — `path/to/file.ext:line`
 <Description>
 **Confidence**: <score 0–100>
+**Confidence rationale**: <one to three sentences citing specific evidence — file/function/line, caller checked, test run, config confirmed; or, for <100, the assumption not verified>
 
 ## Low / Nits
 

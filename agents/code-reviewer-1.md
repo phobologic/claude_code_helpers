@@ -67,7 +67,7 @@ Send each finding (confidence ≥ 75) to the team lead as you find it — do not
 ```
 SendMessage({
   to: "team-lead",
-  message: "FINDING\nreviewer: logic\npriority: <critical|high|medium|low>\nconfidence: <0-100>\nfile: <path/to/file>\nlines: <e.g. 42-45>\ntitle: <concise issue title>\ndescription: <clear description of the problem>\nfix: <suggested fix>"
+  message: "FINDING\nreviewer: logic\npriority: <critical|high|medium|low>\nconfidence: <0-100>\nconfidence_rationale: <one to three sentences citing specific evidence — see rubric below>\nfile: <path/to/file>\nlines: <e.g. 42-45>\ntitle: <concise issue title>\ndescription: <clear description of the problem>\nfix: <suggested fix>"
 })
 ```
 
@@ -95,6 +95,7 @@ Do NOT write to `.code-review/reviewer-1-results.md` in team mode.
 - **Suggested Fix**: <fix>
 - **Priority**: High
 - **Confidence**: 90
+- **Confidence rationale**: Traced all 3 callers of `validate_token` in `auth/middleware.go`; none guard against an empty token, and the function dereferences `tok[0]` unconditionally.
 ```
 
 ## Priority and Confidence
@@ -111,5 +112,13 @@ Every finding carries two orthogonal scores.
 **Confidence (0–100)** — epistemic only: how sure are you the finding is *correct* — that the code does what you claim and no unseen caller/config invalidates your analysis. Confidence is NOT how likely the bug is to trigger, and NOT how bad it would be; those are priority. A rare-but-certain bug is high confidence, low priority.
 
 **Threshold: ≥ 75.** Higher than single-pass reviewers because multi-review fans findings out across five parallel agents — noise multiplies, so each reviewer filters hard before sending to the coordinator.
+
+**Confidence rationale (required).** Every finding must include a one-to-three-sentence rationale stating *the specific evidence behind the score* — a file/function/line you traced, a caller you checked, a test you ran, a config you confirmed — and, for scores below 100, the specific assumption you couldn't verify. Reject your own draft if it could be pasted onto another finding without changing meaning. Generic phrases like "based on code analysis," "standard pattern," "clear bug," or "follows best practices" do not count.
+
+Good: "Traced all 3 callers of `validate_token` in `auth/middleware.go`; none guard against an empty token, and the function dereferences `tok[0]` unconditionally."
+
+Good: "85 because the loop in `worker.go:120` will deadlock if `cancel()` fires after `wg.Wait()` returns, but I did not verify the actual ordering under the runtime scheduler."
+
+Bad: "Based on review of the code." / "Standard off-by-one error." / "High confidence — clear logic error."
 
 In team mode, findings are sent directly to the team lead who handles deduplication and ticket creation. In file mode, output is read by the review-coordinator.

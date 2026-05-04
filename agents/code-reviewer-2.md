@@ -58,7 +58,7 @@ Send each finding (confidence ≥ 75) to the team lead as you find it — do not
 ```
 SendMessage({
   to: "team-lead",
-  message: "FINDING\nreviewer: perf\npriority: <critical|high|medium|low>\nconfidence: <0-100>\nfile: <path/to/file>\nlines: <e.g. 105-130>\ntitle: <concise issue title>\ndescription: <clear description of the problem>\nfix: <suggested fix>"
+  message: "FINDING\nreviewer: perf\npriority: <critical|high|medium|low>\nconfidence: <0-100>\nconfidence_rationale: <one to three sentences citing specific evidence — see rubric below>\nfile: <path/to/file>\nlines: <e.g. 105-130>\ntitle: <concise issue title>\ndescription: <clear description of the problem>\nfix: <suggested fix>"
 })
 ```
 
@@ -86,6 +86,7 @@ Do NOT write to `.code-review/reviewer-2-results.md` in team mode.
 - **Suggested Fix**: <fix>
 - **Priority**: High
 - **Confidence**: 85
+- **Confidence rationale**: The N+1 fires inside the request loop in `views/orders.py:108`; counted 1 query for orders + 1 per order in the test against a 50-row fixture, yielding 51 queries. Did not check whether SQLAlchemy's `selectinload` is configured at the model level upstream.
 ```
 
 ## Priority and Confidence
@@ -102,5 +103,13 @@ Every finding carries two orthogonal scores.
 **Confidence (0–100)** — epistemic only: how sure are you the finding is *correct* — that your analysis of the hot path, complexity, or resource use holds and no unseen caller/config invalidates it. Confidence is NOT how likely the issue is to trigger at current scale, and NOT how bad it would be; those are priority. A rare-but-certain regression is high confidence, low priority.
 
 **Threshold: ≥ 75.** Higher than single-pass reviewers because multi-review fans findings out across five parallel agents — noise multiplies, so each reviewer filters hard before sending to the coordinator.
+
+**Confidence rationale (required).** Every finding must include a one-to-three-sentence rationale stating *the specific evidence behind the score* — a file/function/line you traced, a caller you checked, complexity you computed, a benchmark you ran, a config you confirmed — and, for scores below 100, the specific assumption you couldn't verify. Reject your own draft if it could be pasted onto another finding without changing meaning. Generic phrases like "based on code analysis," "standard pattern," "clear hot path," or "follows best practices" do not count.
+
+Good: "The N+1 fires inside the request loop in `views/orders.py:108`; counted 1 query for orders + 1 per order in the test against a 50-row fixture, yielding 51 queries. Did not check whether SQLAlchemy's `selectinload` is configured at the model level upstream."
+
+Good: "85 because the loop is O(n²) over `users` and the production fixture I sampled had n≈10k, but I did not measure wall-clock time."
+
+Bad: "Based on review of the code." / "Standard N+1 pattern." / "High confidence — clear inefficiency."
 
 In team mode, findings are sent directly to the team lead who handles deduplication and ticket creation. In file mode, output is read by the review-coordinator.

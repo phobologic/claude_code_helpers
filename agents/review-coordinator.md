@@ -38,6 +38,8 @@ tk add-note <low-confidence-id> "Filtered: confidence below threshold (75)"
 ```
 Count these as low-confidence filtered items for the summary.
 
+Also check each surviving ticket for a `**Confidence rationale**:` field. If it's missing, or the rationale is generic (e.g. "based on code analysis," "standard pattern," "clear bug," "follows best practices" — anything that could be pasted onto any other finding without changing meaning), close the ticket with a note: `Filtered: missing or generic confidence rationale`. Count these alongside the low-confidence filtered items.
+
 4. Also check the epic's notes for any "reviewer:X filtered N findings" messages from the individual reviewers. Sum these up for the total filtered count.
 
 5. Identify duplicates among the remaining tickets: two tickets are duplicates if they refer to the same underlying problem, even if described differently by different reviewers. Compare file paths, line ranges, and the core issue described.
@@ -90,7 +92,7 @@ Use tk's native IDs, priority field, and reviewer labels. Do NOT use the `CRIT-S
 
 3. Combine all feedback into a single, well-organized report
 
-4. **Confidence filtering**: For each finding, check if it has a `**Confidence**:` field. Drop any finding with confidence < 75 and count them for the summary. If no confidence field is present, include the finding.
+4. **Confidence filtering**: For each finding, check if it has a `**Confidence**:` field. Drop any finding with confidence < 75 and count them for the summary. If no confidence field is present, include the finding. Also drop findings whose `**Confidence rationale**` is missing or generic (e.g. "based on code analysis," "standard pattern," "clear bug," "follows best practices" — anything that could be pasted onto any other finding without changing meaning). Count these alongside the low-confidence drops.
 
 5. Organize the remaining findings into categories based on priority:
    - **Critical Issues** (must be fixed immediately)

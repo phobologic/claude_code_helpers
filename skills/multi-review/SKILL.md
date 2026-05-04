@@ -91,7 +91,7 @@ This is your main loop. Track how many DONE messages you've received (target: 4)
 
 ### When you receive a finding from any reviewer:
 
-Findings arrive as plain-text messages starting with `FINDING`. Parse the `key: value` lines to extract: `title`, `file`, `lines`, `description`, `fix`, `priority`, `confidence`, `reviewer`. (If a reviewer still emits `severity:`, treat it as a synonym for `priority:`.)
+Findings arrive as plain-text messages starting with `FINDING`. Parse the `key: value` lines to extract: `title`, `file`, `lines`, `description`, `fix`, `priority`, `confidence`, `confidence_rationale`, `reviewer`. (If a reviewer still emits `severity:`, treat it as a synonym for `priority:`. If `confidence_rationale` is missing or generic — "based on code analysis," "standard pattern," "clear bug," anything that could be pasted onto any other finding — ask the reviewer to resend with a specific rationale before creating the ticket.)
 
 **Check for duplicates before acting:**
 
@@ -114,7 +114,8 @@ Findings arrive as plain-text messages starting with `FINDING`. Parse the `key: 
     -d "**Files**: <file>:<lines>
   **Description**: <description>
   **Suggested Fix**: <fix>
-  **Confidence**: <confidence>"
+  **Confidence**: <confidence>
+  **Confidence rationale**: <confidence_rationale>"
   ```
   Priority mapping: `critical` → `-p 0`, `high` → `-p 1`, `medium` → `-p 2`, `low` → `-p 3`
 
@@ -201,6 +202,7 @@ Analyzed X files. Found N issues across Y reviewers.
 - **Description**: <description>
 - **Suggested Fix**: <fix>
 - **Confidence**: <score>
+- **Confidence rationale**: <one to three sentences citing specific evidence — file/caller/test/config — see reviewer agents for the rubric>
 
 ## High Priority Issues
 ...
