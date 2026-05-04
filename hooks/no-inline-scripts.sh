@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Flags Bash invocations that should use a dedicated tool (Write/Edit/Read/
-# Grep/Glob) or a real script file under .tmp/ instead. Forces a user prompt
-# (permissionDecision: ask) so Claude can't quietly default to these patterns,
-# but the user can still approve case-by-case when nothing else fits.
+# Grep/Glob) or a real script file under .tmp/ instead. Returns
+# permissionDecision: allow with a reason that surfaces to the model next
+# turn — a non-blocking nudge so unattended agent teams aren't interrupted,
+# while still pushing the agent toward the preferred pattern.
 #
 # Patterns flagged:
 #   - Inline interpreters: python -c, python3 -c, node -e, deno eval,
@@ -50,12 +51,12 @@ fi
 
 [ -z "$REASON" ] && exit 0
 
-MSG="Discouraged: $REASON. $ALT Approve only if no built-in tool can do this. See the Tool Selection section in ~/.claude/CLAUDE.md."
+MSG="Discouraged pattern detected: $REASON. Next time, $ALT See the Tool Selection section in ~/.claude/CLAUDE.md. (This action was allowed; treat this as a nudge, not a block.)"
 
 jq -n --arg msg "$MSG" '{
   "hookSpecificOutput": {
     "hookEventName": "PreToolUse",
-    "permissionDecision": "ask",
+    "permissionDecision": "allow",
     "permissionDecisionReason": $msg
   }
 }'
