@@ -67,6 +67,10 @@ no built-in tool covers), write it to `.tmp/` as a real file first, then run
 it. The file is reviewable, re-runnable, and doesn't blow up the permission
 prompt with a wall of inline code.
 
+## Privilege Escalation
+
+- **Never run `sudo`, and never write a script (shell, Python, Make target, install step, etc.) that invokes `sudo`.** This applies even when a command appears to "need" root — package installs, port binding, file permission fixes, system service management, anything. If a task seems to require elevated privileges, stop and tell the user; let them run the command themselves. No exceptions, no workarounds (no `sudo -n`, no `pkexec`, no `doas`, no writing a wrapper that the user is "supposed to" run with sudo).
+
 ## Git Safety
 
 - **Never run `git push`**. The user will push manually.
