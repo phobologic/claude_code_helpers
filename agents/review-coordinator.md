@@ -38,7 +38,7 @@ tk add-note <low-confidence-id> "Filtered: confidence below threshold (75)"
 ```
 Count these as low-confidence filtered items for the summary.
 
-Also check each surviving ticket for a `**Confidence rationale**:` field. If it's missing, or the rationale is generic (e.g. "based on code analysis," "standard pattern," "clear bug," "follows best practices" — anything that could be pasted onto any other finding without changing meaning), close the ticket with a note: `Filtered: missing or generic confidence rationale`. Count these alongside the low-confidence filtered items.
+Also check each surviving ticket for a `**Confidence rationale**:` field. If it's missing, or the rationale is generic (e.g. "based on code analysis," "standard pattern," "clear bug," "follows best practices" — anything that could be pasted onto any other finding without changing meaning), close the ticket with a note: `Filtered: missing or generic confidence rationale`. Track these as a **separate** count from the low-confidence drops — they reflect different reviewer failure modes (overconfidence vs. unjustified claims) and the user wants to see them broken out.
 
 4. Also check the epic's notes for any "reviewer:X filtered N findings" messages from the individual reviewers. Sum these up for the total filtered count.
 
@@ -65,6 +65,7 @@ Analyzed X files. Found:
 - N P3 (Low) issues
 - N duplicates identified and linked
 - N low-confidence findings filtered (below threshold 75)
+- N findings filtered (missing or generic confidence rationale)
 
 ### P0 - Critical Issues
 - **<tk-id>** [reviewer:label] <title> — <file>:<lines>
@@ -92,7 +93,7 @@ Use tk's native IDs, priority field, and reviewer labels. Do NOT use the `CRIT-S
 
 3. Combine all feedback into a single, well-organized report
 
-4. **Confidence filtering**: For each finding, check if it has a `**Confidence**:` field. Drop any finding with confidence < 75 and count them for the summary. If no confidence field is present, include the finding. Also drop findings whose `**Confidence rationale**` is missing or generic (e.g. "based on code analysis," "standard pattern," "clear bug," "follows best practices" — anything that could be pasted onto any other finding without changing meaning). Count these alongside the low-confidence drops.
+4. **Confidence filtering**: For each finding, check if it has a `**Confidence**:` field. Drop any finding with confidence < 75 and count them for the summary. If no confidence field is present, include the finding. Also drop findings whose `**Confidence rationale**` is missing or generic (e.g. "based on code analysis," "standard pattern," "clear bug," "follows best practices" — anything that could be pasted onto any other finding without changing meaning). Track these as a **separate** count from the low-confidence drops; the overview reports both.
 
 5. Organize the remaining findings into categories based on priority:
    - **Critical Issues** (must be fixed immediately)
@@ -115,7 +116,7 @@ Use tk's native IDs, priority field, and reviewer labels. Do NOT use the `CRIT-S
 
 7. Format the report in Markdown for readability
 
-8. Include a high-level summary at the top of the report that includes the count of low-confidence findings filtered
+8. Include a high-level summary at the top of the report that lists, separately, the count of low-confidence findings filtered and the count of findings filtered for missing or generic confidence rationale
 
 9. Write the final report to `.code-review/final-report.md`
 
@@ -136,6 +137,7 @@ This review analyzed uncommitted changes across X files with Y lines of code. Fo
 - 5 Medium priority suggestions
 - 4 Low priority enhancements
 - 6 low-confidence findings filtered (below threshold 75)
+- 2 findings filtered (missing or generic confidence rationale)
 
 ## Critical Issues
 
