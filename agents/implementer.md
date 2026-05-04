@@ -121,7 +121,31 @@ pass. Skipping it is how regressions sneak through.
    reworking. Rework fixes routinely violate a previously-passing AC (e.g.
    narrowing a toast to be conditional when the AC says "always"). Walk the
    full AC list and confirm each still holds against your current code.
-4. **On rework rounds, write a rework note on the ticket** before signaling
+4. **For renames, removals, or path changes — sweep all symbol variants.**
+   When the ticket renames or removes a symbol, file path, or token, the
+   final grep set must return zero matches across the project (excluding
+   matches you've explicitly chosen to preserve and named in the commit
+   message). Sweep **all delimiter and case variants**, not just the form
+   in the ticket title:
+   - dotted vs. underscored vs. dashed: `posts.log`, `posts_log`, `posts-log`
+   - case forms: `postsLog`, `PostsLog`, `POSTS_LOG`
+   - filename forms: `posts_log.md`, `posts-log.md`, `postsLog.ts`
+   - import/reference forms: `from .posts_log`, `require('posts.log')`
+   Run the grep, paste the (empty) result into your DONE message. A
+   non-empty result that you intend to keep must be justified per match.
+5. **Verify the commit landed.** Before signaling DONE, confirm your work
+   is committed, not just staged:
+   ```bash
+   git rev-list <base-branch>..HEAD --count   # must be ≥ 1
+   git status --porcelain                      # must be empty
+   git log -1 --oneline                        # capture the SHA
+   ```
+   Where `<base-branch>` is `epic/<epic-id>` for `/run-epic-dag`,
+   `fix/batch-<stamp>` for `/fix-tickets-dag`, or `main` otherwise.
+   Include the SHA from `git log -1` in your DONE SendMessage. If
+   `rev-list` returns 0 or `status` is non-empty, your "implementation"
+   is staged but uncommitted — fix that *before* signaling DONE.
+6. **On rework rounds, write a rework note on the ticket** before signaling
    DONE. This gives the next AC verifier and quality reviewer durable context
    on what changed:
    ```bash
@@ -154,7 +178,7 @@ Once the pre-DONE checklist passes and changes are committed, send DONE:
 ```
 SendMessage({
   to: "team-lead",
-  message: "Ticket <ticket-id> implemented and committed on branch <branch-name>."
+  message: "Ticket <ticket-id> implemented and committed on branch <branch-name> (HEAD <sha>)."
 })
 ```
 

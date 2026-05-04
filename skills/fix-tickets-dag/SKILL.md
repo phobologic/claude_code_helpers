@@ -191,6 +191,14 @@ For each file with 2+ tickets, the warning recommends one of:
 - Bundle into one ticket and re-run (cleanest, more user effort)
 - Proceed and accept the merge-conflict rework cycle (fine if rare)
 
+**Auto-fix file-overlap pairs.** For each unsequenced overlap, propose a
+`tk dep <later> <earlier>` edge in the warnings section and ask the user
+once: *"Inject these dep edges before dispatch? [Y/n]"*. Default Yes. On
+Yes, run the `tk dep` calls and re-print the dep graph. On No, proceed
+with the warning standing. Do **not** silently proceed without
+confirmation — file-overlap on `/multi-review` batches is the most common
+cause of rebase thrash in DAG runs.
+
 ### Startup summary
 
 Present a summary to the user:
@@ -743,6 +751,16 @@ a REWORK message:
 
 Call `dispatch_ready_tickets()` whenever a slot is freed (post-CLOSED)
 and after the initial Phase 2 worktree-OK confirmation.
+
+> **Dispatch invariant — gate on parent CLOSED, not parent DONE.**
+> A child ticket is eligible for dispatch only after every blocker has
+> reached `CLOSED` (merged into `fix/batch-<stamp>` *and* `tk close`'d).
+> DONE and "QR clean" are **not** sufficient — the parent's commits must
+> be on the integration branch before the child forks, otherwise the child
+> branches off a stale base and conflicts at merge time. **Never** dispatch
+> based on a teammate's DONE message in the same turn that you saw it;
+> always re-query `tk ready` *after* the CLEAN handler completes
+> (`MERGING → tk close → CLOSED`).
 
 ```
 procedure dispatch_ready_tickets():

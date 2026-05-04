@@ -160,8 +160,17 @@ tk query --epic <epic-id> '.status != "closed"' \
 # and report any path that appears in 2+ tickets that aren't in a dep relationship.
 ```
 
-Print warnings inline with the startup summary as a `### Warnings` section. Do
-not abort — the user may have intentionally accepted these tradeoffs.
+Print warnings inline with the startup summary as a `### Warnings` section.
+
+**Auto-fix file-overlap pairs.** For each unsequenced overlap pair the
+pre-check finds, propose a `tk dep <later> <earlier>` edge in the warnings
+section (pick the order from the spec's intended sequence — usually the
+lower-numbered ticket goes first). Ask the user once: *"Inject these dep
+edges before dispatch? [Y/n]"*. Default Yes. On Yes, run the `tk dep` calls
+and re-print the dep graph. On No, proceed with the warning standing — the
+user has accepted the rework risk. Do **not** silently proceed without
+confirmation; unsequenced file-overlap is the most common cause of merge-
+conflict thrash in DAG runs (multiple rebases per ticket).
 
 ### Startup summary
 
@@ -848,6 +857,17 @@ REWORK message:
 Call `dispatch_ready_tickets()` whenever a slot is freed (post-CLOSED) and
 after the initial Phase 2 worktree-OK confirmation. This procedure is also
 the entry point called by the CLEAN handler (merge protocol) after each `tk close`.
+
+> **Dispatch invariant — gate on parent CLOSED, not parent DONE.**
+> A child ticket is eligible for dispatch only after every blocker has reached
+> `CLOSED` (merged into `epic/<epic-id>` *and* `tk close`'d). DONE,
+> AC-PASS, and "QR clean" are **not** sufficient — the parent's commits must
+> be on `epic/<epic-id>` before the child forks its branch, otherwise the
+> child branches off a stale base and conflicts at merge time. The
+> `tk ready` query enforces this in principle, but **never** dispatch
+> based on a teammate's DONE/AC-PASS message in the same turn that you saw
+> it. Always re-query `tk ready` *after* the CLEAN handler completes
+> (`MERGING → tk close → CLOSED`).
 
 ```
 procedure dispatch_ready_tickets():
