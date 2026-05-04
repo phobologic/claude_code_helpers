@@ -7,13 +7,13 @@ language plugins, tool rules, and working style rules for `~/.claude/`.
 
 | Directory / File | Purpose |
 |-----------------|---------|
-| `skills/` | Global skills: `/spec`, `/run-epic`, `/fix-tickets`, `/review`, `/multi-review`, `/implement-ticket`, `/design-sprint`, `/playwright-explore`, `/epic-tree`, `/ticket-triage`, `/setup-python-project`, `/setup-js-project`, `/use-railway`, `/use-sqlalchemy`, `/migrate-beads` |
-| `agents/` | Sub-agents: 4 ticket-execution agents (implementer, ac-verifier, quality-reviewer, spec-critic) + 5 code review agents + code-critic (adversarial single-pass reviewer) |
+| `skills/` | Global skills: `/spec`, `/run-epic`, `/run-epic-dag`, `/fix-tickets`, `/fix-tickets-dag`, `/wrap-epic`, `/review`, `/multi-review`, `/implement-ticket`, `/design-sprint`, `/playwright-explore`, `/epic-tree`, `/ticket-triage`, `/team-status`, `/setup-python-project`, `/setup-js-project`, `/setup-go-project`, `/use-railway`, `/use-sqlalchemy`, `/load-shared-rule` |
+| `agents/` | Sub-agents: ticket-execution (implementer, ac-verifier, quality-reviewer, spec-critic), design-sprint (design-designer, design-evaluator), 5 code review agents, and code-critic (adversarial single-pass reviewer) |
 | `languages/` | Per-language Claude Code plugins (Go, Python, JS/SvelteKit) — auto-formatting hooks + coding rules |
 | `plugins/` | General-purpose Claude Code plugins — workflow automation and tool integrations |
 | `tools/` | Per-tool rule files (Railway, SQLAlchemy) — loaded via `.claude/rules/` symlinks |
 | `bin/` | Utility scripts: tk plugins (`tk-show-multi`, `tk-epic-status`, `tk-triage`, `tk-set`) and `git-auto-commit.sh` |
-| `hooks/` | Global Claude Code hooks (e.g. `no-inline-scripts.sh` — flags inline-interpreter and heredoc-to-file Bash patterns for user approval) |
+| `hooks/` | Global Claude Code hooks (e.g. `no-inline-scripts.sh` — flags inline-interpreter and heredoc-to-file Bash patterns as a non-blocking, in-context nudge toward Write/Edit) |
 | `CLAUDE.global.md` | Global CLAUDE.md with personal working style rules |
 | `settings.global.json` | Global Claude Code settings — env, permissions, hooks, statusLine |
 | `install.sh` | Sets up `~/.claude/` symlinks from scratch |
@@ -73,11 +73,13 @@ are available globally:
 | `/playwright-explore <url> [scenario:<name>] [roles:…] [time:…] [-- scenario]` | Spawn simulated users to explore a running app and file `tk` tickets |
 | `/epic-tree [--all] [epic-id ...]` | Show a tree of epics with open/closed ticket counts per level |
 | `/wrap-epic [epic-id]` | Ship a finished `/run-epic` or `/fix-tickets`: merge, prune worktrees, close epic, report what's left |
+| `/team-status [epic-id]` | Read-only status snapshot for an in-flight `/run-epic`, `/fix-tickets`, or DAG variant |
 | `/setup-python-project [name]` | Scaffold a new Python project with uv, ruff, pytest, and GitHub Actions CI |
 | `/setup-js-project [name]` | Scaffold a new SvelteKit project with Biome, Prettier, Vitest, and GitHub Actions CI |
+| `/setup-go-project [name]` | Scaffold a new Go project with Makefile, golangci-lint, GitHub Actions CI, and two-layer git hooks |
 | `/use-railway` | Symlink Railway CLI rules into the current project |
 | `/use-sqlalchemy` | Symlink SQLAlchemy/Alembic rules into the current project |
-| `/migrate-beads` | Migrate a project's issue tracking from `bd` (beads) to `tk` |
+| `/load-shared-rule <name>` | Wire a shared opt-in rule from `~/.claude/optional_rules/` into the current project's `.claude/rules/` |
 | `/ticket-triage` | Filter, sort, and review open tickets — use instead of inline Python/jq |
 
 ## Common Workflows
@@ -153,6 +155,15 @@ Each implemented ticket goes through a validation loop before merging:
 4. **Team lead** (`/run-epic`) merges clean tickets, routes failures back
 
 When all tickets pass, the integration branch is ready for `/multi-review` before merging to main.
+
+### Experimental DAG variants
+
+`/run-epic-dag` and `/fix-tickets-dag` are continuous-dispatch variants of `/run-epic`
+and `/fix-tickets`. They spawn a fixed agent pool at startup (up to 4 implementers,
+2 quality reviewers, and — for `/run-epic-dag` — 1 AC verifier) and dispatch tickets
+as soon as their dependencies clear, without wave boundaries. Pool size is right-sized
+to the open ticket count, so a single-ticket run gets 1 + 1 (+ 1). File issues in this
+repo for problems encountered during real-world use.
 
 ### Setting up agent teams in Claude Code
 
