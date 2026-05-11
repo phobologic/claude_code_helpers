@@ -14,9 +14,27 @@ WORKTREE_NAME="${1:?Usage: worktree-init <name> [repo-root] [branch]}"
 REPO_ROOT="${2:-$(git rev-parse --show-toplevel)}"
 BRANCH="${3:-}"
 
+# Canonicalize REPO_ROOT up front so all downstream paths share one prefix.
+# Without this, macOS's /tmp -> /private/tmp symlink causes inconsistent
+# resolution between REPO_ROOT and dirname(WORKTREE_PATH).
+REPO_ROOT=$(cd "$REPO_ROOT" && pwd -P)
 cd "$REPO_ROOT"
 
 WORKTREE_PATH="$REPO_ROOT/.worktrees/$WORKTREE_NAME"
+
+# Guard: refuse to operate on the main repo itself.
+# WORKTREE_PATH must be strictly under $REPO_ROOT/.worktrees/. Any computed
+# path that resolves to REPO_ROOT (e.g. WORKTREE_NAME="..") would cause the
+# .worktreelinks step below to clobber real files in the main repo with
+# self-referential symlinks. The .worktrees parent may not exist yet, so
+# canonicalize what we can (REPO_ROOT) and resolve "/.." manually for the
+# tail.
+case "$WORKTREE_NAME" in
+  ''|.|..|*/*|*..*)
+    echo "worktree-init: refusing — WORKTREE_NAME='$WORKTREE_NAME' is unsafe (must be a single path component, not empty/./../containing slashes or '..')" >&2
+    exit 1
+    ;;
+esac
 
 if [[ -d "$WORKTREE_PATH" ]]; then
   echo "worktree-init: $WORKTREE_PATH already exists, skipping" >&2
@@ -52,6 +70,31 @@ if [[ -f "$REPO_ROOT/.worktreelinks" ]]; then
     dst="$WORKTREE_PATH/$entry"
     [[ -e "$src" ]] || mkdir -p "$src"
     mkdir -p "$(dirname "$dst")"
+
+    # Per-entry sanity: reject entries with ".." segments. The outer
+    # WORKTREE_NAME guard already prevents the dst path from escaping
+    # $REPO_ROOT/.worktrees/<name>/, but a malicious or buggy .worktreelinks
+    # entry could still write outside that subtree.
+    case "$entry" in
+      *..*)
+        echo "worktree-init: refusing to link entry '$entry' — contains '..'" >&2
+        exit 1
+        ;;
+    esac
+
+    # Refuse to clobber an existing real (non-symlink) file at dst — that
+    # would silently destroy local state. Existing symlinks are fine to
+    # replace (idempotent re-link).
+    if [[ -e "$dst" && ! -L "$dst" ]]; then
+      if [[ -f "$dst" ]]; then
+        echo "worktree-init: refusing to replace existing real file $dst with a symlink (move/remove it first)" >&2
+        exit 1
+      fi
+      # Existing real directory at dst — leave it alone and warn.
+      echo "worktree-init: skipping $entry — a real directory already exists at $dst" >&2
+      continue
+    fi
+
     ln -sfn "$src" "$dst"
     echo "worktree-init: linked $entry" >&2
   done < "$REPO_ROOT/.worktreelinks"
