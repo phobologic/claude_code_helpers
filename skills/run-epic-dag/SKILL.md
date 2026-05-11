@@ -909,6 +909,29 @@ Run this after every ticket CLOSED transition, before freeing the slot.
 `<completed-id>` is the ticket just closed; `<worktree>` is `agent_pool[S].worktree`.
 
 ```bash
+# 0. SAFETY GUARD — verify <worktree> is a real linked worktree under
+#    $REPO_ROOT/.worktrees/ before running any destructive command. A bug
+#    that ever left <worktree> equal to $REPO_ROOT (or any other path
+#    outside .worktrees/) would cause the `git clean -fd` in step 3 to
+#    delete real local files and worktree-init in step 6 to recreate
+#    them as broken symlinks. Abort the reset entirely on any mismatch.
+WT_REAL=$(cd "<worktree>" && pwd -P)
+RR_REAL=$(cd "$REPO_ROOT" && pwd -P)
+case "$WT_REAL" in
+  "$RR_REAL/.worktrees/"*) ;;
+  *)
+    echo "reset: ABORT — <worktree>='$WT_REAL' is not under '$RR_REAL/.worktrees/'" >&2
+    exit 1
+    ;;
+esac
+# Linked worktrees have .git as a FILE (gitdir pointer); the main repo has
+# .git as a DIRECTORY. If <worktree>/.git is a directory, we're pointed at
+# the main repo — abort.
+if [[ -d "$WT_REAL/.git" ]]; then
+  echo "reset: ABORT — <worktree>='$WT_REAL' looks like the main repo (.git is a directory, not a gitdir file)" >&2
+  exit 1
+fi
+
 # 1. Detach HEAD pointed at the integration branch.
 #    `--detach` is essential: a regular checkout would pin epic/<epic-id>
 #    to this worktree, and the next CLEAN handler's main-repo merge step
