@@ -57,13 +57,27 @@ WORKTREELINKS="$MAIN_REPO_ROOT/.worktreelinks"
 
 while IFS= read -r entry || [[ -n "$entry" ]]; do
   [[ -z "$entry" || "$entry" =~ ^# ]] && continue
-  entry="${entry%/}"  # strip trailing slash
+
+  # Entry shape determines behavior when src is missing:
+  #   "path/"  → directory; auto-mkdir in the main repo if missing
+  #   "path"   → file; skip with warning if missing (mkdir-ing would create
+  #              a directory where a file is expected, breaking downstream
+  #              tools that read it as a file)
+  is_dir_entry=0
+  [[ "$entry" == */ ]] && is_dir_entry=1
+  entry="${entry%/}"
 
   src="$MAIN_REPO_ROOT/$entry"
   dst="$REPO_ROOT/$entry"
 
-  # Ensure the source exists in the main repo
-  [[ -e "$src" ]] || mkdir -p "$src"
+  if [[ ! -e "$src" ]]; then
+    if (( is_dir_entry )); then
+      mkdir -p "$src"
+    else
+      echo "claude-worktree: skipping $entry — source does not exist in main repo (add a trailing slash in .worktreelinks if this should be a directory)"
+      continue
+    fi
+  fi
 
   # Already correctly symlinked — skip
   [[ -L "$dst" ]] && continue

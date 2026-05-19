@@ -47,14 +47,28 @@ if [[ -f "$CWD/.worktreeinclude" ]]; then
 fi
 
 # .worktreelinks — symlink paths back to the main repo (shared state)
+#
+# Entry shape determines behavior when src is missing:
+#   "path/"  → directory; auto-mkdir in the main repo if missing
+#   "path"   → file; skip with warning if missing (we can't seed content,
+#              and mkdir-ing would create a directory where a file is
+#              expected, breaking downstream tools that read it as a file)
 if [[ -f "$CWD/.worktreelinks" ]]; then
   while IFS= read -r entry || [[ -n "$entry" ]]; do
     [[ -z "$entry" || "$entry" =~ ^# ]] && continue
-    entry="${entry%/}"  # strip trailing slash
+    is_dir_entry=0
+    [[ "$entry" == */ ]] && is_dir_entry=1
+    entry="${entry%/}"
     src="$CWD/$entry"
     dst="$WORKTREE_PATH/$entry"
-    # Ensure the source exists in the main repo before linking
-    [[ -e "$src" ]] || mkdir -p "$src"
+    if [[ ! -e "$src" ]]; then
+      if (( is_dir_entry )); then
+        mkdir -p "$src"
+      else
+        echo "claude-worktree: skipping $entry — source does not exist in main repo (add a trailing slash in .worktreelinks if this should be a directory)" >&2
+        continue
+      fi
+    fi
     mkdir -p "$(dirname "$dst")"
     ln -sfn "$src" "$dst"
     # Warn if .gitignore only has a trailing-slash pattern — those match real
