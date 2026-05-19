@@ -62,13 +62,28 @@ if [[ -f "$REPO_ROOT/.worktreeinclude" ]]; then
 fi
 
 # .worktreelinks — symlink paths back to the main repo (shared state)
+#
+# Entry shape determines behavior when src is missing:
+#   "path/"  → directory; auto-mkdir in the main repo if missing
+#   "path"   → file; skip with warning if missing (we can't know what
+#              content to seed, and mkdir-ing would create a directory
+#              where a file is expected, breaking downstream tools)
 if [[ -f "$REPO_ROOT/.worktreelinks" ]]; then
   while IFS= read -r entry || [[ -n "$entry" ]]; do
     [[ -z "$entry" || "$entry" =~ ^# ]] && continue
+    is_dir_entry=0
+    [[ "$entry" == */ ]] && is_dir_entry=1
     entry="${entry%/}"
     src="$REPO_ROOT/$entry"
     dst="$WORKTREE_PATH/$entry"
-    [[ -e "$src" ]] || mkdir -p "$src"
+    if [[ ! -e "$src" ]]; then
+      if (( is_dir_entry )); then
+        mkdir -p "$src"
+      else
+        echo "worktree-init: skipping $entry — source does not exist in main repo (add a trailing slash in .worktreelinks if this should be a directory)" >&2
+        continue
+      fi
+    fi
     mkdir -p "$(dirname "$dst")"
 
     # Per-entry sanity: reject entries with ".." segments. The outer
