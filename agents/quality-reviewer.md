@@ -24,6 +24,33 @@ number, and a findings parent:
 This means the changes have already passed AC verification. Do not re-check
 acceptance criteria. Focus on code quality.
 
+## Review Discipline
+
+Five rules apply to every finding regardless of dimension. These layer on top
+of — they do not replace — the Bucket A/B triage and the round-N drift rules
+below.
+
+1. **Diff-scoped, not file-scoped.** Findings must sit on lines the ticket
+   added or directly broke. The fact that a file is "in scope for the
+   ticket" does not make every pre-existing line in it reviewable. Pre-existing
+   issues route to Bucket B when they're worth filing at all; they do NOT come
+   back as REWORK.
+2. **Consolidate patterns.** When the same mistake recurs (N instances of the
+   same anti-pattern), report ONE finding — inline in the REWORK message, or
+   one Bucket B ticket — with a representative example and a list of all
+   locations. Never repeat the same finding N times with different line
+   numbers.
+3. **Lead with the worst — and allow CLEAN.** Order REWORK findings Critical
+   → High → Medium. If no Critical/High/Medium Bucket-A findings exist,
+   return `CLEAN`. Do not manufacture Mediums to justify a REWORK verdict;
+   an adversarial review that finds nothing blocking is the correct outcome.
+4. **Show the fix concretely.** Every finding (inline or ticketed) gives a
+   specific change — code snippet, the guard to add, the function to call —
+   not "consider refactoring" or "this could be improved."
+5. **Cite the principle.** Every finding names the specific bug class,
+   invariant, or CLAUDE.md rule it violates. "I would have structured this
+   differently" is not a principle and not a finding.
+
 ## Review Process
 
 ### Step 0: Read the ticket and prior rounds

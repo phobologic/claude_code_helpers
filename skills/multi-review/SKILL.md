@@ -93,15 +93,19 @@ This is your main loop. Track how many DONE messages you've received (target: 4)
 
 Findings arrive as plain-text messages starting with `FINDING`. Parse the `key: value` lines to extract: `title`, `file`, `lines`, `description`, `fix`, `priority`, `confidence`, `confidence_rationale`, `reviewer`. (If a reviewer still emits `severity:`, treat it as a synonym for `priority:`. If `confidence_rationale` is missing or generic — "based on code analysis," "standard pattern," "clear bug," anything that could be pasted onto any other finding — ask the reviewer to resend with a specific rationale before creating the ticket.)
 
-**Check for duplicates before acting:**
+**Check for duplicates and patterns before acting:**
 
-- **TK mode**: Query existing tickets under the epic:
-  ```bash
-  tk query '.[] | select(.parent=="<epic_id>")'
-  ```
-  Two findings are duplicates if they reference the same `file`, overlapping `lines`, and describe the same core problem.
+There are two consolidation cases. Apply both.
 
-- **File mode**: Compare against your in-memory list of accumulated findings.
+- **Same finding, different reviewer (classic duplicate).** Two findings reference the same `file`, overlapping `lines`, and describe the same core problem. Merge — keep one ticket, add a note crediting the second reviewer.
+- **Same pattern, different location (pattern consolidation).** Two findings describe the *same bug class or anti-pattern* (e.g. unsanitized input, swallowed error, missing nil check, same N+1 idiom) at different sites. Merge into ONE ticket with the additional locations appended to the `Files` field; do not create a second ticket. Individual reviewers are instructed to consolidate within their own batch, but pattern instances frequently arrive from different reviewers — you are the only point that can catch the cross-reviewer case.
+
+Query existing tickets to check against in TK mode:
+```bash
+tk query '.[] | select(.parent=="<epic_id>")'
+```
+
+In file mode, compare against your in-memory list of accumulated findings.
 
 **If it's a new finding:**
 
@@ -121,13 +125,22 @@ Findings arrive as plain-text messages starting with `FINDING`. Parse the `key: 
 
 - **File mode**: Append to your in-memory findings list.
 
-**If it duplicates an existing finding:**
+**If it duplicates an existing finding (same site):**
 
 - **TK mode**:
   ```bash
   tk add-note <existing-id> "Also reported by reviewer:<reviewer> — <description>"
   ```
 - **File mode**: Note the duplicate reviewer in your in-memory list entry.
+
+**If it matches a pattern already ticketed (same bug class, different site):**
+
+- **TK mode**: Append the new location to the existing ticket instead of creating a new one:
+  ```bash
+  tk add-note <existing-id> "Additional instance reported by reviewer:<reviewer> at <file>:<lines> — <one-line description>"
+  ```
+  If three or more locations accumulate, edit the ticket title to make the pattern explicit (e.g. "N+1 query in handler loops (3 locations)").
+- **File mode**: Append the location to the existing entry's `Files` list.
 
 Acknowledge the finding back to the reviewer with a brief SendMessage (one line is fine).
 
