@@ -348,12 +348,17 @@ For each ticket assignment:
    from the latest integration state:
    \`git show-ref --verify --quiet refs/heads/ticket/<ticket-id> && git checkout ticket/<ticket-id> || git checkout -b ticket/<ticket-id> epic/<epic-id>\`
 2. Run \`tk show <ticket-id>\` for full context
-3. Send STATUS to team lead: 'STATUS dag-impl-<N>: read <ticket-id>, starting implementation'
-4. Implement the fix
-5. Send STATUS to team lead: 'STATUS dag-impl-<N>: implementation done on <ticket-id>, running tests'
-6. Run tests from your worktree
-7. Commit to ticket/<ticket-id>
-8. Message the team lead: DONE <ticket-id> ticket/<ticket-id>
+3. Implement the ticket and run tests from your worktree in this same turn.
+   Do NOT send intermediate STATUS messages — \`SendMessage\` ends your turn,
+   and the team lead has to nudge you to resume, costing wall-clock time and a
+   prompt-cache window per ticket. The team lead already knows you are working
+   (ticket state = DISPATCHED) and can read your worktree directly if it needs
+   to check progress.
+4. Commit to ticket/<ticket-id>
+5. Only after the commit lands, message the team lead:
+   \`DONE <ticket-id> ticket/<ticket-id>\`
+   Include a one-paragraph summary of files changed and test results in the
+   same message body.
 
 Then wait for your next assignment. When you receive a message with
 `type: \"shutdown_request\"`, send back via SendMessage:
