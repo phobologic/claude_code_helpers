@@ -201,6 +201,11 @@ tk create "<concise issue title>" \
 **Source ticket**: <ticket-id>
 **Description**: <description>
 **Suggested Fix**: <fix>
+**Acceptance Criteria**:
+- WHEN <trigger> THEN <expected behavior>
+- A regression test exists that exercises <specific case>
+- The fix does NOT touch <file/function/area> — out of scope for this finding
+- <Behavior that must remain unchanged>
 **Confidence**: <score>
 **Confidence rationale**: <one to three sentences citing specific evidence — see rubric below>"
 ```
@@ -217,9 +222,26 @@ tk add-note "$FINDING_ID" "$(cat << 'EOF'
 **Source ticket**: <ticket-id>
 **Description**: <detailed description>
 **Suggested Fix**: <fix with code example>
+**Acceptance Criteria**:
+- WHEN <trigger> THEN <expected behavior>
+- A regression test exists that exercises <specific case>
+- The fix does NOT touch <file/function/area> — out of scope for this finding
+- <Behavior that must remain unchanged>
 EOF
 )"
 ```
+
+**Acceptance Criteria guidance.** Every finding ticket gets ACs, including
+Lows — for consistency, and so any of these tickets can later be routed
+through `/run-epic-dag` and pick up the AC-verifier gate. Keep them narrow:
+state the *minimum* observable behavior change that resolves the issue,
+plus the regression test that proves it. Then **state what is out of
+scope** — files the implementer should not touch, refactors that are
+tempting but unrelated, behavior that must be preserved. The goal is to
+keep the fix surgical: this is a bug repair, not an opportunity to clean
+up the neighborhood. For Lows where the AC is mechanically obvious (e.g.
+"WHEN reading `foo.py` THEN variable is named `bar`"), write it anyway —
+the ceremony is cheap and the consistency is worth it.
 
 ### Step 4.5: Record the round verdict on the source ticket
 
