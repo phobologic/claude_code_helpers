@@ -74,6 +74,7 @@ prompt with a wall of inline code.
 ## Git Safety
 
 - **Never run `git push`**. The user will push manually.
+- **Don't use `git -C <path>` when you're already inside the target worktree** — including from a subdirectory of it. If you've `cd`'d into a subdir for another command (e.g. `npm` in `frontend/`), translate paths to cwd-relative or `cd` back to the worktree root before running git. Only use `-C` when operating on a *different* worktree than the current one (e.g. a team-lead orchestrator reaching into an implementer's worktree).
 
 ## Scratch Files
 
