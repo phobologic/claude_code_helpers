@@ -234,7 +234,12 @@ Phases 2 and 3 can be picked up simultaneously after Phase 1 ships.
 ```
 
 Phase headers must declare a shape: `[FOUNDATIONAL]`, `[SLICES]`, or `[INTEGRATION]`.
-This is what makes the parallelism visible to the user and to `/run-epic-dag`.
+This is what makes the parallelism visible to the user when reviewing the plan. The
+phase structure is a **planning lens only** -- at ticket-creation time (Phase 6) all
+tasks are emitted into a single flat execution sub-epic so `/run-epic-dag` can dispatch
+them by per-ticket deps without phase-boundary waves. Phase membership is preserved on
+each task via tags (`phase-1`, `foundational`/`slice`/`integration`) so a phase can still
+be filtered out for demo or partial shipment.
 
 ### Acceptance criteria format (EARS)
 
@@ -384,8 +389,10 @@ Present the plan to the user. Include context about the adversarial review:
 
 ## Phase 6 -- Ticket creation
 
-Once the user approves, create all tickets. Work methodically through the hierarchy,
-**capturing every ID immediately** after creation.
+Once the user approves, create all tickets. The hierarchy is **flat for execution**:
+a top-level epic (the planning view), a single execution sub-epic, and all task tickets
+as children of the execution sub-epic. Phase membership lives on each task as tags, not
+as a sub-epic boundary. Capture every ID immediately after creation.
 
 ### Step 6.1: Top-level epic
 
@@ -395,28 +402,33 @@ Print: `"Creating top-level epic..."`
 TOP=$(tk create "<Feature / Project Name>" -t epic -p 2 -d "<goal sentence from the plan>")
 ```
 
-### Step 6.2: Phase epics (one per phase, --parent $TOP)
+### Step 6.2: Execution sub-epic (flat container)
 
-Print: `"Creating phase epics (<N> phases)..."`
+Print: `"Creating execution sub-epic..."`
 
 ```bash
-P1=$(tk create "Phase 1: <name> [FOUNDATIONAL]" -t epic -p 2 --parent $TOP -d "<phase objective>")
-P2=$(tk create "Phase 2: <name> [SLICES]" -t epic -p 2 --parent $TOP -d "<phase objective>")
-P3=$(tk create "Phase 3: <name> [INTEGRATION]" -t epic -p 2 --parent $TOP -d "<phase objective>")
-# ... etc for all phases. The bracketed shape tag becomes part of the title so /run-epic-dag
-# and humans can see the parallelism intent at a glance.
+EXEC=$(tk create "<Feature / Project Name> -- execution (flat DAG)" \
+  -t epic -p 2 --parent $TOP -d "Flat container for all leaf tickets so /run-epic-dag can dispatch them by per-ticket deps. See parent $TOP for the phased planning view. Each task is tagged with its phase (phase-1, phase-2, ...) and shape (foundational/slice/integration) for optional filtering.")
 ```
 
-### Step 6.3: Task tickets (children of their phase epic)
+### Step 6.3: Task tickets (all children of $EXEC, tagged with phase + shape)
 
 Print: `"Creating task tickets..."`
 
-Work through phases in order. Capture each ID. Use heredoc syntax to include the full
-description and EARS acceptance criteria -- never truncate to a one-liner.
+Work through phases in order so titles and IDs come out in a sensible sequence. **All
+tasks parent to `$EXEC`**, not to per-phase epics. Each task receives two tags:
+
+- `phase-N` -- which planning phase it came from (`phase-1`, `phase-2`, ...)
+- shape -- one of `foundational`, `slice`, `integration`
+
+Keep the `N.M` numbering in titles so phase grouping is visible at a glance. Use heredoc
+syntax for descriptions -- never truncate to a one-liner.
 
 ```bash
-# Phase 1
-T1_1=$(tk create "<Task 1.1 title>" -t task -p 2 --parent $P1 -d "$(cat <<'EOF'
+# Phase 1 tasks (FOUNDATIONAL)
+T1_1=$(tk create "1.1 <Task title>" -t task -p 2 --parent $EXEC \
+  --tags phase-1,foundational \
+  -d "$(cat <<'EOF'
 <Two to three sentence description of the work, enough to implement without reading other
 tickets.>
 
@@ -431,7 +443,9 @@ tickets.>
 EOF
 )")
 
-T1_2=$(tk create "<Task 1.2 title>" -t task -p 2 --parent $P1 -d "$(cat <<'EOF'
+T1_2=$(tk create "1.2 <Task title>" -t task -p 2 --parent $EXEC \
+  --tags phase-1,foundational \
+  -d "$(cat <<'EOF'
 <Description>
 
 ## Acceptance Criteria
@@ -440,8 +454,10 @@ T1_2=$(tk create "<Task 1.2 title>" -t task -p 2 --parent $P1 -d "$(cat <<'EOF'
 EOF
 )")
 
-# Phase 2
-T2_1=$(tk create "<Task 2.1 title>" -t task -p 2 --parent $P2 -d "$(cat <<'EOF'
+# Phase 2 tasks (SLICES)
+T2_1=$(tk create "2.1 <Task title>" -t task -p 2 --parent $EXEC \
+  --tags phase-2,slice \
+  -d "$(cat <<'EOF'
 <Description>
 
 ## Acceptance Criteria
@@ -449,7 +465,7 @@ T2_1=$(tk create "<Task 2.1 title>" -t task -p 2 --parent $P2 -d "$(cat <<'EOF'
 EOF
 )")
 
-# ... etc
+# ... etc. Integration tasks get --tags phase-N,integration
 ```
 
 ### Step 6.4: Dependencies — derive from Files / Produces / Consumes
@@ -501,10 +517,11 @@ tk dep $T3_1 $T2_3
 After all `tk dep` calls, sanity-check the result:
 
 ```bash
-tk ready --epic <TOP>   # should surface multiple parallel tasks if your plan declared SLICES
+tk ready   # should surface multiple parallel tasks if your plan declared SLICES
 ```
 
-If a SLICES phase shows only one ready task, you have a stray dep — re-check.
+If a SLICES phase shows only one ready task (filter with `tk triage --tag phase-2` or
+similar), you have a stray dep — re-check.
 
 ## Phase 7 -- Summary
 
@@ -513,29 +530,33 @@ Print a structured summary of everything created:
 ```
 Spec created: <Feature / Project Name>
 
-  [<TOP>]   <top-level epic title>
+  [<TOP>]   <top-level epic title>            (planning view)
+    [<EXEC>]  <name> -- execution (flat DAG)  (run this)
 
-  [<P1>]    Phase 1: <name>
-    [<T1_1>]  <task title>
-    [<T1_2>]  <task title>
-    [<T1_3>]  <task title>
+  Tasks (all parented to <EXEC>, grouped by phase tag for readability):
 
-  [<P2>]    Phase 2: <name>   (parallel with Phase 3)
-    [<T2_1>]  <task title>
-    [<T2_2>]  <task title>
+  phase-1 / foundational
+    [<T1_1>]  1.1 <task title>
+    [<T1_2>]  1.2 <task title>
+    [<T1_3>]  1.3 <task title>
 
-  [<P3>]    Phase 3: <name>   (parallel with Phase 2)
-    [<T3_1>]  <task title>
+  phase-2 / slice   (parallel with phase-3)
+    [<T2_1>]  2.1 <task title>
+    [<T2_2>]  2.2 <task title>
 
-  [<P4>]    Phase 4: <name>   (depends on Phase 2 + Phase 3)
-    [<T4_1>]  <task title>
+  phase-3 / slice   (parallel with phase-2)
+    [<T3_1>]  3.1 <task title>
 
-  N epics, M tasks created.
+  phase-4 / integration   (fan-in after phase-2 + phase-3)
+    [<T4_1>]  4.1 <task title>
 
-To start team execution:             /run-epic <TOP>
+  2 epics, M tasks created.
+
+To start team execution:             /run-epic-dag <EXEC>
 To find the first available work:    tk ready
-To view the full epic:               tk show <TOP>
-To see all phase tickets:            tk epic-status
+To view the planning epic:           tk show <TOP>
+To view the execution epic:          tk show <EXEC>
+To filter by phase (e.g. demo P2):   tk triage --tag phase-2
 ```
 
 ## Edge cases and judgment calls
