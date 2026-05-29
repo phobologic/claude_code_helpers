@@ -72,6 +72,13 @@ If an existing setting directly contradicts the spec (e.g., the user has a diffe
 complexity threshold, or a conflicting biome rule configuration), do not silently
 overwrite it — ask the user how they want to handle the conflict.
 
+This includes boolean `enabled` toggles at the section level — `formatter.enabled`,
+`linter.enabled`, `organizeImports.enabled`. A naive "missing key" check will miss
+these because both files have a value; compare the values explicitly. If the user
+has `formatter.enabled: false` and the spec has `true`, that's a deliberate choice
+(e.g. delegating all formatting to Prettier) — surface it as a conflict, don't
+overwrite, and don't re-prompt on subsequent runs once the user has confirmed.
+
 Present a summary of what will be created vs. updated, then ask for confirmation.
 
 ## Phase 3 — Scaffold files
@@ -170,6 +177,11 @@ export default defineConfig({
 ```
 
 ### `biome.json`
+
+Biome handles both linting and formatting for `.js`/`.ts` (unified, faster than
+running Prettier separately). Prettier still owns `.svelte` files because Biome
+doesn't parse Svelte. If a project deliberately delegates all formatting to
+Prettier, `formatter.enabled` should be `false` — see Phase 2's conflict rule.
 
 ```json
 {
