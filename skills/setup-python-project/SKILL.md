@@ -29,7 +29,8 @@ Tests dir:       tests/
 Files to create: pyproject.toml, .python-version, .gitignore, README.md,
                  <package_name>/__init__.py, tests/__init__.py,
                  .github/workflows/test.yml
-Git hooks:       .git/hooks/pre-commit, .git/hooks/pre-commit.d/python.sh
+Git hooks:       .git/hooks/pre-commit, .git/hooks/pre-commit.d/python.sh,
+                 .git/hooks/pre-push,   .git/hooks/pre-push.d/python.sh
                  (or: "skipped — git not initialized")
 
 Proceed? [y/N]
@@ -257,6 +258,64 @@ if [[ -n "$COMPLEX" ]]; then
 fi
 ```
 
+### `.git/hooks/pre-push`
+
+Only create this if `.git/` exists. If it already exists, leave it alone. Same
+dispatcher shape as pre-commit — a language-agnostic runner for `pre-push.d/`.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Dispatcher: runs all scripts in pre-push.d/, fails if any fail.
+HOOK_DIR="$(dirname "$0")/pre-push.d"
+
+if [[ ! -d "$HOOK_DIR" ]]; then
+  exit 0
+fi
+
+exit_code=0
+for hook in "$HOOK_DIR"/*; do
+  if [[ -x "$hook" ]]; then
+    if ! "$hook"; then
+      exit_code=1
+    fi
+  fi
+done
+
+exit $exit_code
+```
+
+### `.git/hooks/pre-push.d/python.sh`
+
+Only create this if `.git/` exists.
+
+Full gate: runs the test suite, mirroring CI. Self-skips if `pyproject.toml`
+or the `tests/` directory is missing (e.g. polyglot repo where Python was
+removed, or a brand-new scaffold with no tests yet).
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Self-skip if this isn't (or is no longer) a Python project
+if [[ ! -f pyproject.toml ]]; then
+  exit 0
+fi
+
+# Self-skip if there's no tests directory
+if [[ ! -d tests ]]; then
+  exit 0
+fi
+
+echo "pre-push: running pytest..."
+if ! uv run pytest -q --tb=short; then
+  echo ""
+  echo "pre-push: pytest failed. Fix the failures above, or bypass with --no-verify if you have a reason."
+  exit 1
+fi
+```
+
 ### `.github/workflows/test.yml`
 
 ```yaml
@@ -316,7 +375,8 @@ virtual environment in `.venv/`.
 After `uv sync`, make the git hooks executable (only if `.git/` exists):
 
 ```bash
-chmod +x .git/hooks/pre-commit .git/hooks/pre-commit.d/python.sh
+chmod +x .git/hooks/pre-commit .git/hooks/pre-commit.d/python.sh \
+         .git/hooks/pre-push   .git/hooks/pre-push.d/python.sh
 ```
 
 ## Phase 5 — Commit
@@ -336,9 +396,13 @@ Print a summary of what was created. Then suggest next steps:
 
 1. If git was not initialized: `git init && git add -A && git commit -m "Initial project scaffold"`,
    then re-run `/setup-python-project` to install the pre-commit hooks (they require `.git/`).
-2. If git was initialized, note that a pre-commit hook was installed that auto-fixes and
-   checks ruff on every commit. The dispatcher pattern in `.git/hooks/pre-commit` supports
-   multiple languages — other setup skills can drop scripts in `.git/hooks/pre-commit.d/`.
+2. If git was initialized, note that **two** hooks were installed:
+   - **pre-commit** — fast gate: auto-fixes ruff and runs the complexity check on staged files on every commit
+   - **pre-push** — full gate: runs `uv run pytest -q --tb=short` before each push, mirroring CI. Use `git push --no-verify` for emergencies.
+
+   The dispatcher pattern in `.git/hooks/pre-commit` and `.git/hooks/pre-push`
+   supports multiple languages — other setup skills can drop scripts in
+   `.git/hooks/pre-commit.d/` or `.git/hooks/pre-push.d/`.
 3. To enable auto-formatting hooks in this project:
    ```
    /plugin install claude-python@claude-languages

@@ -30,7 +30,8 @@ Files to create: package.json, svelte.config.js, vite.config.ts, tsconfig.json,
                  src/app.html, src/app.d.ts, src/routes/+page.svelte,
                  src/lib/.gitkeep, src/test-setup.ts,
                  .github/workflows/test.yml
-Git hooks:       .git/hooks/pre-commit, .git/hooks/pre-commit.d/javascript.sh
+Git hooks:       .git/hooks/pre-commit, .git/hooks/pre-commit.d/javascript.sh,
+                 .git/hooks/pre-push,   .git/hooks/pre-push.d/javascript.sh
                  (or: "skipped — git not initialized")
 
 Proceed? [y/N]
@@ -445,6 +446,72 @@ if ! npx svelte-check --tsconfig ./tsconfig.json 2>&1; then
 fi
 ```
 
+### `.git/hooks/pre-push`
+
+Only create this if `.git/` exists. If it already exists, leave it alone. Same
+dispatcher shape as pre-commit — a language-agnostic runner for `pre-push.d/`.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Dispatcher: runs all scripts in pre-push.d/, fails if any fail.
+HOOK_DIR="$(dirname "$0")/pre-push.d"
+
+if [[ ! -d "$HOOK_DIR" ]]; then
+  exit 0
+fi
+
+exit_code=0
+for hook in "$HOOK_DIR"/*; do
+  if [[ -x "$hook" ]]; then
+    if ! "$hook"; then
+      exit_code=1
+    fi
+  fi
+done
+
+exit $exit_code
+```
+
+### `.git/hooks/pre-push.d/javascript.sh`
+
+Only create this if `.git/` exists.
+
+Full gate: runs the test suite, mirroring CI. Reuses the same `FRONTEND_DIR`
+detection as the pre-commit script — embed the same relative path at scaffold
+time. Self-skips if `package.json` is missing (e.g. polyglot repo where the
+frontend was removed).
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Frontend directory relative to repo root (empty = repo root)
+FRONTEND_DIR="<relative-path-or-empty>"
+
+# Self-skip if this isn't (or is no longer) a frontend project
+if [[ -n "$FRONTEND_DIR" ]]; then
+  PKG_PATH="$FRONTEND_DIR/package.json"
+else
+  PKG_PATH="package.json"
+fi
+if [[ ! -f "$PKG_PATH" ]]; then
+  exit 0
+fi
+
+if [[ -n "$FRONTEND_DIR" ]]; then
+  cd "$FRONTEND_DIR"
+fi
+
+echo "pre-push: running vitest..."
+if ! npx vitest run --reporter=default; then
+  echo ""
+  echo "pre-push: vitest failed. Fix the failures above, or bypass with --no-verify if you have a reason."
+  exit 1
+fi
+```
+
 ### `.github/workflows/test.yml`
 
 If a `.github/workflows/test.yml` already exists (e.g., from a Python setup), append a
@@ -509,7 +576,8 @@ npm install
 After install, make the git hooks executable (only if `.git/` exists):
 
 ```bash
-chmod +x .git/hooks/pre-commit .git/hooks/pre-commit.d/javascript.sh
+chmod +x .git/hooks/pre-commit .git/hooks/pre-commit.d/javascript.sh \
+         .git/hooks/pre-push   .git/hooks/pre-push.d/javascript.sh
 ```
 
 ## Phase 5 — Commit
@@ -529,10 +597,13 @@ Print a summary of what was created. Then suggest next steps:
 
 1. If git was not initialized: `git init && git add -A && git commit -m "Initial project scaffold"`,
    then re-run `/setup-js-project` to install the pre-commit hooks (they require `.git/`).
-2. If git was initialized, note that a pre-commit hook was installed that auto-fixes
-   formatting, checks Biome + Prettier, and runs svelte-check on every commit. The
-   dispatcher pattern in `.git/hooks/pre-commit` supports multiple languages — other
-   setup skills can drop scripts in `.git/hooks/pre-commit.d/`.
+2. If git was initialized, note that **two** hooks were installed:
+   - **pre-commit** — fast gate: auto-fixes formatting and runs Biome + Prettier + svelte-check on staged files on every commit
+   - **pre-push** — full gate: runs `vitest run` before each push, mirroring CI. Use `git push --no-verify` for emergencies.
+
+   The dispatcher pattern in `.git/hooks/pre-commit` and `.git/hooks/pre-push`
+   supports multiple languages — other setup skills can drop scripts in
+   `.git/hooks/pre-commit.d/` or `.git/hooks/pre-push.d/`.
 3. To enable auto-formatting hooks in this project:
    ```
    /plugin install claude-js@claude-languages
