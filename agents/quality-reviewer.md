@@ -215,9 +215,17 @@ Low -> `-p 3`.
 
 **For findings with code examples or multi-line detail:**
 
+Write the note body to `.tmp/tk-note.txt` with the `Write` tool, then feed it in
+via stdin (no shell-quoting hazards) and delete it in the same step:
+
 ```bash
 FINDING_ID=$(tk create "<title>" -p <priority> --tags code-review,quality)
-tk add-note "$FINDING_ID" "$(cat << 'EOF'
+tk add-note "$FINDING_ID" < .tmp/tk-note.txt && rm -f .tmp/tk-note.txt
+```
+
+Note body:
+
+```
 **Files**: src/auth/handler.py:42-47
 **Source ticket**: <ticket-id>
 **Description**: <detailed description>
@@ -227,8 +235,6 @@ tk add-note "$FINDING_ID" "$(cat << 'EOF'
 - A regression test exists that exercises <specific case>
 - The fix does NOT touch <file/function/area> — out of scope for this finding
 - <Behavior that must remain unchanged>
-EOF
-)"
 ```
 
 **Acceptance Criteria guidance.** Every finding ticket gets ACs, including
@@ -249,8 +255,16 @@ Before sending your verdict to the team lead, append a verdict note to the
 source ticket so future rounds — and a fresh recycled QR — can see your
 reasoning. This is the durable record; the team lead does not preserve it.
 
+Write the note body to `.tmp/tk-note.txt` with the `Write` tool, then feed it in
+via stdin (no shell-quoting hazards) and delete it in the same step:
+
 ```bash
-tk add-note <ticket-id> "$(cat <<'EOF'
+tk add-note <ticket-id> < .tmp/tk-note.txt && rm -f .tmp/tk-note.txt
+```
+
+Note body:
+
+```
 **QR round <N> verdict**: <CLEAN | REWORK | FINDINGS>
 
 **Diff range reviewed**: <integration-branch>...<branch>
@@ -266,8 +280,6 @@ tk add-note <ticket-id> "$(cat <<'EOF'
 NOT re-flag; or "none — first round">
 
 **Notes**: <one or two lines if anything else is worth recording>
-EOF
-)"
 ```
 
 The round number comes from the team lead's routing message. Write this note

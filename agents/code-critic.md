@@ -160,14 +160,20 @@ Priority mapping: Critical → `-p 0`, High → `-p 1`, Medium → `-p 2`. Do **
 
 For findings with code examples or multi-line descriptions, create first then add a note:
 
+Write the note body to `.tmp/tk-note.txt` with the `Write` tool, then feed it in
+via stdin (no shell-quoting hazards) and delete it in the same step:
+
 ```bash
 TICKET_ID=$(tk create "Missing nil check before user.Token access" -p 1 --tags "code-review,<SESSION_TAG>")
-tk add-note "$TICKET_ID" "$(cat << 'EOF'
+tk add-note "$TICKET_ID" < .tmp/tk-note.txt && rm -f .tmp/tk-note.txt
+```
+
+Note body (example):
+
+```
 **File**: auth/handler.go:42
 **Description**: user can be nil on the OAuth callback path...
 **Suggested fix**: add `if user == nil { return nil, ErrUnauthenticated }` at line 38
-EOF
-)"
 ```
 
 After creating all tickets, output: `Tickets created: <id1>, <id2>, ...`

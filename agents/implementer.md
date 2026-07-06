@@ -153,8 +153,13 @@ pass. Skipping it is how regressions sneak through.
 6. **On rework rounds, write a rework note on the ticket** before signaling
    DONE. This gives the next AC verifier and quality reviewer durable context
    on what changed:
+   Write the note body to `.tmp/tk-note.txt` with the `Write` tool, then feed it
+   in via stdin (no shell-quoting hazards) and delete it in the same step:
    ```bash
-   tk add-note <ticket-id> "$(cat <<'EOF'
+   tk add-note <ticket-id> < .tmp/tk-note.txt && rm -f .tmp/tk-note.txt
+   ```
+   Note body:
+   ```
    **Implementer round <N>**: <one-line summary>
 
    **Findings addressed this round**:
@@ -164,8 +169,6 @@ pass. Skipping it is how regressions sneak through.
    **Findings pushed back as OUT_OF_SCOPE**: <list with reasons; or "none">
 
    **Files changed**: <paths>
-   EOF
-   )"
    ```
    The round number is the same one you received in the rework dispatch
    message. Skip this on round 1 (initial implementation) — the commit
