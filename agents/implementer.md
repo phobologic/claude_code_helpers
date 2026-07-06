@@ -100,16 +100,16 @@ Skipping this step is the number-one reason tickets come back from review.
    expand scope beyond the ticket, note the complex functions in your DONE
    message so the team lead can decide.
 8. Commit your changes with a message that references the ticket ID. Write the
-   message to a per-commit file and commit with `-F` so apostrophes/`$`/backticks
-   can't break the shell. Name the file after the ticket so `Write` never has to
-   overwrite an existing one:
+   message to a file and commit with `-F` so apostrophes/`$`/backticks can't
+   break the shell. Delete the file in the same step so the next `Write` never
+   has to overwrite an existing one:
    ```
-   # Write .tmp/commit-<ticket-id>.txt with the Write tool:
+   # Write .tmp/commit-msg.txt with the Write tool:
    #   <descriptive message>
    #
    #   Ticket: <ticket-id>
    git add <files>
-   git commit -F .tmp/commit-<ticket-id>.txt
+   git commit -F .tmp/commit-msg.txt && rm -f .tmp/commit-msg.txt
    ```
 
 ## Before Signaling DONE

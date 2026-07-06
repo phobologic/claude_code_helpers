@@ -58,20 +58,26 @@ listed alternative whenever possible:
 - `find` for file discovery — use `Glob`. `grep`/`rg` for searching — use
   `Grep`. `cat`/`head`/`tail` for reading — use `Read`.
 
-**Commit messages: write a file, commit with `-F`.** Put the message in
-`.tmp/commit-<slug>.txt` — where `<slug>` is a short kebab-case tag from the
-subject or ticket id — with the `Write` tool, then `git commit -F` on that path.
-This hands the message to git verbatim: no shell quoting, expansion, or
+**Commit messages: write a file, commit with `-F`.** Write the message to
+`.tmp/commit-msg.txt` with the `Write` tool, then commit and delete it in one
+step:
+
+```
+git commit -F .tmp/commit-msg.txt && rm -f .tmp/commit-msg.txt
+```
+
+`-F` hands the message to git verbatim: no shell quoting, expansion, or
 apostrophe/`$`/backtick hazards, and it matches the Tool Selection preference
 for `Write` over heredocs. Do **not** use `git commit -m "$(cat <<'EOF' … EOF)"`
 or a multi-line `-m "…"`; the file route is safer by construction.
 
-Use a **fresh filename per commit**, not one reused name. `Write` refuses to
-overwrite a file it hasn't Read this session, so a fixed name trips that guard
-on every commit after the first and forces a wasteful fail→Read→Write. A new
-path each time is a single clean `Write`. The files are gitignored (`.tmp/`)
-and tiny — no cleanup step. Add `--cleanup=verbatim` only if a message must
-keep lines that start with `#`.
+The trailing `rm` is what keeps this efficient. `Write` refuses to overwrite a
+file it hasn't Read this session, so a *reused* name would trip that guard on
+every commit after the first and force a wasteful fail→Read→Write. Deleting the
+file after each commit means the next `Write` always targets an absent path and
+succeeds in one call — no ticket id or random suffix needed, and nothing
+accumulates in `.tmp/`. The message survives in `git log`. Add `--cleanup=verbatim`
+only if a message must keep lines that start with `#`.
 
 If you genuinely need a one-off script (e.g. complex data transformation that
 no built-in tool covers), write it to `.tmp/` as a real file first, then run
