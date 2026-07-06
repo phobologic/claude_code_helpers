@@ -58,9 +58,15 @@ listed alternative whenever possible:
 - `find` for file discovery — use `Glob`. `grep`/`rg` for searching — use
   `Grep`. `cat`/`head`/`tail` for reading — use `Read`.
 
-The narrow exception is `git commit -m "$(cat <<'EOF' … EOF)"` for multi-line
-commit messages — that's heredoc inside command substitution, not a
-heredoc-to-file, and it's the documented pattern for commits.
+**Commit messages: write a file, commit with `-F`.** Put the message in
+`.tmp/commit-msg.txt` with the `Write` tool, then
+`git commit -F .tmp/commit-msg.txt`. This hands the message to git verbatim —
+no shell quoting, expansion, or apostrophe/`$`/backtick hazards, and it matches
+the Tool Selection preference for `Write` over heredocs. Do **not** use
+`git commit -m "$(cat <<'EOF' … EOF)"` or a multi-line `-m "…"`; the file route
+is safer by construction. The file is gitignored (`.tmp/`) and reused, so it
+overwrites in place — leave it, no cleanup step. Add `--cleanup=verbatim` only
+if a message must keep lines that start with `#`.
 
 If you genuinely need a one-off script (e.g. complex data transformation that
 no built-in tool covers), write it to `.tmp/` as a real file first, then run

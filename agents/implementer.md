@@ -99,12 +99,16 @@ Skipping this step is the number-one reason tickets come back from review.
    the project's threshold, refactor before committing. If refactoring would
    expand scope beyond the ticket, note the complex functions in your DONE
    message so the team lead can decide.
-8. Commit your changes with a message that references the ticket ID:
+8. Commit your changes with a message that references the ticket ID. Write the
+   message to a file and commit with `-F` so apostrophes/`$`/backticks can't
+   break the shell:
    ```
+   # Write .tmp/commit-msg.txt with the Write tool:
+   #   <descriptive message>
+   #
+   #   Ticket: <ticket-id>
    git add <files>
-   git commit -m "<descriptive message>
-
-   Ticket: <ticket-id>"
+   git commit -F .tmp/commit-msg.txt
    ```
 
 ## Before Signaling DONE
