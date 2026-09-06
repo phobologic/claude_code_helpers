@@ -32,18 +32,7 @@ EPIC_ID=$(tk create "<generated title> (<YYYY-MM-DD HH:MM>)" -t epic -p 2 --tags
 ```
 3. Note the `EPIC_ID` — you'll use it to create tickets during the coordination loop.
 
-## Step 3: Create the team
-
-```
-TeamCreate({
-  team_name: "review-<YYYYMMDD-HHMM>",
-  description: "Code review team"
-})
-```
-
-Note the `team_name` — pass it to every Agent call.
-
-## Step 4: Spawn reviewers
+## Step 3: Spawn reviewers
 
 Spawn all four reviewers in parallel as **background agents**. Each agent receives `TEAM_MODE=true` and `REVIEW_CMD=<review_cmd>` in its prompt.
 
@@ -52,40 +41,32 @@ Agent({
   prompt: "TEAM_MODE=true REVIEW_CMD=<review_cmd> -- Review ONLY files in .code-review/changed-files.txt",
   subagent_type: "code-reviewer-1",
   model: "sonnet",
-  team_name: "<team_name>",
-  name: "reviewer-logic",
-  run_in_background: true
+  name: "reviewer-logic"
 })
 
 Agent({
   prompt: "TEAM_MODE=true REVIEW_CMD=<review_cmd> -- Review ONLY files in .code-review/changed-files.txt",
   subagent_type: "code-reviewer-2",
   model: "sonnet",
-  team_name: "<team_name>",
-  name: "reviewer-perf",
-  run_in_background: true
+  name: "reviewer-perf"
 })
 
 Agent({
   prompt: "TEAM_MODE=true REVIEW_CMD=<review_cmd> -- Review ONLY files in .code-review/changed-files.txt",
   subagent_type: "code-reviewer-3",
   model: "sonnet",
-  team_name: "<team_name>",
-  name: "reviewer-structure",
-  run_in_background: true
+  name: "reviewer-structure"
 })
 
 Agent({
   prompt: "TEAM_MODE=true REVIEW_CMD=<review_cmd> -- Review ONLY files in .code-review/changed-files.txt",
   subagent_type: "security-reviewer",
   model: "sonnet",
-  team_name: "<team_name>",
-  name: "reviewer-security",
-  run_in_background: true
+  name: "reviewer-security"
 })
 ```
 
-## Step 5: Coordination loop
+## Step 4: Coordination loop
 
 This is your main loop. Track how many DONE messages you've received (target: 4). In file mode, accumulate findings in an in-memory list.
 
@@ -146,15 +127,23 @@ Acknowledge the finding back to the reviewer with a brief SendMessage (one line 
 
 ### When you receive `DONE` from a reviewer:
 
-Note it. When all 4 reviewers have sent `DONE`, proceed to Step 6.
+Note it. When all 4 reviewers have sent `DONE`, proceed to Step 5.
 
-## Step 6: Cleanup and summary
+## Step 5: Cleanup and summary
 
-### Shut down the team
+### Shut down the reviewers
+
+Shut each reviewer down explicitly — there is no team-level teardown call.
 
 ```
-TeamDelete({ team_name: "<team_name>" })
+SendMessage({ to: "reviewer-logic",     message: "SHUTDOWN — review complete, stop work and exit." })
+SendMessage({ to: "reviewer-perf",      message: "SHUTDOWN — review complete, stop work and exit." })
+SendMessage({ to: "reviewer-structure", message: "SHUTDOWN — review complete, stop work and exit." })
+SendMessage({ to: "reviewer-security",  message: "SHUTDOWN — review complete, stop work and exit." })
 ```
+
+Wait for each reviewer to acknowledge. Then call `ListAgents` and `TaskStop`
+any of the four that are still running.
 
 ### TK mode — present summary
 

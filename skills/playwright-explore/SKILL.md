@@ -355,14 +355,7 @@ EPIC_ID=$(tk create "Playwright explore: <url> (<YYYY-MM-DD HH:MM>)" \
 echo $EPIC_ID
 ```
 
-```
-TeamCreate({
-  team_name: "playwright-<timestamp>",
-  description: "Exploratory test team for <url>"
-})
-```
-
-Note `EPIC_ID` and `team_name`.
+Note `EPIC_ID`.
 
 ## Phase 3 — Execute waves
 
@@ -387,9 +380,7 @@ Agent({
   prompt: "<assembled prompt>",
   subagent_type: "general-purpose",
   model: "sonnet",
-  team_name: "<team_name>",
-  name: "<role>",
-  run_in_background: true
+  name: "<role>"
 })
 ```
 
@@ -857,23 +848,21 @@ Suggested next steps:
 
 3. Shut down any remaining agents:
 
+Shut each role agent down by name — there is no team-level teardown call.
+
 ```
-SendMessage({ to: '<role-1>', message: 'type: shutdown_request' })
-SendMessage({ to: '<role-2>', message: 'type: shutdown_request' })
+SendMessage({ to: '<role-1>', message: { type: 'shutdown_request', reason: 'exploration complete' } })
+SendMessage({ to: '<role-2>', message: { type: 'shutdown_request', reason: 'exploration complete' } })
 ...
 ```
 
 Wait for a `shutdown_response` from each (up to 60 seconds; the runtime
-terminates each process when its response arrives). If a teammate hasn't
-responded, use `TaskStop` on its background task. Only then:
+terminates each process when its response arrives). Then call `ListAgents`;
+for every role agent still listed, `TaskStop({ task_id: '<role>' })`.
 
-```
-TeamDelete()
-```
-
-Do **not** end your final turn before `TeamDelete()` returns — role agents
-left alive will continue driving the browser until they blow their context
-budgets.
+Do **not** end your final turn until `ListAgents` shows no role agent from
+this run still running — agents left alive will continue driving the browser
+until they blow their context budgets.
 
 ## Scenario Catalog Format
 
@@ -960,6 +949,7 @@ was found. List the search paths and suggest creating one at
 and re-save if `state-load` doesn't work. If multiple agents report auth
 failures, there may be a session timeout issue — note it as a finding.
 
-**User wants to stop mid-session.** Shut down all agents (shutdown_request),
-wait for acks, `TeamDelete`. Report what was completed so far. In-progress
+**User wants to stop mid-session.** Send a `shutdown_request` to each role
+agent by name, wait for acks, then `ListAgents` and `TaskStop` any that are
+still running. Report what was completed so far. In-progress
 tickets remain open.

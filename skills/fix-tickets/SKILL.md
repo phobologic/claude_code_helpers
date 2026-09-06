@@ -172,16 +172,7 @@ worktree-init implementer-2-$STAMP $REPO_ROOT
 
 Verify each was created: `ls .worktrees/` should show all implementer dirs.
 
-### Step 2.3: Create the team
-
-```
-TeamCreate({
-  team_name: "fix-<stamp>",
-  description: "Fix batch: <N> tickets"
-})
-```
-
-### Step 2.4: Spawn quality reviewers and implementers
+### Step 2.3: Spawn quality reviewers and implementers
 
 Spawn two quality reviewers and up to 4 implementers. All are reused across every
 wave — never spawn additional agents later.
@@ -191,7 +182,6 @@ wave — never spawn additional agents later.
 ```
 Agent({
   subagent_type: "quality-reviewer",
-  team_name: "fix-<stamp>",
   name: "quality-reviewer-1",
   prompt: "You are quality-reviewer-1 on a fix team. Wait for the team lead to
   route tickets to you via SendMessage. For each ticket routed:
@@ -220,7 +210,6 @@ Agent({
 
 Agent({
   subagent_type: "quality-reviewer",
-  team_name: "fix-<stamp>",
   name: "quality-reviewer-2",
   // same prompt as quality-reviewer-1
 })
@@ -232,7 +221,6 @@ via `SendMessage` and are reused across all waves:
 ```
 Agent({
   subagent_type: "implementer",
-  team_name: "fix-<stamp>",
   name: "implementer-<N>-<STAMP>",
   isolation: "worktree",
   prompt: "You are implementer-<N>-<STAMP> on a fix team.
@@ -291,7 +279,8 @@ implementer will report back `WORKTREE OK` or `WARNING: in main repo`.
 - If **any report `WARNING: in main repo`**: stop immediately and tell the user:
   > Worktree isolation failed — implementers are running in the main repo.
   > This will cause parallel agents to conflict. Aborting.
-  Then shut down all teammates and call `TeamDelete()`.
+  Then shut down every teammate by name (shutdown request, wait for acks,
+  `TaskStop` any that remain).
 
 Track implementer state throughout the run:
 - **idle**: waiting for work (all start idle)
@@ -470,8 +459,8 @@ Track per ticket two counters across rework loops:
 
 ```
 SendMessage({
-  recipient: "quality-reviewer-1",  // or quality-reviewer-2
-  content: "Review <ticket-id> on branch <branch-name> (round <total_qr_rounds[ticket-id] + 1>). Run `tk show <ticket-id>`
+  to: "quality-reviewer-1",  // or quality-reviewer-2
+  message: "Review <ticket-id> on branch <branch-name> (round <total_qr_rounds[ticket-id] + 1>). Run `tk show <ticket-id>`
   for context on what was being fixed. Read prior-round notes (earlier QR
   verdicts, OOS tickets already filed, implementer rework summaries) before
   reviewing the diff. Diff the ticket's own changes only (not wave N-1
@@ -548,8 +537,8 @@ the OUT_OF_SCOPE escape hatch:
 
 ```
 SendMessage({
-  recipient: "<implementer-name>",
-  content: "Quality review returned REWORK for <ticket-id>. Fix these in
+  to: "<implementer-name>",
+  message: "Quality review returned REWORK for <ticket-id>. Fix these in
   fix/<ticket-id> and signal DONE again:
 
   <paste the numbered finding list from the reviewer's REWORK message verbatim>
@@ -601,8 +590,8 @@ reviewer has already created tickets for them. It does NOT block merge.
 
 ```
 SendMessage({
-  recipient: "<implementer-name>",
-  content: "Merge conflict integrating <ticket-id> into fix/batch-<stamp>.
+  to: "<implementer-name>",
+  message: "Merge conflict integrating <ticket-id> into fix/batch-<stamp>.
   In the integration worktree at .worktrees/fix-batch-<stamp>, merge your
   branch, resolve conflicts, and commit. Signal DONE with fix/<ticket-id>
   when ready — this will go through quality review again since the resolved
@@ -673,10 +662,10 @@ SendMessage({ to: "implementer-1-<STAMP>", message: "type: shutdown_request" })
 same names so dispatch routing doesn't change:
 
 ```
-Agent({ subagent_type: "quality-reviewer", team_name: "fix-<stamp>",
-        name: "quality-reviewer-1", prompt: "<same as Phase 2.4>" })
-Agent({ subagent_type: "quality-reviewer", team_name: "fix-<stamp>",
-        name: "quality-reviewer-2", prompt: "<same as Phase 2.4>" })
+Agent({ subagent_type: "quality-reviewer",
+        name: "quality-reviewer-1", prompt: "<same as Phase 2.3>" })
+Agent({ subagent_type: "quality-reviewer",
+        name: "quality-reviewer-2", prompt: "<same as Phase 2.3>" })
 ```
 
 **3. Reset CWD and re-spawn implementers.** Before spawning, verify the team
@@ -691,12 +680,11 @@ names and worktree paths. Do NOT use `isolation: "worktree"` — the worktrees
 already exist, and the isolation parameter creates a new worktree via raw
 `git worktree add`, bypassing the `worktree-init` setup.
 
-Write the full prompt — do not abbreviate or reference Phase 2.4:
+Write the full prompt — do not abbreviate or reference Phase 2.3:
 
 ```
 Agent({
   subagent_type: "implementer",
-  team_name: "fix-<stamp>",
   name: "implementer-<N>-<STAMP>",
   prompt: "You are implementer-<N>-<STAMP> on a fix team.
 
@@ -787,25 +775,28 @@ epistemic confidence score (0–100) — see the reviewer agents for the rubric.
 `tk triage --sort priority,confidence` is the canonical way to walk them:
 highest priority first, then highest confidence within each priority band.
 
-Shut down all teammates:
+Shut down every teammate individually — there is no team-level teardown call.
+Send the structured shutdown request; each teammate replies with a
+`shutdown_response` and the runtime then terminates its process:
 ```
-SendMessage({ to: "quality-reviewer-1",    message: "type: shutdown_request" })
-SendMessage({ to: "quality-reviewer-2",    message: "type: shutdown_request" })
-SendMessage({ to: "implementer-1-<STAMP>", message: "type: shutdown_request" })
+SendMessage({ to: "quality-reviewer-1",    message: { type: "shutdown_request", reason: "batch complete" } })
+SendMessage({ to: "quality-reviewer-2",    message: { type: "shutdown_request", reason: "batch complete" } })
+SendMessage({ to: "implementer-1-<STAMP>", message: { type: "shutdown_request", reason: "batch complete" } })
 # ... all implementers
 ```
 
-Clean up worktrees:
+Wait for each teammate to acknowledge. Then call `ListAgents`; for any of this
+run's agents still listed, `TaskStop({ task_id: "<name>" })`. `TaskStop` is an
+abrupt stop with no shutdown window, so use it only for agents that did not
+ack — never as the first move.
+
+Only once no agent is still running, clean up worktrees (a live agent holds its
+worktree busy):
 ```bash
 for N in 1 2 3 4; do  # adjust to match implementer count
   git worktree remove .worktrees/implementer-$N-<STAMP> --force 2>/dev/null || true
 done
 git worktree remove .worktrees/fix-batch-<stamp> --force 2>/dev/null || true
-```
-
-Then:
-```
-TeamDelete()
 ```
 
 ## Edge Cases
@@ -824,6 +815,7 @@ tickets in the same wave that pass review should merge without waiting.
 
 **Wave has only 1 ticket.** Still valid — just no parallelism in that wave.
 
-**User wants to stop mid-batch.** Send `shutdown_request` to all teammates,
-TeamDelete. In-progress tickets remain claimable. Resume by running `/fix-tickets`
+**User wants to stop mid-batch.** Send a `shutdown_request` to each teammate by
+name, wait for acks, then `ListAgents` and `TaskStop` any that are still
+running. In-progress tickets remain claimable. Resume by running `/fix-tickets`
 with the remaining open ticket IDs.

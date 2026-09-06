@@ -77,15 +77,6 @@ Present the context brief to the user and confirm before proceeding.
 
 ## Phase 2 — Spawn the team
 
-### Create the team namespace
-
-```
-TeamCreate({
-  team_name: "design-sprint-<timestamp>",
-  description: "Design sprint for <repo name>"
-})
-```
-
 ### Spawn the evaluator first
 
 The evaluator (opus, effort: high — see `agents/design-evaluator.md`) persists
@@ -96,9 +87,7 @@ consistency across rounds.
 Agent({
   prompt: "You are the evaluator for this design sprint. Wait for the team lead to send you the three Round 1 proposals.",
   subagent_type: "design-evaluator",
-  team_name: "<team_name>",
-  name: "evaluator",
-  run_in_background: true
+  name: "evaluator"
 })
 ```
 
@@ -116,9 +105,7 @@ Agent({
 
 <full context brief from Phase 1, including screenshots if available>",
   subagent_type: "design-designer",
-  team_name: "<team_name>",
-  name: "designer-N",
-  run_in_background: true
+  name: "designer-N"
 })
 ```
 
@@ -131,7 +118,7 @@ Send the start message to all three designers simultaneously:
 ```
 SendMessage({
   to: 'designer-1',
-  content: 'Round 1 starting. Produce your Round 1 proposal (mood/direction/identity). No hex values or specific fonts yet — focus on the experience and point of view.'
+  message: 'Round 1 starting. Produce your Round 1 proposal (mood/direction/identity). No hex values or specific fonts yet — focus on the experience and point of view.'
 })
 ```
 
@@ -147,7 +134,7 @@ Once all three Round 1 proposals are received, send them to the evaluator:
 ```
 SendMessage({
   to: 'evaluator',
-  content: 'Round 1 proposals ready for scoring. Here are all three:
+  message: 'Round 1 proposals ready for scoring. Here are all three:
 
 DESIGNER-1:
 <proposal>
@@ -185,7 +172,7 @@ they have full context for what the evaluator is referencing:
 ```
 SendMessage({
   to: 'designer-1',
-  content: 'Round 2 starting. Focus: the system — specific palette, type choices, spacing, component style.
+  message: 'Round 2 starting. Focus: the system — specific palette, type choices, spacing, component style.
 
 EVALUATOR BRIEF:
 <round 2 brief from evaluator>
@@ -236,7 +223,7 @@ synthesis:
 ```
 SendMessage({
   to: 'evaluator',
-  content: 'Round 3 (final) proposals ready. Please score all three and produce
+  message: 'Round 3 (final) proposals ready. Please score all three and produce
 the complete design specification synthesis.
 
 DESIGNER-1:
@@ -291,13 +278,17 @@ Next steps:
 
 ## Phase 10 — Cleanup
 
+Shut each agent down by name — there is no team-level teardown call.
+
 ```
-SendMessage({ to: 'designer-1', content: 'Sprint complete. Shutting down.' })
-SendMessage({ to: 'designer-2', content: 'Sprint complete. Shutting down.' })
-SendMessage({ to: 'designer-3', content: 'Sprint complete. Shutting down.' })
-SendMessage({ to: 'evaluator',  content: 'Sprint complete. Shutting down.' })
-TeamDelete()
+SendMessage({ to: 'designer-1', message: 'Sprint complete. Shutting down.' })
+SendMessage({ to: 'designer-2', message: 'Sprint complete. Shutting down.' })
+SendMessage({ to: 'designer-3', message: 'Sprint complete. Shutting down.' })
+SendMessage({ to: 'evaluator',  message: 'Sprint complete. Shutting down.' })
 ```
+
+Wait for each of the four to acknowledge. Then call `ListAgents` and
+`TaskStop({ task_id: '<name>' })` for any that are still running.
 
 ## Edge Cases
 
@@ -317,6 +308,7 @@ to complete those sections.
 **`--scan` fails (app not running).** Warn the user and continue without
 screenshots. Don't stop the sprint.
 
-**User wants to stop mid-sprint.** Send shutdown to all agents, TeamDelete,
-and tell the user what was completed. Any round that finished fully can be
+**User wants to stop mid-sprint.** Send a shutdown message to each of the four
+agents by name, wait for acks, `TaskStop` any that remain, and tell the user
+what was completed. Any round that finished fully can be
 retrieved from the evaluator's last message.

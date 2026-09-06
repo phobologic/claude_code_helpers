@@ -47,7 +47,7 @@ If `tk ready` returns no tickets for this epic, report:
 > what is holding things up. The run cannot proceed until at least one ticket
 > is unblocked.
 
-Stop — do not create the team.
+Stop — do not spawn any agents.
 
 Mark all non-closed child tickets as in-progress immediately, so concurrent
 runs cannot claim the same tickets:
@@ -77,7 +77,7 @@ ticket_state: Map<ticket_id, TicketState>
   # verification_phase: "ac" | "quality" | null
 
 agent_pool: Map<slot_name, AgentSlot>
-  # slot_name: "dag-impl-1" .. "dag-impl-<IMPLEMENTERS>"
+  # slot_name: "epic-dag-<stamp>-impl-1" .. "epic-dag-<stamp>-impl-<IMPLEMENTERS>"
   # assignee: ticket_id | null
   # worktree: "<REPO_ROOT>/.worktrees/epic-dag-<stamp>-impl-<N>"
 
@@ -235,8 +235,12 @@ git checkout main
 
 The `$STAMP` is used only to namespace worktree directory paths so that two
 concurrent `/run-epic-dag` invocations on the same repo (e.g. different epics)
-never share filesystem state. Agent slot names (`dag-impl-1` etc.) stay short
-because they are scoped by `team_name`.
+never share filesystem state. Agent slot names carry the same stamp
+(`epic-dag-<stamp>-impl-1` etc.). Agent names live in a single session-wide
+namespace — there is no per-team scoping — so two concurrent runs using bare
+slot names like `impl-1` would collide in `ListAgents` and misroute every
+`SendMessage`. The stamp prefix is what keeps the runs apart. Names must match
+`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`, which the stamped form satisfies.
 
 Pre-flight the main repo state before proceeding:
 
@@ -278,19 +282,10 @@ Register worktree paths in `agent_pool` for each implementer slot N in
 1..`<IMPLEMENTERS>`:
 
 ```
-agent_pool["dag-impl-<N>"].worktree = "$REPO_ROOT/.worktrees/epic-dag-$STAMP-impl-<N>"
+agent_pool["epic-dag-<stamp>-impl-<N>"].worktree = "$REPO_ROOT/.worktrees/epic-dag-$STAMP-impl-<N>"
 ```
 
-### Step 1.3: Create the team
-
-```
-TeamCreate({
-  team_name: "epic-dag-<epic-id>",
-  description: "DAG-driven team executing epic <epic-id>: <epic title>"
-})
-```
-
-### Step 1.4: Create initial tasks
+### Step 1.3: Create initial tasks
 
 Create a task for each ready ticket (up to `<IMPLEMENTERS>`):
 
@@ -303,10 +298,11 @@ TaskCreate({
 })
 ```
 
-### Step 1.5: Spawn teammates
+### Step 1.4: Spawn teammates
 
-Spawn all agents using the `Agent` tool with `team_name: "epic-dag-<epic-id>"`.
-All `<IMPLEMENTERS>` implementers, all `<QRs>` quality reviewers, and the AC
+Spawn all agents using the `Agent` tool. The `name` you pass is the address for
+`SendMessage` and the identifier `ListAgents` prints, so use the stamped slot
+names from Step 1.1 verbatim. All `<IMPLEMENTERS>` implementers, all `<QRs>` quality reviewers, and the AC
 verifier are spawned at startup regardless of the number of ready tickets —
 any extra implementers (when ready tickets < `<IMPLEMENTERS>`) stay idle
 until tickets unblock.
@@ -318,8 +314,7 @@ For each slot N in 1..`<IMPLEMENTERS>`:
 ```
 Agent({
   subagent_type: "implementer",
-  team_name: "epic-dag-<epic-id>",
-  name: "dag-impl-<N>",
+  name: "epic-dag-<stamp>-impl-<N>",
   prompt: "You are an implementer on a team.
 
 WORKTREE: <REPO_ROOT>/.worktrees/epic-dag-<stamp>-impl-<N>
@@ -374,8 +369,7 @@ The runtime terminates your process automatically once that response is sent."
 ```
 Agent({
   subagent_type: "ac-verifier",
-  team_name: "epic-dag-<epic-id>",
-  name: "dag-ac-verifier",
+  name: "epic-dag-<stamp>-acv",
   prompt: "You are the AC verifier on a team.
 
 WORKTREE: <REPO_ROOT>/.worktrees/epic-dag-<stamp>-ac-verifier
@@ -409,8 +403,7 @@ For each slot K in 1..`<QRs>`:
 ```
 Agent({
   subagent_type: "quality-reviewer",
-  team_name: "epic-dag-<epic-id>",
-  name: "dag-qr-<K>",
+  name: "epic-dag-<stamp>-qr-<K>",
   prompt: "You are a quality reviewer on a team.
 
 WORKTREE: <REPO_ROOT>/.worktrees/epic-dag-<stamp>-qr-<K>
@@ -450,7 +443,8 @@ not in worktree`.
 - **Any report `WARNING` or wrong path**: stop immediately:
   > Worktree isolation failed — one or more agents are running in the main
   > repo. Aborting to prevent main-repo corruption.
-  Broadcast shutdown to all teammates and call `TeamDelete()`.
+  Send a `shutdown_request` to each teammate by name, wait for acks, then
+  `TaskStop` any that remain.
 
 ### Initial dispatch
 
@@ -459,7 +453,7 @@ to idle implementer slots:
 
 ```
 SendMessage({
-  to: "dag-impl-<N>",
+  to: "epic-dag-<stamp>-impl-<N>",
   message: "Ticket <ticket-id>: <ticket-title>
 
 Implement this ticket. Branch:
@@ -469,7 +463,7 @@ Run \`tk show <ticket-id>\` for full context. Signal DONE when committed."
 })
 ```
 
-Set `agent_pool["dag-impl-<N>"].assignee = <ticket-id>` and
+Set `agent_pool["epic-dag-<stamp>-impl-<N>"].assignee = <ticket-id>` and
 `ticket_state[<ticket-id>].state = DISPATCHED`.
 
 If fewer than `<IMPLEMENTERS>` ready tickets exist, the remaining implementer
@@ -529,7 +523,7 @@ When implementer slot S sends `DONE <ticket-id> ticket/<ticket-id>`:
    - Send:
      ```
      SendMessage({
-       to: "dag-ac-verifier",
+       to: "epic-dag-<stamp>-acv",
        message: "Verify <E.ticket_id> on branch <E.branch>. Run `tk show <E.ticket_id>` for acceptance criteria. Write detailed results as a note on the ticket, then SendMessage the team lead with PASS or FAIL as the first word of the message."
      })
      ```
@@ -559,7 +553,7 @@ When the AC verifier sends `PASS <ticket-id>`:
 4. **If the quality reviewer is idle** (no ticket currently has
    `verification_phase == "quality"`), dispatch this ticket's QR job:
    - Find and remove `ticket-id`'s entry from `quality_review_queue`.
-   - Find the idle QR slot (dag-qr-1 .. dag-qr-`<QRs>` — whichever is not
+   - Find the idle QR slot (epic-dag-<stamp>-qr-1 .. epic-dag-<stamp>-qr-`<QRs>` — whichever is not
      currently processing a job).
    - `ticket_state[ticket-id].verification_phase = "quality"`
    - Send:
@@ -1015,22 +1009,25 @@ When all child tickets of the epic have reached CLOSED or BLOCKED state:
    ```
 
 3. Broadcast `shutdown_request` to every spawned slot. Iterate from the
-   `agent_pool` keys for implementers, plus `dag-ac-verifier` and each
-   `dag-qr-K` for K in 1..`<QRs>`. Example with `IMPLEMENTERS=4`, `QRs=2`:
+   `agent_pool` keys for implementers, plus `epic-dag-<stamp>-acv` and each
+   `epic-dag-<stamp>-qr-K` for K in 1..`<QRs>`. Example with `IMPLEMENTERS=4`, `QRs=2`:
    ```
-   SendMessage({ to: "dag-impl-1",      message: { "type": "shutdown_request" } })
+   SendMessage({ to: "epic-dag-<stamp>-impl-1",      message: { "type": "shutdown_request" } })
    # ...one per implementer slot...
-   SendMessage({ to: "dag-impl-<IMPLEMENTERS>", message: { "type": "shutdown_request" } })
-   SendMessage({ to: "dag-ac-verifier", message: { "type": "shutdown_request" } })
-   SendMessage({ to: "dag-qr-1",        message: { "type": "shutdown_request" } })
-   # ...one per QR slot up to dag-qr-<QRs>...
+   SendMessage({ to: "epic-dag-<stamp>-impl-<IMPLEMENTERS>", message: { "type": "shutdown_request" } })
+   SendMessage({ to: "epic-dag-<stamp>-acv", message: { "type": "shutdown_request" } })
+   SendMessage({ to: "epic-dag-<stamp>-qr-1",        message: { "type": "shutdown_request" } })
+   # ...one per QR slot up to epic-dag-<stamp>-qr-<QRs>...
    ```
 
 4. Wait up to 30 seconds for a `shutdown_response` from each teammate (the
-   runtime terminates each process when its response arrives). Proceed after
-   timeout — agents should already be idle.
+   runtime terminates each process when its response arrives). Then call
+   `ListAgents` and `TaskStop({ task_id: "<name>" })` for any of this run's
+   slots still listed. `TaskStop` is an abrupt stop with no shutdown window,
+   so use it only for agents that did not respond.
 
-5. Remove all worktrees:
+5. Once no agent from this run is still running, remove all worktrees (a live
+   agent holds its worktree busy):
    ```bash
    for N in $(seq 1 <IMPLEMENTERS>); do
      git worktree remove .worktrees/epic-dag-$STAMP-impl-$N --force 2>/dev/null || true
@@ -1040,8 +1037,6 @@ When all child tickets of the epic have reached CLOSED or BLOCKED state:
      git worktree remove .worktrees/epic-dag-$STAMP-qr-$K --force 2>/dev/null || true
    done
    ```
-
-6. Call `TeamDelete()`.
 
 ---
 
@@ -1087,10 +1082,12 @@ last message was STATUS, immediately send `continue working on <ticket-id>`.
 
 ### Partial shutdown (user stops mid-run)
 
-1. Broadcast `shutdown_request` to all teammates.
+1. Send a `shutdown_request` to each teammate by name — every `agent_pool` key,
+   the AC verifier, and every QR slot.
 2. Wait up to 30 seconds for a `shutdown_response` from each (the runtime
    terminates each process when its response arrives).
-3. Call `TeamDelete()`.
+3. Call `ListAgents` and `TaskStop({ task_id: "<name>" })` for any of this
+   run's slots still listed.
 
 In-progress tickets remain marked in-progress in `tk`. The user can resume
 by running `/run-epic-dag` again — in-progress tickets will be re-claimable.
@@ -1146,11 +1143,11 @@ Same procedure in all cases:
 4. Re-spawn with the **exact same Agent call** used at startup: same `name`,
    same `subagent_type`, no `isolation: "worktree"` (worktree already exists).
    For the worktree path in the prompt:
-   - **Implementer slots** (`dag-impl-1` .. `dag-impl-<IMPLEMENTERS>`): read
+   - **Implementer slots** (`epic-dag-<stamp>-impl-1` .. `epic-dag-<stamp>-impl-<IMPLEMENTERS>`): read
      from `agent_pool[slot].worktree`
      (e.g. `$REPO_ROOT/.worktrees/epic-dag-$STAMP-impl-2`).
-   - **AC verifier and QR slots** (`dag-ac-verifier`, `dag-qr-1` ..
-     `dag-qr-<QRs>`): not tracked in `agent_pool` — derive from the stamp as
+   - **AC verifier and QR slots** (`epic-dag-<stamp>-acv`, `epic-dag-<stamp>-qr-1` ..
+     `epic-dag-<stamp>-qr-<QRs>`): not tracked in `agent_pool` — derive from the stamp as
      `$REPO_ROOT/.worktrees/epic-dag-$STAMP-ac-verifier` or
      `$REPO_ROOT/.worktrees/epic-dag-$STAMP-qr-<K>`, matching the paths
      created in Step 1.2.
@@ -1169,13 +1166,13 @@ Output a status dashboard every time agent or ticket state changes.
 
 | Agent          | State         | Working on              | Last heard |
 |---|---|---|---|
-| dag-impl-1     | implementing  | [cc-1abc] Add endpoint  | 14:29:47   |
-| dag-impl-2     | idle          |                         | 14:30:55   |
-| dag-impl-3     | idle          |                         |            |
-| dag-impl-4     | idle          |                         |            |
-| dag-ac-verifier| idle          |                         | 14:31:02   |
-| dag-qr-1       | reviewing     | [cc-1abc]               | 14:32:11   |
-| dag-qr-2       | idle          |                         |            |
+| epic-dag-<stamp>-impl-1     | implementing  | [cc-1abc] Add endpoint  | 14:29:47   |
+| epic-dag-<stamp>-impl-2     | idle          |                         | 14:30:55   |
+| epic-dag-<stamp>-impl-3     | idle          |                         |            |
+| epic-dag-<stamp>-impl-4     | idle          |                         |            |
+| epic-dag-<stamp>-acv| idle          |                         | 14:31:02   |
+| epic-dag-<stamp>-qr-1       | reviewing     | [cc-1abc]               | 14:32:11   |
+| epic-dag-<stamp>-qr-2       | idle          |                         |            |
 
 **Tickets**
 

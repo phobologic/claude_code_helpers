@@ -59,7 +59,7 @@ remaining tickets are unblocked, report:
 > No unblocked tickets found. Check `tk blocked` to see what is holding
 > things up. The run cannot proceed until at least one ticket is unblocked.
 
-Stop — do not create the team.
+Stop — do not spawn any agents.
 
 Mark all remaining (non-closed, non-in-progress) tickets as in-progress
 immediately, before planning or confirmation, so concurrent runs cannot
@@ -107,12 +107,12 @@ ticket_state: Map<ticket_id, TicketState>
   # verification_phase: "quality" | null
 
 agent_pool: Map<slot_name, AgentSlot>
-  # slot_name: "dag-impl-1" .. "dag-impl-<IMPLEMENTERS>"
+  # slot_name: "fix-dag-<stamp>-impl-1" .. "fix-dag-<stamp>-impl-<IMPLEMENTERS>"
   # assignee: ticket_id | null
   # worktree: "<REPO_ROOT>/.worktrees/fix-dag-<stamp>-impl-<N>"
 
 qr_pool: Map<slot_name, QRSlot>
-  # slot_name: "dag-qr-1" .. "dag-qr-<QRs>"
+  # slot_name: "fix-dag-<stamp>-qr-1" .. "fix-dag-<stamp>-qr-<QRs>"
   # assignee: ticket_id | null   # null = idle
 
 quality_review_queue: Queue<{ticket_id, branch}>   # FIFO
@@ -269,9 +269,12 @@ If either produces output, stop and report to the user — do not auto-clean.
 
 Worktree directory names are **stamp-scoped** so that multiple concurrent
 `/fix-tickets-dag` runs in the same repo never share worktrees. The stamp
-from Phase 1.1 is reused here. Agent slot names (`dag-impl-1` etc.) stay
-short because they are scoped by `team_name` — only filesystem paths need
-the stamp.
+from Phase 1.1 is reused here. Agent slot names carry the same stamp
+(`fix-dag-<stamp>-impl-1` etc.). Agent names live in a single session-wide
+namespace — there is no per-team scoping — so two concurrent runs using bare
+slot names like `impl-1` would collide in `ListAgents` and misroute every
+`SendMessage`. The stamp prefix is what keeps the runs apart. Names must match
+`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`, which the stamped form satisfies.
 
 Create exactly `<IMPLEMENTERS>` implementer worktrees and `<QRs>`
 quality-reviewer worktrees. For example, with `IMPLEMENTERS=1` and `QRs=1`
@@ -294,19 +297,10 @@ Register worktree paths in `agent_pool` for each implementer slot N in
 1..`<IMPLEMENTERS>`:
 
 ```
-agent_pool["dag-impl-<N>"].worktree = "$REPO_ROOT/.worktrees/fix-dag-$STAMP-impl-<N>"
+agent_pool["fix-dag-<stamp>-impl-<N>"].worktree = "$REPO_ROOT/.worktrees/fix-dag-$STAMP-impl-<N>"
 ```
 
-### Step 1.3: Create the team
-
-```
-TeamCreate({
-  team_name: "fix-dag-<stamp>",
-  description: "DAG-driven fix team: <N> tickets, stamp <stamp>"
-})
-```
-
-### Step 1.4: Create initial tasks
+### Step 1.3: Create initial tasks
 
 Create a task for each ready ticket (up to `<IMPLEMENTERS>`):
 
@@ -319,10 +313,11 @@ TaskCreate({
 })
 ```
 
-### Step 1.5: Spawn teammates
+### Step 1.4: Spawn teammates
 
-Spawn all agents using the `Agent` tool with `team_name: "fix-dag-<stamp>"`.
-All `<IMPLEMENTERS>` implementers and `<QRs>` quality reviewers are spawned at
+Spawn all agents using the `Agent` tool. The `name` you pass is the address for
+`SendMessage` and the identifier `ListAgents` prints, so use the stamped slot
+names from Step 1.2 verbatim. All `<IMPLEMENTERS>` implementers and `<QRs>` quality reviewers are spawned at
 startup regardless of the number of ready tickets — any extra implementers
 (when ready tickets < `<IMPLEMENTERS>`) stay idle until tickets unblock.
 
@@ -333,8 +328,7 @@ For each slot N in 1..`<IMPLEMENTERS>`:
 ```
 Agent({
   subagent_type: "implementer",
-  team_name: "fix-dag-<stamp>",
-  name: "dag-impl-<N>",
+  name: "fix-dag-<stamp>-impl-<N>",
   prompt: "You are an implementer on a team.
 
 WORKTREE: <REPO_ROOT>/.worktrees/fix-dag-<stamp>-impl-<N>
@@ -391,8 +385,7 @@ For each slot K in 1..`<QRs>`:
 ```
 Agent({
   subagent_type: "quality-reviewer",
-  team_name: "fix-dag-<stamp>",
-  name: "dag-qr-<K>",
+  name: "fix-dag-<stamp>-qr-<K>",
   prompt: "You are a quality reviewer on a team.
 
 WORKTREE: <REPO_ROOT>/.worktrees/fix-dag-<stamp>-qr-<K>
@@ -432,7 +425,8 @@ not in worktree`.
 - **Any report `WARNING` or wrong path**: stop immediately:
   > Worktree isolation failed — one or more agents are running in the main
   > repo. Aborting to prevent main-repo corruption.
-  Broadcast shutdown to all teammates and call `TeamDelete()`.
+  Send a `shutdown_request` to each teammate by name, wait for acks, then
+  `TaskStop` any that remain.
 
 ### Initial dispatch
 
@@ -441,7 +435,7 @@ implementer slots:
 
 ```
 SendMessage({
-  to: "dag-impl-<N>",
+  to: "fix-dag-<stamp>-impl-<N>",
   message: "Ticket <ticket-id>: <ticket-title>
 
 Implement this ticket. Branch:
@@ -451,7 +445,7 @@ Run \`tk show <ticket-id>\` for full context. Signal DONE when committed."
 })
 ```
 
-Set `agent_pool["dag-impl-<N>"].assignee = <ticket-id>` and
+Set `agent_pool["fix-dag-<stamp>-impl-<N>"].assignee = <ticket-id>` and
 `ticket_state[<ticket-id>].state = DISPATCHED`.
 
 If fewer than 4 ready tickets exist, the remaining implementer slots stay
@@ -500,7 +494,7 @@ When implementer slot S sends `DONE <ticket-id> fix/<ticket-id>`:
    head of `quality_review_queue`:
    - Pop the head entry E.
    - Find the idle QR slot: `qr_pool` entry where `assignee == null`
-     (dag-qr-1 .. dag-qr-`<QRs>` — whichever is not currently processing a
+     (fix-dag-<stamp>-qr-1 .. fix-dag-<stamp>-qr-`<QRs>` — whichever is not currently processing a
      job).
    - `ticket_state[E.ticket_id].state = VERIFYING`
    - `ticket_state[E.ticket_id].verification_phase = "quality"`
@@ -909,20 +903,23 @@ When all input tickets have reached CLOSED or BLOCKED state:
    ```
 
 3. Broadcast `shutdown_request` to every spawned slot. Iterate from the
-   `agent_pool` keys for implementers and each `dag-qr-K` for K in
+   `agent_pool` keys for implementers and each `fix-dag-<stamp>-qr-K` for K in
    1..`<QRs>`. Example with `IMPLEMENTERS=4`, `QRs=2`:
    ```
-   SendMessage({ to: "dag-impl-1", message: { "type": "shutdown_request" } })
-   # ...one per implementer slot up to dag-impl-<IMPLEMENTERS>...
-   SendMessage({ to: "dag-qr-1",   message: { "type": "shutdown_request" } })
-   # ...one per QR slot up to dag-qr-<QRs>...
+   SendMessage({ to: "fix-dag-<stamp>-impl-1", message: { "type": "shutdown_request" } })
+   # ...one per implementer slot up to fix-dag-<stamp>-impl-<IMPLEMENTERS>...
+   SendMessage({ to: "fix-dag-<stamp>-qr-1",   message: { "type": "shutdown_request" } })
+   # ...one per QR slot up to fix-dag-<stamp>-qr-<QRs>...
    ```
 
 4. Wait up to 30 seconds for a `shutdown_response` from each teammate
-   (the runtime terminates each process when its response arrives). Proceed
-   after timeout — agents should already be idle.
+   (the runtime terminates each process when its response arrives). Then call
+   `ListAgents` and `TaskStop({ task_id: "<name>" })` for any of this run's
+   slots still listed. `TaskStop` is an abrupt stop with no shutdown window,
+   so use it only for agents that did not respond.
 
-5. Remove all worktrees:
+5. Once no agent from this run is still running, remove all worktrees (a live
+   agent holds its worktree busy):
    ```bash
    for N in $(seq 1 <IMPLEMENTERS>); do
      git worktree remove .worktrees/fix-dag-$STAMP-impl-$N --force 2>/dev/null || true
@@ -931,8 +928,6 @@ When all input tickets have reached CLOSED or BLOCKED state:
      git worktree remove .worktrees/fix-dag-$STAMP-qr-$K --force 2>/dev/null || true
    done
    ```
-
-6. Call `TeamDelete()`.
 
 ---
 
@@ -980,10 +975,12 @@ idle and its last message was STATUS, immediately send
 
 ### Partial shutdown (user stops mid-run)
 
-1. Broadcast `shutdown_request` to all teammates.
+1. Send a `shutdown_request` to each teammate by name — every `agent_pool` key
+   and every `qr_pool` key.
 2. Wait up to 30 seconds for a `shutdown_response` from each (the runtime
    terminates each process when its response arrives).
-3. Call `TeamDelete()`.
+3. Call `ListAgents` and `TaskStop({ task_id: "<name>" })` for any of this
+   run's slots still listed.
 
 In-progress tickets remain marked in-progress in `tk`. The user can
 resume by running `/fix-tickets-dag` again with the same ticket IDs.
@@ -1035,9 +1032,9 @@ Same procedure in all cases:
 4. Re-spawn with the **exact same Agent call** used at startup: same
    `name`, same `subagent_type`, no `isolation: "worktree"` (worktree
    already exists).
-   - **Implementer slots** (`dag-impl-1` .. `dag-impl-<IMPLEMENTERS>`):
+   - **Implementer slots** (`fix-dag-<stamp>-impl-1` .. `fix-dag-<stamp>-impl-<IMPLEMENTERS>`):
      read path from `agent_pool[slot].worktree`.
-   - **QR slots** (`dag-qr-1` .. `dag-qr-<QRs>`): derive from the stamp —
+   - **QR slots** (`fix-dag-<stamp>-qr-1` .. `fix-dag-<stamp>-qr-<QRs>`): derive from the stamp —
      `$REPO_ROOT/.worktrees/fix-dag-$STAMP-qr-<K>` (matching the paths
      created in Step 1.2).
 5. Wait for `WORKTREE OK`. Wrong path or `WARNING` aborts the run.
@@ -1055,12 +1052,12 @@ Output a status dashboard every time agent or ticket state changes.
 
 | Agent      | State        | Working on                | Last heard |
 |---|---|---|---|
-| dag-impl-1 | implementing | [cc-1abc] Fix null check  | 14:29:47   |
-| dag-impl-2 | idle         |                           | 14:30:55   |
-| dag-impl-3 | idle         |                           |            |
-| dag-impl-4 | idle         |                           |            |
-| dag-qr-1   | reviewing    | [cc-1abc]                 | 14:32:11   |
-| dag-qr-2   | idle         |                           |            |
+| fix-dag-<stamp>-impl-1 | implementing | [cc-1abc] Fix null check  | 14:29:47   |
+| fix-dag-<stamp>-impl-2 | idle         |                           | 14:30:55   |
+| fix-dag-<stamp>-impl-3 | idle         |                           |            |
+| fix-dag-<stamp>-impl-4 | idle         |                           |            |
+| fix-dag-<stamp>-qr-1   | reviewing    | [cc-1abc]                 | 14:32:11   |
+| fix-dag-<stamp>-qr-2   | idle         |                           |            |
 
 **Tickets**
 

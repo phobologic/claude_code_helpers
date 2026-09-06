@@ -174,18 +174,7 @@ worktree-init quality-reviewer-$STAMP $REPO_ROOT
 
 Verify each was created: `ls .worktrees/` should show all worktree dirs.
 
-### Step 1.3: Create the team
-
-Call TeamCreate to initialize the team namespace:
-
-```
-TeamCreate({
-  team_name: "epic-<epic-id>",
-  description: "Team executing epic <epic-id>: <epic title>"
-})
-```
-
-### Step 1.4: Create initial tasks
+### Step 1.3: Create initial tasks
 
 Call TaskCreate for each ready ticket (up to the implementer cap):
 
@@ -198,11 +187,12 @@ TaskCreate({
 })
 ```
 
-### Step 1.5: Spawn teammates
+### Step 1.4: Spawn teammates
 
-Spawn each teammate using the Agent tool with the `team_name` parameter so
-they join the team (not as standalone background agents). The `name` parameter
-gives each teammate a readable identifier.
+Spawn each teammate using the Agent tool. The `name` parameter is what makes a
+teammate addressable — `SendMessage({ to: "<name>", ... })` routes by it, and
+`ListAgents` prints it. Names live in a single session-wide namespace, so keep
+them unique across concurrent runs.
 
 **Implementers** (one per ready ticket, up to cap):
 
@@ -258,7 +248,6 @@ Agent({
   \`\`\`
   The runtime terminates your process automatically once that response is sent.",
   subagent_type: "implementer",
-  team_name: "epic-<epic-id>",
   name: "implementer-1-<STAMP>",
   isolation: "worktree"
 })
@@ -302,7 +291,6 @@ Agent({
   \`\`\`
   The runtime terminates your process automatically once that response is sent.",
   subagent_type: "ac-verifier",
-  team_name: "epic-<epic-id>",
   name: "ac-verifier"
 })
 ```
@@ -358,7 +346,6 @@ Agent({
   \`\`\`
   The runtime terminates your process automatically once that response is sent.",
   subagent_type: "quality-reviewer",
-  team_name: "epic-<epic-id>",
   name: "quality-reviewer"
 })
 ```
@@ -373,7 +360,8 @@ back `WORKTREE OK` or `WARNING: not in worktree`.
 - If **any report `WARNING`** (or a wrong path): stop immediately and tell the user:
   > Worktree isolation failed — one or more agents are running in the main repo.
   > This will cause main-repo corruption. Aborting.
-  Then shut down all teammates and call `TeamDelete()`.
+  Then shut down every teammate by name (shutdown request, wait for acks,
+  `TaskStop` any that remain).
 
 If any teammate failed to spawn entirely, retry the Agent call. If repeated
 failures, inform the user.
@@ -545,8 +533,8 @@ The implementer will send you a message with the ticket ID and branch name.
 1. Send a message to the AC verifier via SendMessage:
    ```
    SendMessage({
-     recipient: "ac-verifier",
-     content: "Verify <ticket-id> on branch <branch-name>. Run
+     to: "ac-verifier",
+     message: "Verify <ticket-id> on branch <branch-name>. Run
      `tk show <ticket-id>` for the acceptance criteria."
    })
    ```
@@ -567,8 +555,8 @@ Track per ticket two counters that you maintain across rework loops:
    round notes:
    ```
    SendMessage({
-     recipient: "quality-reviewer",
-     content: "Review <ticket-id> on branch <branch-name> (round <total_qr_rounds[ticket-id] + 1>).
+     to: "quality-reviewer",
+     message: "Review <ticket-id> on branch <branch-name> (round <total_qr_rounds[ticket-id] + 1>).
      Changes have passed AC verification. Diff the ticket's own changes only
      (not prior wave changes already merged to the integration branch)
      with: git diff epic/<epic-id>...<branch-name>
@@ -595,8 +583,8 @@ Track per ticket two counters that you maintain across rework loops:
 1. Tell the implementer to check the ticket for details via SendMessage:
    ```
    SendMessage({
-     recipient: "<implementer-name>",
-     content: "AC verification failed for <ticket-id>. The verifier
+     to: "<implementer-name>",
+     message: "AC verification failed for <ticket-id>. The verifier
      noted the specific failures on the ticket -- run
      `tk show <ticket-id>` for details. Address the issues, recommit,
      and let me know when ready."
@@ -666,8 +654,8 @@ medium/low finding tickets -- these are tracked but non-blocking.
    dispatched only after the wave boundary restart:
    ```
    SendMessage({
-     recipient: "<implementer-name>",
-     content: "<ticket-id> closed and merged. Stand by — do not start new work."
+     to: "<implementer-name>",
+     message: "<ticket-id> closed and merged. Stand by — do not start new work."
    })
    ```
    If `current_wave` is now empty and all agents are idle, proceed to
@@ -683,8 +671,8 @@ to the implementer with the OUT_OF_SCOPE escape hatch:
 1. Forward the inline findings:
    ```
    SendMessage({
-     recipient: "<implementer-name>",
-     content: "Quality review returned REWORK for <ticket-id>. Fix these in
+     to: "<implementer-name>",
+     message: "Quality review returned REWORK for <ticket-id>. Fix these in
      your branch and signal DONE again:
 
      <paste the numbered finding list from the reviewer's REWORK message verbatim>
@@ -775,12 +763,11 @@ Implementers reuse their pre-created worktrees. Do NOT use `isolation: "worktree
 on re-spawn — the worktrees already exist, and the isolation parameter creates a
 new worktree via raw `git worktree add`, bypassing the `worktree-init` setup.
 
-Write the full implementer prompt — do not abbreviate or reference Phase 1.5:
+Write the full implementer prompt — do not abbreviate or reference Phase 1.4:
 
 ```
 Agent({
   subagent_type: "implementer",
-  team_name: "epic-<epic-id>",
   name: "implementer-<N>-<STAMP>",
   prompt: "You are an implementer on a team.
 
@@ -833,17 +820,17 @@ Agent({
   The runtime terminates your process automatically once that response is sent."
 })
 # ... repeat for needed implementer count
-Agent({ subagent_type: "ac-verifier",      team_name: "epic-<epic-id>", name: "ac-verifier",
-        prompt: "<same as Phase 1.5 — full worktree cd + HARD RULES block>" })
-Agent({ subagent_type: "quality-reviewer", team_name: "epic-<epic-id>", name: "quality-reviewer",
-        prompt: "<same as Phase 1.5 — full worktree cd + HARD RULES block>" })
+Agent({ subagent_type: "ac-verifier",      name: "ac-verifier",
+        prompt: "<same as Phase 1.4 — full worktree cd + HARD RULES block>" })
+Agent({ subagent_type: "quality-reviewer", name: "quality-reviewer",
+        prompt: "<same as Phase 1.4 — full worktree cd + HARD RULES block>" })
 
 **5. Wait for `WORKTREE OK`** from all re-spawned implementers. Each must
 report the `pwd` output showing their worktree path. Apply the same abort
 logic as Phase 2 — if any report `WARNING` or a wrong path, stop.
 
 **6. Dispatch wave N+1 tickets** to implementers via SendMessage (same format as
-Phase 1.5). Add all dispatched ticket IDs to `current_wave`. Increment `wave_number`.
+Phase 1.4). Add all dispatched ticket IDs to `current_wave`. Increment `wave_number`.
 
 **Known limitation:** agent restarts clear context between waves but do not protect
 against compaction during a single long-running ticket. If a ticket is complex
@@ -886,16 +873,20 @@ When all child tickets of the epic are closed:
      <finding-ticket-ids>
    ```
 
-3. Shut down all teammates by sending shutdown requests:
+3. Shut down every teammate individually — there is no team-level teardown
+   call. Send the structured shutdown request; the teammate replies with a
+   `shutdown_response` and the runtime then terminates its process:
    ```
-   SendMessage({ to: "implementer-1-<STAMP>", message: "type: shutdown_request" })
+   SendMessage({ to: "implementer-1-<STAMP>", message: { type: "shutdown_request", reason: "epic complete" } })
    # ... all implementers
-   SendMessage({ to: "ac-verifier",           message: "type: shutdown_request" })
-   SendMessage({ to: "quality-reviewer",      message: "type: shutdown_request" })
+   SendMessage({ to: "ac-verifier",           message: { type: "shutdown_request", reason: "epic complete" } })
+   SendMessage({ to: "quality-reviewer",      message: { type: "shutdown_request", reason: "epic complete" } })
    ```
 
-4. Wait briefly for teammates to acknowledge, then clean up worktrees
-   and the team:
+4. Wait for each teammate to acknowledge. Then call `ListAgents` and
+   `TaskStop({ task_id: "<name>" })` for any of this run's agents still
+   listed — an agent that never acked would otherwise keep its worktree
+   busy. Only once none are running, clean up the worktrees:
    ```bash
    # Clean up implementer worktrees (adjust count to match)
    for N in 1 2 3; do
@@ -904,9 +895,6 @@ When all child tickets of the epic are closed:
    # Clean up verifier and reviewer worktrees
    git worktree remove .worktrees/ac-verifier-<STAMP>      --force 2>/dev/null || true
    git worktree remove .worktrees/quality-reviewer-<STAMP> --force 2>/dev/null || true
-   ```
-   ```
-   TeamDelete()
    ```
 
 ## Edge Cases
@@ -951,8 +939,8 @@ implementer:
 
 ```
 SendMessage({
-  recipient: "<implementer-name>",
-  content: "Merge conflict when integrating <ticket-id> into
+  to: "<implementer-name>",
+  message: "Merge conflict when integrating <ticket-id> into
   epic/<epic-id>. Check out epic/<epic-id>, merge your branch, resolve
   the conflicts, commit, and let me know when done. This will go
   through the full validation cycle again."
@@ -982,7 +970,8 @@ with `<<<<<<< Updated upstream` markers mid-run. The Phase 1.1 stash-list
 guard and per-agent worktrees prevent it at the source; this guard catches
 any new variant of the same bug.
 
-**User wants to stop mid-epic.** Send shutdown_request to all teammates via
-SendMessage, wait for acknowledgments, then call TeamDelete. In-progress
+**User wants to stop mid-epic.** Send a `shutdown_request` to each teammate by
+name via SendMessage, wait for acknowledgments, then `ListAgents` and
+`TaskStop` any that are still running. In-progress
 tickets remain marked as in-progress in tk. The user can resume later by
 running /run-epic again (in-progress tickets will show as claimable).
