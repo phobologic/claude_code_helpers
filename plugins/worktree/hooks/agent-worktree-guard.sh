@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
 # PreToolUse hook for Agent — workaround for anthropics/claude-code#33045.
 #
-# isolation: "worktree" is silently ignored for TeamCreate agents. This hook
+# isolation: "worktree" is silently ignored for team agents. This hook
 # detects that combination and pre-creates the worktree at .worktrees/<name>
 # so it exists before the agent spawns.
+#
+# STATUS: inert. The guard below requires a non-empty team_name, but that
+# parameter was removed from the Agent tool (one implicit team per session),
+# so the guard never matches and this hook exits early on every spawn. The
+# team skills do not rely on it — they pre-create worktrees with worktree-init
+# before spawning. Decide whether to re-trigger on isolation alone or drop
+# the hook; do not assume it is running today.
 #
 # The platform cannot change the agent's cwd, so the agent must cd to the
 # worktree itself. The path is deterministic from the agent name, so spawn

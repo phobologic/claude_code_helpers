@@ -632,6 +632,11 @@ If the user requests a stop mid-run:
 1. Broadcast `shutdown_request` to all teammates.
 2. Wait up to 30 seconds for `SHUTDOWN_ACK` from each.
 3. Call `TeamDelete()`.
+
+> **Stale as written.** `TeamDelete` no longer exists and there is no broadcast
+> address. The shipped skills send a `shutdown_request` to each teammate by name,
+> then `TaskStop` any that do not ack. See `agent-teams.md` for the current
+> sequence; this section is kept as a record of the original design.
 4. Tickets in-progress in `tk` remain in-progress — the user can resume by running
    the skill again. In-progress tickets are re-claimable on the next run.
 

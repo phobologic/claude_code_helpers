@@ -170,10 +170,13 @@ repo for problems encountered during real-world use.
 Agent teams require Claude Code's multi-agent features. No extra setup beyond
 `./install.sh` — the skill and agent files are symlinked into `~/.claude/` automatically.
 
-The `/run-epic` skill acts as **team lead**. It calls `TeamCreate`, then spawns each
-teammate with the `Agent` tool using `team_name` and `name` parameters so they can
-receive messages via `SendMessage`. Implementers run with `isolation: worktree` so each
-works in its own copy of the repo.
+The `/run-epic` skill acts as **team lead**. There is no team object to create —
+a session has one implicit team, so the lead simply spawns each teammate with the
+`Agent` tool and a `name`, which is what lets it reach them via `SendMessage` and
+see them in `ListAgents`. Worktrees are pre-created with `worktree-init` before any
+agent spawns, and each implementer `cd`s to its own copy of the repo at startup.
+At the end the lead shuts down each teammate by name with a `shutdown_request`;
+there is no team-level teardown call.
 
 **Useful keyboard shortcuts while a team is running:**
 
@@ -459,14 +462,15 @@ Both files are newline-delimited lists of repo-relative paths. Lines starting wi
 
 **First-time setup:** on the first message after installing the plugin in a repo that has `.worktreeinclude` but no `.worktreelinks`, Claude will walk you through migrating entries to the right file. Once `.worktreelinks` exists (even empty) the prompt won't appear again.
 
-**Agent team workaround:** Claude Code's `isolation: "worktree"` parameter is
-[silently ignored](https://github.com/anthropics/claude-code/issues/33045) for
-agents spawned via `TeamCreate`. The plugin includes a `PreToolUse` hook
-(`agent-worktree-guard.sh`) that detects this combination and pre-creates the
-worktree at `.worktrees/<agent-name>` before the agent spawns. Since the platform
-can't change the agent's working directory, agents must `cd` to their worktree
-themselves — the path is deterministic from the agent name, so spawn prompts can
-reference it directly.
+**Agent team workaround (currently inert):** Claude Code's `isolation: "worktree"`
+parameter was [silently ignored](https://github.com/anthropics/claude-code/issues/33045)
+for team agents. The plugin includes a `PreToolUse` hook (`agent-worktree-guard.sh`)
+that pre-created the worktree at `.worktrees/<agent-name>` before the agent spawned.
+The hook gates on the `Agent` call carrying **both** `isolation: "worktree"` and a
+non-empty `team_name`. Since `team_name` was removed from the tool, that gate never
+matches and the hook is a no-op on every spawn. The team skills do not depend on it —
+they pre-create every worktree explicitly with `worktree-init` — but the hook needs
+a new trigger condition (or removal) before it does anything again.
 
 To avoid collisions between concurrent sessions (or stale worktrees from crashed
 runs), the `/run-epic` and `/fix-tickets` skills append a short session-unique

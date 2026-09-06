@@ -125,9 +125,11 @@ Exceptions where `/tmp` is still appropriate:
 
 ## Agent Teams
 
-When coordinating a team of agents (`TeamCreate` → spawn → coordinate → cleanup),
-read `~/.claude/agent-teams.md` for the worktree-location, CWD, git-in-worktree,
-and shutdown-before-delete rules. Skills that orchestrate teams (`/run-epic`,
+When coordinating a team of agents (spawn → coordinate → shut down), read
+`~/.claude/agent-teams.md` for the worktree-location, CWD, git-in-worktree,
+and per-agent shutdown rules. There is no `TeamCreate`/`TeamDelete` and no
+broadcast address: agents are addressed by the `name` given at spawn, and each
+is shut down individually. Skills that orchestrate teams (`/run-epic`,
 `/run-epic-dag`, `/fix-tickets`, `/fix-tickets-dag`) document the same conventions.
 
 ## Testing
