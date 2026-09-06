@@ -300,20 +300,7 @@ Register worktree paths in `agent_pool` for each implementer slot N in
 agent_pool["fix-dag-<stamp>-impl-<N>"].worktree = "$REPO_ROOT/.worktrees/fix-dag-$STAMP-impl-<N>"
 ```
 
-### Step 1.3: Create initial tasks
-
-Create a task for each ready ticket (up to `<IMPLEMENTERS>`):
-
-```
-TaskCreate({
-  subject: "Implement <ticket-id>: <ticket title>",
-  description: "Run `tk show <ticket-id>` for full context. Implement,
-  write tests, ensure tests pass, commit, then message the team lead
-  when done."
-})
-```
-
-### Step 1.4: Spawn teammates
+### Step 1.3: Spawn teammates
 
 Spawn all agents using the `Agent` tool. The `name` you pass is the address for
 `SendMessage` and the identifier `ListAgents` prints, so use the stamped slot

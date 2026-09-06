@@ -174,20 +174,7 @@ worktree-init quality-reviewer-$STAMP $REPO_ROOT
 
 Verify each was created: `ls .worktrees/` should show all worktree dirs.
 
-### Step 1.3: Create initial tasks
-
-Call TaskCreate for each ready ticket (up to the implementer cap):
-
-```
-TaskCreate({
-  subject: "Implement <ticket-id>: <ticket title>",
-  description: "Run `tk show <ticket-id>` for full context including
-  description and acceptance criteria. Implement, write tests, ensure
-  tests pass, commit, then message the team lead when done."
-})
-```
-
-### Step 1.4: Spawn teammates
+### Step 1.3: Spawn teammates
 
 Spawn each teammate using the Agent tool. The `name` parameter is what makes a
 teammate addressable — `SendMessage({ to: "<name>", ... })` routes by it, and
@@ -640,14 +627,8 @@ medium/low finding tickets -- these are tracked but non-blocking.
    ```bash
    tk ready
    ```
-   Filter to tickets under this epic. If new work is available, create a
-   task and dispatch it:
-   ```
-   TaskCreate({
-     subject: "Implement <ticket-id>: <ticket title>",
-     description: "Run `tk show <ticket-id>` for full context..."
-   })
-   ```
+   Filter to tickets under this epic. Note any newly available work — it is
+   dispatched at the next wave boundary (step 6), not here.
 
 6. Remove `<ticket-id>` from `current_wave`. Stand the implementer down — do not
    dispatch new work directly here, even if unblocked tickets exist. New work is
@@ -763,7 +744,7 @@ Implementers reuse their pre-created worktrees. Do NOT use `isolation: "worktree
 on re-spawn — the worktrees already exist, and the isolation parameter creates a
 new worktree via raw `git worktree add`, bypassing the `worktree-init` setup.
 
-Write the full implementer prompt — do not abbreviate or reference Phase 1.4:
+Write the full implementer prompt — do not abbreviate or reference Phase 1.3:
 
 ```
 Agent({
@@ -821,16 +802,16 @@ Agent({
 })
 # ... repeat for needed implementer count
 Agent({ subagent_type: "ac-verifier",      name: "ac-verifier",
-        prompt: "<same as Phase 1.4 — full worktree cd + HARD RULES block>" })
+        prompt: "<same as Phase 1.3 — full worktree cd + HARD RULES block>" })
 Agent({ subagent_type: "quality-reviewer", name: "quality-reviewer",
-        prompt: "<same as Phase 1.4 — full worktree cd + HARD RULES block>" })
+        prompt: "<same as Phase 1.3 — full worktree cd + HARD RULES block>" })
 
 **5. Wait for `WORKTREE OK`** from all re-spawned implementers. Each must
 report the `pwd` output showing their worktree path. Apply the same abort
 logic as Phase 2 — if any report `WARNING` or a wrong path, stop.
 
 **6. Dispatch wave N+1 tickets** to implementers via SendMessage (same format as
-Phase 1.4). Add all dispatched ticket IDs to `current_wave`. Increment `wave_number`.
+Phase 1.3). Add all dispatched ticket IDs to `current_wave`. Increment `wave_number`.
 
 **Known limitation:** agent restarts clear context between waves but do not protect
 against compaction during a single long-running ticket. If a ticket is complex
