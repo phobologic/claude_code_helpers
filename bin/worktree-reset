@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Reset a linked worktree to a clean, detached checkout of a base ref.
+#
+# Usage: worktree-reset <worktree-path> <base-ref>
+#
+# Used by /run-tickets between tickets in the same worktree slot. Refuses to
+# touch anything that is not a linked worktree under <repo>/.worktrees/, since
+# the `git clean -fd` below would delete real files if pointed at the main repo.
+#
+# Steps: detach at <base-ref>, hard reset, clean untracked files, verify the
+# tree is clean, then re-run worktree-init to restore .worktreelinks symlinks
+# (which `git clean` removes because git sees them as untracked).
+set -euo pipefail
+
+WORKTREE="${1:?Usage: worktree-reset <worktree-path> <base-ref>}"
+BASE_REF="${2:?Usage: worktree-reset <worktree-path> <base-ref>}"
+
+WORKTREE=$(cd "$WORKTREE" && pwd -P)
+
+# Linked worktrees have .git as a FILE (gitdir pointer); the main repo has a
+# .git DIRECTORY. Anything else means we are pointed at the wrong place.
+if [[ ! -f "$WORKTREE/.git" ]]; then
+  echo "worktree-reset: refusing — $WORKTREE is not a linked worktree (.git is not a file)" >&2
+  exit 1
+fi
+
+REPO_ROOT=$(cd "$WORKTREE" && git rev-parse --path-format=absolute --git-common-dir)
+REPO_ROOT=$(cd "$REPO_ROOT/.." && pwd -P)
+case "$WORKTREE" in
+  "$REPO_ROOT"/.worktrees/?*) ;;
+  *)
+    echo "worktree-reset: refusing — $WORKTREE is not under $REPO_ROOT/.worktrees/" >&2
+    exit 1
+    ;;
+esac
+
+cd "$WORKTREE"
+# --detach so the base branch is never pinned to this worktree; a pinned
+# branch cannot be checked out anywhere else (e.g. the integration worktree).
+git checkout --quiet --detach "$BASE_REF"
+git reset --quiet --hard "$BASE_REF"
+git clean -fdq
+
+# Verify before restoring symlinks: restored links show up as untracked.
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "worktree-reset: $WORKTREE is still dirty after reset:" >&2
+  git status --porcelain >&2
+  exit 1
+fi
+
+worktree-init "$(basename "$WORKTREE")" "$REPO_ROOT" >/dev/null
+echo "worktree-reset: $WORKTREE clean at $(git rev-parse --short HEAD) ($BASE_REF)" >&2

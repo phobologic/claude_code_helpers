@@ -13,7 +13,8 @@ and database conventions.
 
 ```
 skills/         Global skills (review, multi-review, implement-ticket, use-railway, …)
-agents/         Sub-agents for multi-agent code review (5 specialized reviewers)
+agents/         Sub-agents for code review, agent-team execution, and the run-tickets workflow
+workflows/      Saved Claude Code workflow scripts (run-tickets)
 languages/      Per-language Claude Code plugins (go, python) — hooks + rules
 tools/          Per-tool rules files (railway, sqlalchemy) — loaded via .claude/rules/ symlinks
 bin/            Utility scripts (tk plugins, etc.)
@@ -28,6 +29,7 @@ Run `./install.sh` to configure `~/.claude/`:
 - `~/.claude/CLAUDE.md` → `CLAUDE.global.md`
 - `~/.claude/skills/` → `skills/`
 - `~/.claude/agents/` → `agents/`
+- `~/.claude/workflows/` → `workflows/`
 - `~/.claude/rules/go.md` → `languages/go/rules/CLAUDE.md`
 - `~/.claude/rules/python.md` → `languages/python/rules/CLAUDE.md`
 
@@ -74,7 +76,8 @@ To add language auto-formatting hooks to a project:
 - `/spec [idea]` - Turn a rough idea into a phased plan with EARS ACs, adversarial review via spec-critic, and `tk` tickets
 - `/run-epic <epic-id>` - Execute a `tk` epic with an agent team (implementers + ac-verifier + quality-reviewer)
 - `/run-epic-dag <epic-id>` - **Experimental.** DAG-driven variant of `/run-epic` with continuous dispatching and a fixed agent pool (4 implementers, 2 quality reviewers, 1 AC verifier). Tickets unblock and dispatch without wave boundaries. File issues in this repo for problems encountered during real-world use.
-- `/wrap-epic [epic-id]` - Ship a completed `/run-epic` or `/fix-tickets` batch: merge to main, prune worktrees, close epic with ship note, report remaining sub-epics. User-only (`disable-model-invocation: true`) — confirms before any destructive action.
+- `/run-tickets <epic-id> | <id> [id ...] [--resume]` - **Experimental.** Workflow-backed replacement candidate for the four agent-team runners. The skill plans the ticket graph (`bin/run-tickets-plan`) and sets up worktrees; the `run-tickets` workflow script does all scheduling in code: dependency order, a pool of worktree slots, a fresh agent per step, AC verification only for tickets with acceptance criteria, capped rework, and one-at-a-time merges in a dedicated integration worktree. Watch it with `/workflows`.
+- `/wrap-epic [epic-id]` - Ship a completed `/run-epic`, `/fix-tickets`, or `/run-tickets` batch: merge to main, prune worktrees, close epic with ship note, report remaining sub-epics. User-only (`disable-model-invocation: true`) — confirms before any destructive action.
 
 ### Review
 - `/review` - Perform standard code review of uncommitted changes
@@ -112,6 +115,16 @@ Used by `/run-epic` and `/fix-tickets` to implement tickets in parallel with val
 4. **spec-critic**: Adversarial plan review used by `/spec` before presenting to user (sonnet)
 
 `/fix-tickets` uses implementer + quality-reviewer only (no ac-verifier) since multi-review tickets don't have formal acceptance criteria.
+
+## Run-Tickets Workflow Agents
+
+Used only by the `run-tickets` workflow. They never use `SendMessage`; each call is a fresh agent that returns a typed result through `StructuredOutput`. Kept separate from the team agents above so neither set carries the other's protocol.
+
+1. **ticket-implementer** (opus, high): implements one ticket or one rework round (AC failures, review findings, merge conflict) in the worktree its prompt names
+2. **ticket-verifier** (sonnet, medium): binary AC check, noted on the ticket
+3. **ticket-reviewer** (opus, high): adversarial diff review; inline findings come back for rework, out-of-scope ones become `tk` tickets
+
+The workflow's merge step (haiku) and final integration check (sonnet) use inline prompts, not agent files.
 
 ## Multi-Review Agent Specializations
 

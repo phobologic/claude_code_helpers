@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+# Planning helper for /run-tickets: resolve a ticket set and its dependency graph.
+"""
+Usage: run-tickets-plan [--include-in-progress] <epic-id> | <ticket-id> [ticket-id ...]
+
+Resolves the input to a set of runnable tickets and prints one JSON object:
+
+  mode              "epic" or "ids"
+  epic_id           the epic when mode == "epic", else null
+  shared_parent     the parent every runnable ticket shares, or null if mixed/none
+  tickets           runnable tickets, topologically ordered:
+                      {id, title, priority, parent, deps, has_ac, files}
+                    deps lists only in-set tickets this one waits on
+  excluded          [{id, title, reason}] for tickets that will not run
+  cycles            dependency cycles among the input tickets (each a list of ids)
+  overlaps          [{file, tickets}] for files named by 2+ tickets that have no
+                    dependency path between them (likely merge conflicts)
+  unannotated       ids of runnable tickets with no **Files**: line
+  stats             {ready_now, longest_chain, max_width}
+
+Tickets are excluded when closed, when they are epics, when in_progress (unless
+--include-in-progress, used to resume a stopped run), when they wait on an open
+ticket outside the set, or when they sit downstream of an excluded ticket.
+"""
+
+import json
+import re
+import subprocess
+import sys
+
+AC_RE = re.compile(
+    r"^\s*(#+\s*acceptance criteria|\*\*acceptance criteria\*\*|acceptance criteria:)",
+    re.IGNORECASE | re.MULTILINE,
+)
+FILES_RE = re.compile(r"\*\*Files\*\*\s*:?\s*(.+)")
+
+
+def tk(*args):
+    out = subprocess.run(["tk", *args], capture_output=True, text=True)
+    if out.returncode != 0:
+        sys.exit(f"run-tickets-plan: tk {' '.join(args)} failed: {out.stderr.strip()}")
+    return out.stdout
+
+
+def query(jq_filter):
+    return [json.loads(line) for line in tk("query", jq_filter).splitlines() if line.strip()]
+
+
+def meta(ticket_id):
+    rows = query(f'select(.id=="{ticket_id}")')
+    if not rows:
+        sys.exit(f"run-tickets-plan: no ticket with id {ticket_id}")
+    return rows[0]
+
+
+def title_and_body(ticket_id):
+    text = tk("show", ticket_id)
+    # Drop the frontmatter block, then take the first H1 as the title.
+    body = re.sub(r"\A---\n.*?\n---\n", "", text, count=1, flags=re.DOTALL)
+    m = re.search(r"^# (.+)$", body, re.MULTILINE)
+    return (m.group(1).strip() if m else ticket_id), body
+
+
+def parse_files(body):
+    files = []
+    for line in FILES_RE.findall(body):
+        for part in re.split(r"[,\s]+", line):
+            part = part.strip("`*()[];")
+            part = re.sub(r":\d[\d\-,]*$", "", part)  # strip :42 or :42-47
+            if "/" in part or "." in part:
+                files.append(part)
+    return sorted(set(files))
+
+
+def find_cycles(ids, deps):
+    cycles, state, stack = [], {}, []
+
+    def visit(n):
+        state[n] = "open"
+        stack.append(n)
+        for d in deps[n]:
+            if state.get(d) == "open":
+                cycles.append(stack[stack.index(d):] + [d])
+            elif d not in state:
+                visit(d)
+        stack.pop()
+        state[n] = "done"
+
+    for n in ids:
+        if n not in state:
+            visit(n)
+    return cycles
+
+
+def main(argv):
+    include_in_progress = "--include-in-progress" in argv
+    args = [a for a in argv if a != "--include-in-progress"]
+    if not args:
+        sys.exit(__doc__)
+
+    mode, epic_id = "ids", None
+    if len(args) == 1 and meta(args[0]).get("type") == "epic":
+        mode, epic_id = "epic", args[0]
+        candidates = [r["id"] for r in query(f'select(.parent=="{epic_id}")')]
+    else:
+        candidates = args
+
+    info, excluded = {}, []
+    for tid in candidates:
+        m = meta(tid)
+        title, body = title_and_body(tid)
+        status = m.get("status")
+        reason = None
+        if status == "closed":
+            reason = "closed"
+        elif m.get("type") == "epic":
+            reason = "is an epic (run it separately)"
+        elif status == "in_progress" and not include_in_progress:
+            reason = "in_progress (another run may own it; pass --include-in-progress to resume)"
+        if reason:
+            excluded.append({"id": tid, "title": title, "reason": reason})
+            continue
+        info[tid] = {
+            "id": tid,
+            "title": title,
+            "priority": int(m.get("priority", 2)),
+            "parent": m.get("parent") or None,
+            "raw_deps": m.get("deps", []),
+            "has_ac": bool(AC_RE.search(body)),
+            "files": parse_files(body),
+        }
+
+    # Split deps into in-set edges and external blockers.
+    blocked_by = {}
+    for t in info.values():
+        t["deps"] = []
+        for d in t["raw_deps"]:
+            if d in info:
+                t["deps"].append(d)
+            elif meta(d).get("status") != "closed":
+                blocked_by.setdefault(t["id"], []).append(d)
+
+    deps = {tid: t["deps"] for tid, t in info.items()}
+    cycles = find_cycles(list(info), deps)
+    in_cycle = {n for c in cycles for n in c}
+
+    # Drop externally blocked and cyclic tickets, then everything downstream.
+    dropped = {tid: f"waits on open ticket(s) outside this run: {', '.join(ds)}"
+               for tid, ds in blocked_by.items()}
+    dropped.update({tid: "part of a dependency cycle" for tid in in_cycle})
+    changed = True
+    while changed:
+        changed = False
+        for tid, ds in deps.items():
+            if tid not in dropped:
+                bad = [d for d in ds if d in dropped]
+                if bad:
+                    dropped[tid] = f"downstream of excluded ticket(s): {', '.join(bad)}"
+                    changed = True
+    for tid, reason in dropped.items():
+        excluded.append({"id": tid, "title": info[tid]["title"], "reason": reason})
+        del info[tid]
+    deps = {tid: [d for d in t["deps"]] for tid, t in info.items()}
+
+    # Topological order with depth, for stats and a stable dispatch order.
+    depth, order = {}, []
+
+    def level(n):
+        if n not in depth:
+            depth[n] = 1 + max((level(d) for d in deps[n]), default=0)
+        return depth[n]
+
+    for tid in sorted(info, key=lambda i: (level(i), info[i]["priority"], i)):
+        order.append(tid)
+    widths = {}
+    for d in depth.values():
+        widths[d] = widths.get(d, 0) + 1
+
+    # Transitive ancestors, to tell sequenced file overlaps from unsequenced ones.
+    ancestors = {}
+
+    def anc(n):
+        if n not in ancestors:
+            ancestors[n] = set()
+            for d in deps[n]:
+                ancestors[n] |= {d} | anc(d)
+        return ancestors[n]
+
+    by_file = {}
+    for tid in order:
+        for f in info[tid]["files"]:
+            by_file.setdefault(f, []).append(tid)
+    overlaps = []
+    for f, tids in sorted(by_file.items()):
+        loose = sorted({a for a in tids for b in tids
+                        if a != b and b not in anc(a) and a not in anc(b)})
+        if loose:
+            overlaps.append({"file": f, "tickets": loose})
+
+    parents = {t["parent"] for t in info.values()}
+    tickets = [{k: info[t][k] for k in ("id", "title", "priority", "parent", "deps", "has_ac", "files")}
+               for t in order]
+    print(json.dumps({
+        "mode": mode,
+        "epic_id": epic_id,
+        "shared_parent": parents.pop() if len(parents) == 1 else None,
+        "tickets": tickets,
+        "excluded": excluded,
+        "cycles": cycles,
+        "overlaps": overlaps,
+        "unannotated": [t["id"] for t in tickets if not t["files"]],
+        "stats": {
+            "ready_now": sum(1 for t in tickets if not t["deps"]),
+            "longest_chain": max(depth.values(), default=0),
+            "max_width": max(widths.values(), default=0),
+        },
+    }, indent=2))
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

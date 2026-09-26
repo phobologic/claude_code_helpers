@@ -40,6 +40,7 @@ link "$DOTFILES/agent-teams.md"       "$CLAUDE/agent-teams.md"
 link "$DOTFILES/settings.global.json" "$CLAUDE/settings.json"
 link "$DOTFILES/skills"               "$CLAUDE/skills"
 link "$DOTFILES/agents"               "$CLAUDE/agents"
+link "$DOTFILES/workflows"            "$CLAUDE/workflows"
 link "$DOTFILES/optional_rules"       "$CLAUDE/optional_rules"
 
 mkdir -p "$CLAUDE/hooks"

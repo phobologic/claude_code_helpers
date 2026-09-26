@@ -25,10 +25,14 @@ Determine the epic and branch from arguments or the current branch:
    - `/run-epic` produces `epic/<epic-id>`
    - `/fix-tickets` produces `fix/batch-<timestamp>` with a batch epic whose ID is
      stored as the parent of its child tickets
+   - `/run-tickets` produces `epic/<epic-id>` when run on an epic, and
+     `run/<timestamp>` when run on a list of ticket IDs
 3. If the user gave an epic ID, derive the branch:
    - Try `epic/<id>` first
-   - If not found, search for a recent `fix/batch-*` branch whose tickets share
-     that epic as parent
+   - If not found, search recent `fix/batch-*` and `run/*` branches for one whose
+     merged tickets share that epic as parent. `/run-tickets` merge commits are
+     titled `Merge <ticket-id>: <title>`, so `git log main..<branch> --merges
+     --format=%s` lists the ticket IDs to check
 4. If neither the argument nor the current branch resolves, stop and ask the user
    which epic they want to wrap.
 
@@ -37,7 +41,10 @@ Once resolved, look up:
 - Integration branch commit range vs `main` (`git log main..<branch> --oneline`)
 - Open findings: children of the epic with status `open` or `in-progress`
 - Worktrees to clean: `git worktree list` filtered to paths under `.worktrees/`
-  that belong to this run (implementer-*, fix-batch-* matching the branch stamp)
+  that belong to this run: `implementer-*` and `fix-batch-*` (wave skills),
+  `epic-dag-*` and `fix-dag-*` (DAG skills), `run-*` (`/run-tickets`, which
+  normally removes its own on completion; any left over belong to blocked
+  tickets or an interrupted run)
 
 ## Phase 2 — Present the plan and ask for confirmation
 

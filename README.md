@@ -8,7 +8,8 @@ language plugins, tool rules, and working style rules for `~/.claude/`.
 | Directory / File | Purpose |
 |-----------------|---------|
 | `skills/` | Global skills: `/spec`, `/run-epic`, `/run-epic-dag`, `/fix-tickets`, `/fix-tickets-dag`, `/wrap-epic`, `/review`, `/multi-review`, `/implement-ticket`, `/design-sprint`, `/playwright-explore`, `/epic-tree`, `/ticket-triage`, `/team-status`, `/setup-python-project`, `/setup-js-project`, `/setup-go-project`, `/use-railway`, `/use-sqlalchemy`, `/load-shared-rule` |
-| `agents/` | Sub-agents: ticket-execution (implementer, ac-verifier, quality-reviewer, spec-critic), design-sprint (design-designer, design-evaluator), 5 code review agents, and code-critic (adversarial single-pass reviewer) |
+| `workflows/` | Saved Claude Code workflow scripts: `run-tickets` (launched by `/run-tickets`) |
+| `agents/` | Sub-agents: ticket-execution (implementer, ac-verifier, quality-reviewer, spec-critic), run-tickets workflow (ticket-implementer, ticket-verifier, ticket-reviewer), design-sprint (design-designer, design-evaluator), 5 code review agents, and code-critic (adversarial single-pass reviewer) |
 | `languages/` | Per-language Claude Code plugins (Go, Python, JS/SvelteKit) — auto-formatting hooks + coding rules |
 | `plugins/` | General-purpose Claude Code plugins — workflow automation and tool integrations |
 | `tools/` | Per-tool rule files (Railway, SQLAlchemy) — loaded via `.claude/rules/` symlinks |
@@ -32,6 +33,7 @@ This creates:
 - `~/.claude/hooks/<name>.sh` → `hooks/<name>.sh` *(every script in `hooks/`)*
 - `~/.claude/skills/` → `skills/`
 - `~/.claude/agents/` → `agents/`
+- `~/.claude/workflows/` → `workflows/` *(saved workflow scripts, runnable as `/<name>`)*
 - `~/.claude/rules/go.md` → `languages/go/rules/CLAUDE.md` *(path-scoped to `*.go` files)*
 - `~/.claude/rules/python.md` → `languages/python/rules/CLAUDE.md` *(path-scoped to `*.py` files)*
 - `~/.claude/rules/js.md` → `languages/js/rules/CLAUDE.md` *(path-scoped to `*.ts`/`*.js`/`*.svelte` files)*
@@ -66,6 +68,7 @@ are available globally:
 | `/spec [idea]` | Turn a rough idea into a phased plan with EARS ACs, adversarial review, and `tk` tickets |
 | `/run-epic <epic-id>` | Execute a `tk` epic with an agent team (implementers + AC verifier + quality reviewer) |
 | `/fix-tickets <id> [id ...] \| <epic-id>` | Implement a set of tickets in parallel — designed for multi-review fix batches |
+| `/run-tickets <epic-id> \| <id> [id ...] [--resume]` | **Experimental.** Workflow-backed ticket runner: scheduling lives in `workflows/run-tickets.js`, not an LLM team lead. Covers both `/run-epic` (AC verification when tickets have AC) and `/fix-tickets` (no AC) use cases. Watch with `/workflows`. Helpers: `bin/run-tickets-plan`, `bin/worktree-reset` |
 | `/review` | Code review of all uncommitted changes |
 | `/multi-review` | Parallel review by 5 specialized agents |
 | `/implement-ticket [id ...]` | Pick up and implement one or more `tk` tickets |
