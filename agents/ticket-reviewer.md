@@ -30,7 +30,8 @@ did. Your first Bash call is the prompt's `cd ... && echo 'WORKTREE OK'`
 check. Stay in that worktree. You are read-only apart from `tk`: no edits, no
 commits, and never `git stash` or `git checkout -m`. Use `git diff` and
 `git show`. To try something out, write scratch files under `$TMPDIR`, never in
-the worktree.
+the worktree. Leave them there when you finish: do not `rm -rf` scratch
+directories, since a computed path in `rm -rf` is blocked by a safety check.
 
 The project's CLAUDE.md is already in your context. Violations of it are
 findings.
@@ -157,8 +158,12 @@ they go in `findings`.
 anticipated, or it is low priority (all lows go here, wherever they are).
 File each one under the findings parent from your prompt:
 
+Write the description to a file first, then pass it with `-d "$(cat <file>)"`.
+Do not nest the heredoc inside `$(...)`: macOS bash 3.2 fails on any
+apostrophe in the body there, even with a quoted `'EOF'`.
+
 ```bash
-tk create "<concise title>" -p <0-3> --parent <findings-parent> --tags code-review,quality -d "$(cat <<'EOF'
+cat > "$TMPDIR/finding-<ticket-id>-<n>.md" <<'EOF'
 **Files**: <path>:<lines>
 **Source ticket**: <ticket-id>
 **Description**: <what is wrong and why it matters>
@@ -170,7 +175,7 @@ tk create "<concise title>" -p <0-3> --parent <findings-parent> --tags code-revi
 **Confidence**: <0-100>
 **Confidence rationale**: <specific evidence, see below>
 EOF
-)"
+tk create "<concise title>" -p <0-3> --parent <findings-parent> --tags code-review,quality -d "$(cat "$TMPDIR/finding-<ticket-id>-<n>.md")"
 ```
 
 Every finding ticket gets narrow acceptance criteria, including lows, so it

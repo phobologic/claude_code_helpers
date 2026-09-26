@@ -421,14 +421,15 @@ tasks parent to `$EXEC`**, not to per-phase epics. Each task receives two tags:
 - `phase-N` -- which planning phase it came from (`phase-1`, `phase-2`, ...)
 - shape -- one of `foundational`, `slice`, `integration`
 
-Keep the `N.M` numbering in titles so phase grouping is visible at a glance. Use heredoc
-syntax for descriptions -- never truncate to a one-liner.
+Keep the `N.M` numbering in titles so phase grouping is visible at a glance. Write
+each full description to a file and pass it with `-d "$(cat <file>)"`. Never
+truncate to a one-liner. Do not nest a heredoc inside `$(...)` instead: macOS bash
+3.2 fails on any apostrophe in the body there, even with a quoted `'EOF'`.
 
-```bash
-# Phase 1 tasks (FOUNDATIONAL)
-T1_1=$(tk create "1.1 <Task title>" -t task -p 2 --parent $EXEC \
-  --tags phase-1,foundational \
-  -d "$(cat <<'EOF'
+For each task, first `Write` its description to `.tmp/spec-<task>-<unique>.md`
+(the `<unique>` suffix as for commit messages), for example:
+
+```markdown
 <Two to three sentence description of the work, enough to implement without reading other
 tickets.>
 
@@ -440,30 +441,21 @@ tickets.>
 ## Acceptance Criteria
 - When <trigger>, the system shall <behavior>
 - The <component> shall <property>
-EOF
-)")
+```
+
+Then create the ticket from it and delete the file:
+
+```bash
+# Phase 1 tasks (FOUNDATIONAL)
+T1_1=$(tk create "1.1 <Task title>" -t task -p 2 --parent $EXEC \
+  --tags phase-1,foundational -d "$(cat .tmp/spec-1.1-a3f9c1.md)") && rm -f .tmp/spec-1.1-a3f9c1.md
 
 T1_2=$(tk create "1.2 <Task title>" -t task -p 2 --parent $EXEC \
-  --tags phase-1,foundational \
-  -d "$(cat <<'EOF'
-<Description>
-
-## Acceptance Criteria
-- When <trigger>, the system shall <behavior>
-- If <condition>, the system shall <response>
-EOF
-)")
+  --tags phase-1,foundational -d "$(cat .tmp/spec-1.2-a3f9c1.md)") && rm -f .tmp/spec-1.2-a3f9c1.md
 
 # Phase 2 tasks (SLICES)
 T2_1=$(tk create "2.1 <Task title>" -t task -p 2 --parent $EXEC \
-  --tags phase-2,slice \
-  -d "$(cat <<'EOF'
-<Description>
-
-## Acceptance Criteria
-- <EARS statement>
-EOF
-)")
+  --tags phase-2,slice -d "$(cat .tmp/spec-2.1-a3f9c1.md)") && rm -f .tmp/spec-2.1-a3f9c1.md
 
 # ... etc. Integration tasks get --tags phase-N,integration
 ```

@@ -85,11 +85,11 @@ only if a message must keep lines that start with `#`.
 **Same principle for any CLI that takes a multi-line body or message.** Prefer a
 written file over an inline heredoc: use the tool's file flag, or redirect the
 file into stdin, then `rm` it. For example `tk add-note <id> < .tmp/tk-note.txt
-&& rm -f .tmp/tk-note.txt`. The exception is a flag that only accepts an inline
-string with no file/stdin path (e.g. `tk create -d`): there, a *quoted*-delimiter
-heredoc in command substitution — `-d "$(cat <<'EOF' … EOF)"` — is acceptable,
-because the quoted `'EOF'` makes the body literal (apostrophes/`$`/backticks
-safe). It's the *unquoted* `<<EOF` and single-quoted `-m '…'` forms that break.
+&& rm -f .tmp/tk-note.txt`. For a flag that only accepts an inline string (e.g.
+`tk create -d`), still write the file, then pass it as `-d "$(cat .tmp/x.md)"`.
+Never nest a heredoc inside command substitution (`-d "$(cat <<'EOF' … EOF)"`):
+macOS ships bash 3.2, which fails with "unexpected EOF while looking for
+matching `''" on any apostrophe in the body, even with a quoted `'EOF'`.
 
 If you genuinely need a one-off script (e.g. complex data transformation that
 no built-in tool covers), write it to `.tmp/` as a real file first, then run
