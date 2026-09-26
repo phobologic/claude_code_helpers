@@ -5,6 +5,9 @@ test-file.txt
 .tickets/
 .worktrees/
 
+# claude.ai account skills, synced by Claude Code into ~/.claude/skills (symlinked here)
+skills/synced/
+
 # Environment and secrets
 .env
 .env.*
