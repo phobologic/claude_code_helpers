@@ -68,8 +68,10 @@ place:
 - ID mode: `shared_parent` if non-null (usually the epic the tickets belong
   to). Otherwise a session epic, created in Phase 2 after confirmation.
 
-**Pool size.** `SLOTS = min(4, number of tickets)`. Slots are just worktrees;
-idle ones cost nothing.
+**Pool size.** `SLOTS = min(4, stats.max_width)`: never more slots than the
+dependency graph can use at once, so a strict chain gets one. Slots are only
+a concurrency cap, so being one short on an unusual graph costs a little
+time, not correctness.
 
 Present the plan:
 
