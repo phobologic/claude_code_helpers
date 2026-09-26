@@ -47,7 +47,7 @@ listed alternative whenever possible:
 
 - `python -c`, `python3 -c`, `node -e`, `perl -e`, `ruby -e`, `deno eval`,
   `bash -c "<multi-line script>"` — write a real script to `.tmp/` with the
-  `Write` tool and execute that, or use `Read`/`Grep`/`Glob`/`Edit` directly.
+  `Write` tool and execute that, or use `Read`/`Edit` directly.
 - Heredocs piped to interpreters (`python3 <<EOF … EOF`, `node <<EOF`, etc.)
   — same alternative as above.
 - Heredocs redirected to a file (`cat > file <<EOF`, `cat <<EOF > file`,
@@ -55,8 +55,11 @@ listed alternative whenever possible:
   modify them.
 - `sed -i` / `awk` rewrites for content changes — use `Edit` (or `Write` for
   full rewrites).
-- `find` for file discovery — use `Glob`. `grep`/`rg` for searching — use
-  `Grep`. `cat`/`head`/`tail` for reading — use `Read`.
+- `cat`/`head`/`tail` for reading a file you will act on: use `Read`.
+
+**Searching is the exception.** There are no Grep or Glob tools, so search with
+`rg` (preferred), `grep`, or `find` in Bash. Keep each search a single plain
+command; the discouraged list above still applies to anything fancier.
 
 **Commit messages: write a file, commit with `-F`.** Write the message to
 `.tmp/commit-msg.txt` with the `Write` tool, then commit and delete it in one

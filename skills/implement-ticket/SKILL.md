@@ -58,7 +58,7 @@ Before writing any plan, fully understand what "done" looks like.
 1. If the ticket has a parent epic, run `tk show <epic-id>` and
    `tk query '.parent == "<epic-id>"'` to scan sibling tickets — look for decisions already
    made, patterns established, or constraints documented in their notes
-2. Scan the affected code area with Glob and Grep to understand existing patterns
+2. Scan the affected code area with `rg` and `find` in Bash to understand existing patterns
 3. Check for reusable utilities — avoid reinventing what already exists
 4. Incorporate any extra instructions from Phase 0 as constraints
 

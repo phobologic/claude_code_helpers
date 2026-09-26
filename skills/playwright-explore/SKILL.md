@@ -182,16 +182,16 @@ Record `DEADLINE_TS` and `DEADLINE_HUMAN`. If no time limit, set
 ### Step 1: Source-code reconnaissance
 
 Detect the framework and discover routes by reading source code — no browser
-needed. Run a detection cascade using Glob and Grep:
+needed. Run a detection cascade with `rg` in Bash (there are no Grep or Glob tools):
 
 | Framework | Detection | Route discovery |
 |---|---|---|
-| SvelteKit | `svelte.config.js` exists | `Glob("src/routes/**/+page.svelte")`, `Glob("src/routes/**/+server.ts")` |
-| Next.js (app) | `next.config.*` exists | `Glob("app/**/page.tsx")`, `Glob("app/**/page.ts")` |
-| Next.js (pages) | `pages/` dir exists | `Glob("pages/**/*.{tsx,ts}")` |
-| FastAPI | `fastapi` in pyproject.toml/requirements | `Grep("@(app\|router)\.(get\|post\|put\|delete\|patch)", type="py")` |
-| Django | `manage.py` exists | `Grep("path\\(", type="py")` in files containing `urlpatterns` |
-| Express | `express` in package.json deps | `Grep("(router\|app)\\.(get\|post\|put\|delete\|patch)", type="ts")` or type="js" |
+| SvelteKit | `svelte.config.js` exists | `rg --files -g 'src/routes/**/+page.svelte' -g 'src/routes/**/+server.ts'` |
+| Next.js (app) | `next.config.*` exists | `rg --files -g 'app/**/page.tsx' -g 'app/**/page.ts'` |
+| Next.js (pages) | `pages/` dir exists | `rg --files -g 'pages/**/*.tsx' -g 'pages/**/*.ts'` |
+| FastAPI | `fastapi` in pyproject.toml/requirements | `rg -t py '@(app\|router)\.(get\|post\|put\|delete\|patch)'` |
+| Django | `manage.py` exists | `rg -t py 'path\('` in files containing `urlpatterns` |
+| Express | `express` in package.json deps | `rg -t ts -t js '(router\|app)\.(get\|post\|put\|delete\|patch)'` |
 
 Take the first framework that returns results. If none match, use the
 **generic fallback**: spawn a single short-lived scout agent (sonnet, with a

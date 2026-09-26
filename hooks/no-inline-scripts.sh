@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Flags Bash invocations that should use a dedicated tool (Write/Edit/Read/
-# Grep/Glob) or a real script file under .tmp/ instead. Returns
+# Flags Bash invocations that should use a dedicated tool (Write/Edit/Read)
+# or a real script file under .tmp/ instead. Returns
 # permissionDecision: allow with a reason that surfaces to the model next
 # turn — a non-blocking nudge so unattended agent teams aren't interrupted,
 # while still pushing the agent toward the preferred pattern.
@@ -31,7 +31,7 @@ ALT=""
 #    so we don't match the literal text "python -c" inside heredoc commit messages.
 if printf '%s' "$CMD" | grep -qE '(^|[[:space:]|;&(])(python3?|node|deno|perl|ruby)[[:space:]]+(-[A-Za-z]*[ce]|eval)[[:space:]]+['"'"'"$`]'; then
   REASON="inline interpreter script (python -c / node -e / perl -e / ruby -e / deno eval)"
-  ALT="Write the script to .tmp/ as a real file and execute that, or use Read/Grep/Glob/Edit directly."
+  ALT="Write the script to .tmp/ as a real file and execute that, or use Read/Edit directly (search with rg in Bash)."
 fi
 
 # 2. Heredoc fed to an interpreter or shell (python3 <<EOF, bash <<EOF, ...).

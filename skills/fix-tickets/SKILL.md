@@ -237,7 +237,7 @@ Agent({
   All tool calls MUST target your worktree, not the main repo:
   - Bash: your CWD is already set — just run commands directly
   - Read/Edit: absolute paths starting with <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>/
-  - Glob/Grep: pass path=<REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>
+  - Search: rg/find in Bash (there are no Grep or Glob tools)
   Never reference <REPO_ROOT> without the .worktrees/implementer-<N>-<STAMP> suffix.
 
   Git: your CWD is already the worktree — always use plain `git` with no -C flag.
@@ -700,7 +700,7 @@ Agent({
   All tool calls MUST target your worktree, not the main repo:
   - Bash: your CWD is already set — just run commands directly
   - Read/Edit: absolute paths starting with <REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>/
-  - Glob/Grep: pass path=<REPO_ROOT>/.worktrees/implementer-<N>-<STAMP>
+  - Search: rg/find in Bash (there are no Grep or Glob tools)
   Never reference <REPO_ROOT> without the .worktrees/implementer-<N>-<STAMP> suffix.
 
   Git: your CWD is already the worktree — always use plain \`git\` with no -C flag.

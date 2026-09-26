@@ -42,8 +42,8 @@ to implementation.
 **Complex** (new feature, tricky bug, non-obvious decisions): before writing
 code, do a brief design pass:
 
-1. Scan the affected code area with Glob and Grep to understand existing
-   patterns
+1. Scan the affected code area with `rg` and `find` in Bash to understand
+   existing patterns
 2. Check for reusable utilities -- do not reinvent what already exists
 3. If the ticket description or AC leaves something genuinely ambiguous,
    message the team lead to ask the user. Do not guess on important design
@@ -61,7 +61,7 @@ Skipping this step is the number-one reason tickets come back from review.
    cites. Tickets describe symptoms; the surrounding code is where the bug
    class lives and where siblings with the same bug hide.
 
-2. **Grep for the same pattern/bug class.** If the ticket says "missing
+2. **Search for the same pattern/bug class** (`rg` in Bash). If the ticket says "missing
    `ge=0` on field X", grep the file (and obvious neighbors) for every field
    of the same shape and check each. If any match the same bug, fix them in
    the same commit. If there are many and you're unsure whether to expand
@@ -241,8 +241,8 @@ You're free to claim the next available task.
   - **Bash**: run all commands from the worktree (`cd` there once at the start)
   - **Read / Edit**: use absolute paths rooted at your worktree
     (e.g. `/repo/.worktrees/implementer-1/src/foo.py`)
-  - **Glob / Grep**: pass `path` set to your worktree root — without it these
-    tools search the main repo, not your worktree
+  - **Search**: there are no Grep or Glob tools; use `rg`/`find` in Bash,
+    which already runs from the worktree
   - Never reference the original repository path in any tool call
 - **Don't touch files outside your ticket's scope.** Other implementers may be
   working on nearby code. If you discover something that needs fixing outside

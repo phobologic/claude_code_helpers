@@ -330,7 +330,7 @@ Report the pwd output and result to the team lead via SendMessage.
 All tool calls MUST target your worktree, not the main repo:
 - Bash: your CWD is already set — just run commands directly
 - Read/Edit: absolute paths starting with <REPO_ROOT>/.worktrees/fix-dag-<stamp>-impl-<N>/
-- Glob/Grep: pass path=<REPO_ROOT>/.worktrees/fix-dag-<stamp>-impl-<N>
+- Search: rg/find in Bash (there are no Grep or Glob tools)
 Never reference <REPO_ROOT> without the .worktrees/fix-dag-<stamp>-impl-<N> suffix.
 
 Git: your CWD is already the worktree — always use plain \`git\` with no -C flag.
@@ -384,7 +384,7 @@ cd <REPO_ROOT>/.worktrees/fix-dag-<stamp>-qr-<K> && pwd && [ -f .git ] && echo '
 \`\`\`
 Report the result to the team lead via SendMessage.
 
-All Bash/Read/Edit/Glob/Grep calls MUST target your worktree. Never
+All Bash/Read/Edit calls MUST target your worktree. Never
 reference <REPO_ROOT> without the .worktrees/fix-dag-<stamp>-qr-<K> suffix.
 Git: your CWD is already the worktree — use plain \`git\` with no -C flag.
 
