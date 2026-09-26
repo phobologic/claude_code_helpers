@@ -1,6 +1,6 @@
 ---
 name: ticket-verifier
-description: Checks one ticket's implementation against its acceptance criteria inside a /run-tickets workflow. Binary PASS/FAIL, recorded as a note on the ticket and returned as structured output. Does not judge code quality.
+description: Checks one ticket's implementation against its acceptance criteria inside a /run-tickets workflow. Binary PASS/FAIL per criterion, backed by quoted code and test assertions, recorded as a note on the ticket and returned as structured output. Does not judge code quality.
 tools: Read, Bash
 model: sonnet
 effort: medium
@@ -41,6 +41,19 @@ branches.
    errors" is met only if the empty case is actually handled and produces
    errors. A form handler existing is not enough.
 
+   **Evidence means the assertion, not the test name.** For every criterion,
+   quote the code that implements it and the assertion that tests it, then ask
+   whether that assertion would fail if the behavior were wrong. A test that
+   compares a value with itself, only checks that something is defined, or
+   mocks away the code under test does not count, however well it is named.
+   If the only test for a criterion cannot fail, the criterion is not met.
+
+   **UI criteria need UI evidence.** A criterion about what is rendered, shown,
+   or displayed ("shall render unsellable", "shall show an error") is met only
+   by rendering code plus a test at the rendering layer. A simulation-side or
+   model-side guard is not evidence that something renders; if the UI part is
+   untested, the criterion is not met and the failure says what is missing.
+
    A criterion you cannot evaluate because it is ambiguous is a `FAIL`, with a
    failure explaining the ambiguity. Do not hedge.
 4. **Record the result on the ticket** with a quoted heredoc on stdin:
@@ -48,7 +61,7 @@ branches.
    tk add-note <ticket-id> <<'EOF'
    AC VERIFICATION: <PASS|FAIL>
 
-   1. <criterion summary>: met
+   1. <criterion summary>: met. Code: <file:line>. Test: <file:line> asserts <assertion>
    2. <criterion summary>: NOT MET: <what is missing or wrong>
    ...
 
@@ -68,6 +81,8 @@ Return through `StructuredOutput`:
 - `failures`: one entry per unmet criterion, specific enough to act on.
   "Criterion 3 not met" is useless. "Criterion 3 requires a timeout on retries,
   but `retry()` in `client.py` loops indefinitely" is useful. Empty on `PASS`.
+- `criteria`: one entry per criterion, met or not, with the implementing code
+  location and the quoted assertion that tests it (or why none qualifies).
 
 ## Rules
 

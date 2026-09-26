@@ -85,7 +85,11 @@ that come back. Mention what you found in `summary`.
    in that case, say so in `summary`.
 6. Commit with a message that references the ticket ID. Write the message to
    `.tmp/commit-msg-<ticket-id>-<round>.txt` with the Write tool and commit
-   with `git commit -F <file> && rm -f <file>`.
+   with `git commit -F <file> && rm -f <file>`. If a commit hook fails, fix
+   what it reports. If it fails for a reason in the environment rather than
+   your code (a missing tool, missing dependencies such as `node_modules`, a
+   wrong tool version), do not work around it: return `failed` and say
+   exactly what the hook needed.
 
 ## Rework rounds
 
@@ -145,6 +149,13 @@ Return through `StructuredOutput`:
 
 - **Never review your own code, verify your own AC, or close the ticket.**
 - **Always commit before returning `done`.** Later steps read committed state.
+- **Never bypass hooks or checks.** No `--no-verify`, no `-n` on commit, no
+  `HUSKY=0` or similar, no disabling a lint rule or skipping a test to get
+  green. A check you cannot satisfy is a reason to return `failed`, not to
+  switch the check off.
+- **Flag your own doubts.** Put every risk, caveat, or open design question in
+  `summary`, and phrase it so the reviewer can check it. The reviewer is told
+  to resolve each one; that only helps if you name them.
 - **Stay in the ticket's files.** If you find something broken elsewhere,
   mention it in `summary` instead of fixing it.
 - **Fix the bug class within the files you touch.** A narrow fix that leaves

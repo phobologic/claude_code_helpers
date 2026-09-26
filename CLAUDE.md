@@ -122,8 +122,8 @@ Used by `/run-epic` and `/fix-tickets` to implement tickets in parallel with val
 Used only by the `run-tickets` workflow. They never use `SendMessage`; each call is a fresh agent that returns a typed result through `StructuredOutput`. Kept separate from the team agents above so neither set carries the other's protocol.
 
 1. **ticket-implementer** (opus, high): implements one ticket or one rework round (AC failures, review findings, merge conflict) in the worktree its prompt names
-2. **ticket-verifier** (sonnet, medium): binary AC check, noted on the ticket
-3. **ticket-reviewer** (opus, high): adversarial diff review; inline findings come back for rework, out-of-scope ones become `tk` tickets
+2. **ticket-verifier** (sonnet, medium): binary AC check, noted on the ticket; every criterion needs quoted code and a test assertion that could actually fail
+3. **ticket-reviewer** (opus, xhigh): adversarial diff review. Must resolve every risk the implementer flagged, audit that tests can fail, and attack at least two risky paths before returning CLEAN (all three are required fields of its result). Inline findings come back for rework; out-of-scope ones become `tk` tickets
 
 The workflow's merge step (haiku) and final integration check (sonnet) use inline prompts, not agent files.
 

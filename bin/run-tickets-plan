@@ -19,11 +19,16 @@ Resolves the input to a set of runnable tickets and prints one JSON object:
   stats             {ready_now, longest_chain, max_width}
 
 Tickets are excluded when closed, when they are epics, when in_progress (unless
---include-in-progress, used to resume a stopped run), when they wait on an open
-ticket outside the set, or when they sit downstream of an excluded ticket.
+--include-in-progress, used to resume a stopped run), when tagged needs-human
+(a gate a person must clear), when they wait on an open ticket outside the set,
+or when they sit downstream of an excluded ticket.
+
+Also reports `setup_warnings` about the repo itself, such as a package.json with
+no node_modules/ entry in .worktreelinks (worktrees would lack dependencies).
 """
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -70,6 +75,30 @@ def parse_files(body):
             if "/" in part or "." in part:
                 files.append(part)
     return sorted(set(files))
+
+
+def setup_warnings():
+    """Repo-level problems that would break agents working in fresh worktrees."""
+    out = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    if out.returncode != 0:
+        return []
+    root = out.stdout.strip()
+
+    def entries(name):
+        path = os.path.join(root, name)
+        if not os.path.exists(path):
+            return set()
+        with open(path) as f:
+            return {line.strip().rstrip("/") for line in f if line.strip() and not line.startswith("#")}
+
+    shared = entries(".worktreelinks") | entries(".worktreeinclude")
+    warnings = []
+    if os.path.exists(os.path.join(root, "package.json")) and "node_modules" not in shared:
+        warnings.append(
+            "package.json exists but node_modules is not in .worktreelinks, so worktrees have no "
+            "dependencies: tests, type checks, and commit hooks will fail or pick up the wrong tool "
+            "versions. Add a `node_modules/` line to .worktreelinks.")
+    return warnings
 
 
 def find_cycles(ids, deps):
@@ -120,9 +149,13 @@ def main(argv):
         if reason:
             excluded.append({"id": tid, "title": title, "reason": reason})
             continue
+        tags = m.get("tags") or []
+        if isinstance(tags, str):
+            tags = [t.strip() for t in tags.strip("[]").split(",")]
         info[tid] = {
             "id": tid,
             "title": title,
+            "needs_human": "needs-human" in tags,
             "priority": int(m.get("priority", 2)),
             "parent": m.get("parent") or None,
             "raw_deps": m.get("deps", []),
@@ -148,6 +181,8 @@ def main(argv):
     dropped = {tid: f"waits on open ticket(s) outside this run: {', '.join(ds)}"
                for tid, ds in blocked_by.items()}
     dropped.update({tid: "part of a dependency cycle" for tid in in_cycle})
+    dropped.update({tid: "tagged needs-human: a person must do this one; run its dependents after it closes"
+                    for tid, t in info.items() if t["needs_human"]})
     changed = True
     while changed:
         changed = False
@@ -209,6 +244,7 @@ def main(argv):
         "cycles": cycles,
         "overlaps": overlaps,
         "unannotated": [t["id"] for t in tickets if not t["files"]],
+        "setup_warnings": setup_warnings(),
         "stats": {
             "ready_now": sum(1 for t in tickets if not t["deps"]),
             "longest_chain": max(depth.values(), default=0),

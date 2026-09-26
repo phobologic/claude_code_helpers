@@ -17,6 +17,7 @@ export const meta = {
 //   integrationWorktree  worktree with integrationBranch checked out; merges happen here
 //   slots                absolute worktree paths, one per concurrent implementer
 //   findingsParent       epic that out-of-scope finding tickets are parented to
+//   baseBranch           optional, default "main": what the integration check compares failures against
 //   tickets              [{id, title, deps, has_ac}] in topological order
 //   caps                 optional {acFails, qrReworks, conflicts}
 
@@ -52,8 +53,22 @@ const AC_SCHEMA = {
     verdict: { type: 'string', enum: ['PASS', 'FAIL', 'ERROR'] },
     failures: { type: 'array', items: { type: 'string' }, description: 'one entry per unmet criterion, with what is missing' },
     error: { type: 'string', description: 'with ERROR: what in the environment prevented verification' },
+    criteria: {
+      type: 'array',
+      description: 'one entry per acceptance criterion, with quoted evidence',
+      items: {
+        type: 'object',
+        properties: {
+          criterion: { type: 'string' },
+          met: { type: 'boolean' },
+          code: { type: 'string', description: 'file:line implementing it' },
+          assertion: { type: 'string', description: 'file:line and the quoted assertion testing it, or why none qualifies' },
+        },
+        required: ['criterion', 'met', 'code', 'assertion'],
+      },
+    },
   },
-  required: ['verdict', 'failures'],
+  required: ['verdict', 'failures', 'criteria'],
 }
 
 const QR_SCHEMA = {
@@ -76,8 +91,48 @@ const QR_SCHEMA = {
       },
     },
     tickets_created: { type: 'array', items: { type: 'string' }, description: 'Bucket B tickets filed this round' },
+    implementer_flags: {
+      type: 'array',
+      description: 'every risk, caveat, or open question the implementer raised, and how it was resolved',
+      items: {
+        type: 'object',
+        properties: {
+          flag: { type: 'string' },
+          disposition: { type: 'string', enum: ['finding', 'refuted'] },
+          evidence: { type: 'string' },
+        },
+        required: ['flag', 'disposition', 'evidence'],
+      },
+    },
+    test_audit: {
+      type: 'array',
+      description: 'tests backing the criteria or new behavior, and whether each can actually fail',
+      items: {
+        type: 'object',
+        properties: {
+          test: { type: 'string', description: 'file:line or test name' },
+          assertion: { type: 'string' },
+          can_fail: { type: 'boolean' },
+        },
+        required: ['test', 'assertion', 'can_fail'],
+      },
+    },
+    risks_checked: {
+      type: 'array',
+      minItems: 2,
+      description: 'the riskiest paths or inputs attacked, how, and the result',
+      items: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          how: { type: 'string' },
+          result: { type: 'string' },
+        },
+        required: ['path', 'how', 'result'],
+      },
+    },
   },
-  required: ['verdict', 'findings', 'tickets_created'],
+  required: ['verdict', 'findings', 'tickets_created', 'implementer_flags', 'test_audit', 'risks_checked'],
 }
 
 const MERGE_SCHEMA = {
@@ -94,11 +149,17 @@ const MERGE_SCHEMA = {
 const CHECK_SCHEMA = {
   type: 'object',
   properties: {
-    status: { type: 'string', enum: ['pass', 'fail', 'no_checks'] },
+    status: {
+      type: 'string',
+      enum: ['pass', 'fail', 'preexisting_only', 'no_checks'],
+      description: 'fail = at least one failure the base branch does not have; preexisting_only = every failure also happens on the base branch',
+    },
     commands: { type: 'array', items: { type: 'string' } },
-    summary: { type: 'string', description: 'what failed and in which files, or a one-line pass summary' },
+    new_failures: { type: 'array', items: { type: 'string' }, description: 'failures introduced by this run' },
+    preexisting_failures: { type: 'array', items: { type: 'string' }, description: 'failures that also happen on the base branch' },
+    summary: { type: 'string', description: 'one short paragraph' },
   },
-  required: ['status', 'commands', 'summary'],
+  required: ['status', 'commands', 'new_failures', 'preexisting_failures', 'summary'],
 }
 
 // ---------- prompt pieces ----------
@@ -169,14 +230,21 @@ The implementation is on branch ${branchOf(t)}. Diff it against the integration 
 Read-only: do not edit files or commit. Record the result as a note on the ticket per your instructions, then return the verdict.`
 }
 
-function qrPrompt(t, slot, round) {
+function qrPrompt(t, slot, round, implSummary) {
   return `${header(slot)}
 Review ticket ${t.id} (${t.title}) on branch ${branchOf(t)} (round ${round}).
 Diff the ticket's own changes only:
   git diff ${A.integrationBranch}...${branchOf(t)}
 Findings parent: ${A.findingsParent}. Any Bucket B ticket you create must use --parent ${A.findingsParent}.
-Read-only apart from tk: do not edit files or commit. Write the round verdict note on the ticket, then return
-the verdict with Bucket A findings inline (REWORK) and the ids of any Bucket B tickets you filed.`
+
+The implementer's summary of this round, verbatim. Resolve every risk, caveat, or open question in it
+(step 2 of your instructions):
+---
+${implSummary || '(no summary)'}
+---
+
+Read-only apart from tk: do not edit files or commit. Scratch files go under $TMPDIR. Write the round
+verdict note on the ticket, then return the verdict with every field your instructions require.`
 }
 
 function mergePrompt(t) {
@@ -197,10 +265,20 @@ Any other failure: return result "error" with the command output.`
 }
 
 function checkPrompt() {
+  const base = A.baseBranch || 'main'
   return `${header(A.integrationWorktree)}
-Run the project's full lint and test suite on ${A.integrationBranch} (checked out here). Find the commands from
-CLAUDE.md, the Makefile/justfile, package.json, pyproject.toml, or CI config. Do not edit files or commit.
-Return "pass", "fail" (say what failed and where), or "no_checks" if the project has none.`
+Run the project's full lint, type check, and test suite on ${A.integrationBranch} (checked out here). Find the
+commands from CLAUDE.md, the Makefile/justfile, package.json, pyproject.toml, or CI config. Do not edit files or commit.
+
+If anything fails, find out whether the base branch has the same failure, so the report separates what this run
+broke from what was already broken:
+  git checkout --detach ${base}
+  <re-run only the failing commands>
+  git checkout ${A.integrationBranch}
+Always end with ${A.integrationBranch} checked out again and \`git status --porcelain --untracked-files=no\` empty.
+
+Return status "pass", "fail" (at least one new failure), "preexisting_only" (every failure also happens on
+${base}), or "no_checks", with each failure listed as new or pre-existing.`
 }
 
 // ---------- concurrency helpers ----------
@@ -260,7 +338,7 @@ async function runTicket(t, slot) {
     }
 
     rec.qrRounds += 1
-    const qr = await agent(qrPrompt(t, slot, rec.qrRounds), {
+    const qr = await agent(qrPrompt(t, slot, rec.qrRounds, impl.summary), {
       label: `review ${t.id}${rec.qrRounds > 1 ? ` r${rec.qrRounds}` : ''}`, phase: 'Review', agentType: 'ticket-reviewer', schema: QR_SCHEMA,
     })
     if (!qr) return block('quality reviewer died or was stopped')

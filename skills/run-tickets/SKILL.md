@@ -38,9 +38,22 @@ run-tickets-plan [--include-in-progress] <args>
 
 Pass `--include-in-progress` only for `--resume`. The output has `tickets`
 (topologically ordered, each with in-set `deps`, `has_ac`, `files`),
-`excluded` (with reasons), `cycles`, `overlaps`, `unannotated`, and `stats`.
+`excluded` (with reasons), `cycles`, `overlaps`, `unannotated`,
+`setup_warnings`, and `stats`.
 
 If `tickets` is empty, show the `excluded` list and stop.
+
+**Human gates.** Tickets tagged `needs-human` are excluded, with everything
+downstream of them. If a ticket's text says a person must do or approve it
+(for example "NO AGENT MAY CLOSE THIS TICKET") but it lacks the tag, point it
+out and offer `tk set <id> --tags <existing>,needs-human`, then re-run the
+planner, rather than excluding it by hand.
+
+**Setup warnings.** These are repo problems that break agents in fresh
+worktrees. Show each one and offer to fix it before proceeding. The common one
+is a JS repo with no `node_modules/` line in `.worktreelinks`: offer to append
+it (commit that on the main branch only if the user agrees). Do not proceed
+past an unfixed setup warning without the user's explicit choice.
 
 **File overlaps.** Each entry in `overlaps` names a file touched by two or more
 tickets with no dependency path between them. Those will likely conflict at
@@ -48,11 +61,12 @@ merge. Propose `tk dep <later> <earlier>` edges (earlier = the ticket that
 defines the shared surface, else the lower ID) and ask once whether to add them.
 If yes, run the `tk dep` calls and re-run `run-tickets-plan`.
 
-**Findings parent.** Out-of-scope finding tickets are parented here:
-- Epic mode: the epic's parent if it has one (`tk show <epic-id>`), otherwise
-  the epic itself.
-- ID mode: `shared_parent` if non-null. Otherwise a session epic, created in
-  Phase 2 after confirmation.
+**Findings parent.** Out-of-scope finding tickets go next to the work that
+produced them, so repeated runs over the same epic keep their findings in one
+place:
+- Epic mode: the epic itself.
+- ID mode: `shared_parent` if non-null (usually the epic the tickets belong
+  to). Otherwise a session epic, created in Phase 2 after confirmation.
 
 **Pool size.** `SLOTS = min(4, number of tickets)`. Slots are just worktrees;
 idle ones cost nothing.
@@ -68,7 +82,7 @@ Tickets: <N> runnable (<K> with AC), <R> ready now · longest chain <L> · max w
 
 Excluded:
   [<id>] <title>: <reason>
-Warnings: <overlaps not sequenced, unannotated tickets, or "none">
+Warnings: <setup warnings, overlaps not sequenced, unannotated tickets, or "none">
 
 Integration branch: <epic/<id> | run/<stamp>>   Slots: <SLOTS>
 Findings parent: <id | new session epic>
@@ -92,6 +106,14 @@ On `--resume` in ID mode, ask the user which existing `run/*` branch to reuse
    `git show-ref --verify --quiet refs/heads/<branch> || git branch <branch> main`.
    If it is checked out in the main repo (`git branch --show-current`), stop and
    ask the user to switch away: it must be free for the integration worktree.
+
+   If the branch already existed and `main` has moved on since
+   (`git log --oneline <branch>..main` is non-empty), show those commits and
+   offer to merge `main` into the branch first. Otherwise fixes made on `main`
+   since the last run (a lint config, a broken test) are missing from this one.
+   If the user agrees, do the merge in step 3's integration worktree once it
+   exists (`git merge --no-edit main` there); on conflict, `git merge --abort`
+   and ask.
 2. **Stale worktrees.** `git worktree list` showing `.worktrees/run-*` entries
    means an earlier run did not clean up. Report them and ask before removing.
 3. **Worktrees.** Use `worktree-init`, not `git worktree add`, so
@@ -128,6 +150,7 @@ Workflow({
     integrationWorktree: "<integration worktree path>",
     slots: ["<slot-1 path>", ...],
     findingsParent: "<id>",
+    baseBranch: "main",                           // the integration check compares against it
     tickets: [{ id, title, deps, has_ac }, ...]   // from the plan, same order
   }
 })
@@ -155,8 +178,11 @@ where they left off.
 
 ## Phase 4: Record outcomes and clean up
 
-The workflow returns `{ integrationBranch, mergeHalted, integration, tickets }`.
-Each entry in `tickets` has an `outcome`:
+The workflow's return value arrives in the completion notification, as JSON in
+its `<result>`. Read it from there; do not parse the task output file, which
+is a transcript, not the result. It is
+`{ integrationBranch, mergeHalted, integration, tickets }`, and each entry in
+`tickets` has an `outcome`:
 
 - `merged`: the merge step already closed it. Confirm with `tk show`; close it
   if it is somehow still open.
@@ -201,6 +227,15 @@ left in place (then the run is not fully cleaned up and the record still helps).
 
 ## Phase 5: Report
 
+Use this template exactly, including every `Next:` line that applies. The user
+compares reports across runs, so a consistent shape matters more than a
+tailored one. Add commentary after the template, not instead of it.
+
+The integration check reports `pass`, `fail` (new failures this run caused),
+`preexisting_only` (everything failing also fails on `main`), or `no_checks`.
+Show new and pre-existing failures separately; a `preexisting_only` result is
+not a reason to hold back the merge, but say what is broken on `main`.
+
 ```
 /run-tickets finished on <branch>: <M> merged, <B> blocked, <S> stalled
 
@@ -208,7 +243,9 @@ left in place (then the run is not fully cleaned up and the record still helps).
   [<id>] <title>  BLOCKED: <reason>
   [<id>] <title>  stalled: <reason>
 
-Integration check: <pass | fail: summary | no_checks | skipped>
+Integration check: <pass | fail | preexisting_only | no_checks | skipped>
+  new: <failures this run introduced, or "none">
+  pre-existing on main: <failures, or "none">
 Findings filed: <ids from each ticket's findings + outOfScope, or "none">
 Worktrees left in place: <paths or "none">
 
