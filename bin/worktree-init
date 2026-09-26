@@ -112,6 +112,17 @@ if [[ -f "$REPO_ROOT/.worktreelinks" ]]; then
 
     ln -sfn "$src" "$dst"
     echo "worktree-init: linked $entry" >&2
+
+    # A directory pattern like ".tickets/" in .gitignore does not match a
+    # symlink, so the link would show up as untracked and make the worktree
+    # look dirty. Exclude the exact path in the shared info/exclude (common
+    # to all worktrees of this repo) so git never sees it.
+    exclude_file="$(git rev-parse --path-format=absolute --git-common-dir)/info/exclude"
+    mkdir -p "$(dirname "$exclude_file")"
+    if ! grep -qxF "/$entry" "$exclude_file" 2>/dev/null; then
+      echo "/$entry" >> "$exclude_file"
+      echo "worktree-init: excluded /$entry in $exclude_file" >&2
+    fi
   done < "$REPO_ROOT/.worktreelinks"
 fi
 
