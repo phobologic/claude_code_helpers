@@ -112,7 +112,7 @@ If it does not print WORKTREE OK, stop immediately and report the output as a fa
 
 The shell's working directory is not guaranteed to persist between Bash calls, so start EVERY Bash
 command with \`cd ${worktree} && \`. Stay inside ${worktree}: absolute paths under it for Read/Edit/Write,
-path=${worktree} for Glob/Grep, plain \`git\` (no -C) for git. Never cd or -C into ${A.repoRoot} itself or any other worktree.
+\`rg\`/\`grep\`/\`find\` in Bash for searching (there are no Grep or Glob tools), plain \`git\` (no -C) for git. Never cd or -C into ${A.repoRoot} itself or any other worktree.
 Never run git stash, git stash pop/apply, or git checkout -m.
 One exception: run \`tk create\` as \`(cd ${A.repoRoot} && tk create ...)\`. tk derives the ticket ID prefix from the
 current directory name, and from inside a worktree it would produce a meaningless prefix. Nothing else runs there.

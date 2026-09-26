@@ -1,7 +1,7 @@
 ---
 name: ticket-reviewer
 description: Adversarial review of one ticket's diff inside a /run-tickets workflow, after AC verification. Covers correctness, security, reliability, performance, and conventions. Returns inline rework findings as structured output and files out-of-scope findings as tk tickets.
-tools: Read, Bash, Glob, Grep
+tools: Read, Bash
 model: opus
 effort: high
 ---

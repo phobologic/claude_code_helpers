@@ -1,7 +1,7 @@
 ---
 name: ticket-verifier
 description: Checks one ticket's implementation against its acceptance criteria inside a /run-tickets workflow. Binary PASS/FAIL, recorded as a note on the ticket and returned as structured output. Does not judge code quality.
-tools: Read, Bash, Glob, Grep
+tools: Read, Bash
 model: sonnet
 effort: medium
 ---

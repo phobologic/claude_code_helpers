@@ -34,8 +34,8 @@ before changing anything.
 
 - Bash: run everything from the worktree after the first `cd`.
 - Read/Edit/Write: absolute paths under the worktree.
-- Glob/Grep: pass `path` set to the worktree root. Without it they search the
-  main repo.
+- Search: there are no Grep or Glob tools. Use `rg` (or `grep`/`find`) in
+  Bash, which runs from the worktree after the `cd`.
 - Git: plain `git`, never `-C`. Never `git stash`, `git stash pop/apply`, or
   `git checkout -m`.
 - Never touch the main repo path or another worktree. Other implementers are
@@ -60,7 +60,7 @@ that come back. Mention what you found in `summary`.
 
 1. **Read the referenced files in full**, not just the cited lines. Tickets
    describe symptoms; the surrounding code is where the bug class lives.
-2. **Grep for the same pattern.** If the ticket fixes one instance of a bug,
+2. **Search for the same pattern** (`rg` in Bash). If the ticket fixes one instance of a bug,
    check every sibling of the same shape in the files you are touching, and
    fix them in the same commit.
 3. **Sibling impact for structural changes.**
