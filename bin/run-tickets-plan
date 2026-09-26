@@ -8,6 +8,10 @@ Resolves the input to a set of runnable tickets and prints one JSON object:
   mode              "epic" or "ids"
   epic_id           the epic when mode == "epic", else null
   shared_parent     the parent every runnable ticket shares, or null if mixed/none
+  integration       where to integrate: {branch, exists, reason, ahead_of_main,
+                    behind_main}. branch is epic/<id> when the tickets belong to
+                    an epic that has (or, in epic mode, will get) a branch; null
+                    means cut a fresh run/<stamp> from main
   tickets           runnable tickets, topologically ordered:
                       {id, title, priority, parent, deps, has_ac, files}
                     deps lists only in-set tickets this one waits on
@@ -99,6 +103,34 @@ def setup_warnings():
             "dependencies: tests, type checks, and commit hooks will fail or pick up the wrong tool "
             "versions. Add a `node_modules/` line to .worktreelinks.")
     return warnings
+
+
+def git(*args):
+    out = subprocess.run(["git", *args], capture_output=True, text=True)
+    return out.stdout.strip() if out.returncode == 0 else None
+
+
+def integration_branch(mode, epic_id, shared_parent):
+    """Where this run should integrate.
+
+    Tickets that belong to an epic go onto that epic's branch when it exists,
+    because an unmerged epic branch is where the code they touch lives. Only a
+    set of tickets with no epic branch gets a fresh branch cut from main.
+    """
+    epic = epic_id if mode == "epic" else shared_parent
+    if epic:
+        branch = f"epic/{epic}"
+        if git("show-ref", "--verify", "--quiet", f"refs/heads/{branch}") is not None:
+            ahead = git("rev-list", "--count", f"main..{branch}")
+            behind = git("rev-list", "--count", f"{branch}..main")
+            return {"branch": branch, "exists": True, "reason": f"branch of epic {epic}",
+                    "ahead_of_main": int(ahead or 0), "behind_main": int(behind or 0)}
+        if mode == "epic":
+            return {"branch": branch, "exists": False, "reason": f"new branch for epic {epic}, cut from main",
+                    "ahead_of_main": 0, "behind_main": 0}
+    return {"branch": None, "exists": False,
+            "reason": "no epic branch for these tickets; create run/<stamp> from main",
+            "ahead_of_main": 0, "behind_main": 0}
 
 
 def find_cycles(ids, deps):
@@ -233,12 +265,14 @@ def main(argv):
             overlaps.append({"file": f, "tickets": loose})
 
     parents = {t["parent"] for t in info.values()}
-    tickets = [{k: info[t][k] for k in ("id", "title", "priority", "parent", "deps", "has_ac", "files")}
+    shared_parent = next(iter(parents)) if len(parents) == 1 else None
+    tickets =[{k: info[t][k] for k in ("id", "title", "priority", "parent", "deps", "has_ac", "files")}
                for t in order]
     print(json.dumps({
         "mode": mode,
         "epic_id": epic_id,
-        "shared_parent": parents.pop() if len(parents) == 1 else None,
+        "shared_parent": shared_parent,
+        "integration": integration_branch(mode, epic_id, shared_parent),
         "tickets": tickets,
         "excluded": excluded,
         "cycles": cycles,

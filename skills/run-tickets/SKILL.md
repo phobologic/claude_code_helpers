@@ -84,7 +84,7 @@ Excluded:
   [<id>] <title>: <reason>
 Warnings: <setup warnings, overlaps not sequenced, unannotated tickets, or "none">
 
-Integration branch: <epic/<id> | run/<stamp>>   Slots: <SLOTS>
+Integration branch: <branch> (<integration.reason>; <N> ahead of main, <M> behind)   Slots: <SLOTS>
 Findings parent: <id | new session epic>
 ```
 
@@ -98,9 +98,13 @@ REPO_ROOT=$(git rev-parse --show-toplevel)
 STAMP=$(date +%Y%m%d-%H%M%S)
 ```
 
-Integration branch: `epic/<epic-id>` in epic mode, `run/<STAMP>` in ID mode.
-On `--resume` in ID mode, ask the user which existing `run/*` branch to reuse
-(`git branch --list 'run/*'`).
+**Integration branch: take it from the planner's `integration` field.** Never
+choose one yourself. When the tickets belong to an epic, `integration.branch`
+is `epic/<id>`, even in ID mode: an epic branch that has not reached `main`
+yet is where the code these tickets touch lives, so a branch cut from `main`
+would not contain it. Only when `integration.branch` is null do you create
+`run/<STAMP>` from `main`. On `--resume` with a null branch, ask the user which
+existing `run/*` branch to reuse (`git branch --list 'run/*'`).
 
 1. **Branch.** Create it from `main` if it does not exist:
    `git show-ref --verify --quiet refs/heads/<branch> || git branch <branch> main`.
@@ -114,6 +118,11 @@ On `--resume` in ID mode, ask the user which existing `run/*` branch to reuse
    If the user agrees, do the merge in step 3's integration worktree once it
    exists (`git merge --no-edit main` there); on conflict, `git merge --abort`
    and ask.
+
+   After any such merge, record the branch's starting point for the integration
+   check: `BASE=$(git rev-parse <branch>)`. The check compares failures against
+   this commit, not against `main`, because an epic branch can differ from
+   `main` by dozens of commits that are not this run's doing.
 2. **Stale worktrees.** `git worktree list` showing `.worktrees/run-*` entries
    means an earlier run did not clean up. Report them and ask before removing.
 3. **Worktrees.** Use `worktree-init`, not `git worktree add`, so
@@ -150,7 +159,7 @@ Workflow({
     integrationWorktree: "<integration worktree path>",
     slots: ["<slot-1 path>", ...],
     findingsParent: "<id>",
-    baseBranch: "main",                           // the integration check compares against it
+    baseBranch: "<BASE>",                         // integration branch's starting commit (Phase 2)
     tickets: [{ id, title, deps, has_ac }, ...]   // from the plan, same order
   }
 })
@@ -232,9 +241,10 @@ compares reports across runs, so a consistent shape matters more than a
 tailored one. Add commentary after the template, not instead of it.
 
 The integration check reports `pass`, `fail` (new failures this run caused),
-`preexisting_only` (everything failing also fails on `main`), or `no_checks`.
-Show new and pre-existing failures separately; a `preexisting_only` result is
-not a reason to hold back the merge, but say what is broken on `main`.
+`preexisting_only` (everything failing also failed on the integration branch
+before this run), or `no_checks`. Show new and pre-existing failures
+separately; a `preexisting_only` result is not a reason to hold back the merge,
+but say what was already broken.
 
 ```
 /run-tickets finished on <branch>: <M> merged, <B> blocked, <S> stalled
@@ -245,7 +255,7 @@ not a reason to hold back the merge, but say what is broken on `main`.
 
 Integration check: <pass | fail | preexisting_only | no_checks | skipped>
   new: <failures this run introduced, or "none">
-  pre-existing on main: <failures, or "none">
+  pre-existing (already failing before this run): <failures, or "none">
 Findings filed: <ids from each ticket's findings + outOfScope, or "none">
 Worktrees left in place: <paths or "none">
 

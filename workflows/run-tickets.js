@@ -17,7 +17,8 @@ export const meta = {
 //   integrationWorktree  worktree with integrationBranch checked out; merges happen here
 //   slots                absolute worktree paths, one per concurrent implementer
 //   findingsParent       epic that out-of-scope finding tickets are parented to
-//   baseBranch           optional, default "main": what the integration check compares failures against
+//   baseBranch           optional, default "main": commit or branch the integration check compares failures
+//                        against; the skill passes the integration branch's starting commit
 //   tickets              [{id, title, deps, has_ac}] in topological order
 //   caps                 optional {acFails, qrReworks, conflicts}
 
@@ -152,11 +153,11 @@ const CHECK_SCHEMA = {
     status: {
       type: 'string',
       enum: ['pass', 'fail', 'preexisting_only', 'no_checks'],
-      description: 'fail = at least one failure the base branch does not have; preexisting_only = every failure also happens on the base branch',
+      description: 'fail = at least one failure the base commit does not have; preexisting_only = every failure also happens at the base commit',
     },
     commands: { type: 'array', items: { type: 'string' } },
     new_failures: { type: 'array', items: { type: 'string' }, description: 'failures introduced by this run' },
-    preexisting_failures: { type: 'array', items: { type: 'string' }, description: 'failures that also happen on the base branch' },
+    preexisting_failures: { type: 'array', items: { type: 'string' }, description: 'failures that also happen at the base commit' },
     summary: { type: 'string', description: 'one short paragraph' },
   },
   required: ['status', 'commands', 'new_failures', 'preexisting_failures', 'summary'],
@@ -270,7 +271,8 @@ function checkPrompt() {
 Run the project's full lint, type check, and test suite on ${A.integrationBranch} (checked out here). Find the
 commands from CLAUDE.md, the Makefile/justfile, package.json, pyproject.toml, or CI config. Do not edit files or commit.
 
-If anything fails, find out whether the base branch has the same failure, so the report separates what this run
+If anything fails, find out whether the base commit (${base}, where ${A.integrationBranch} stood before this run)
+has the same failure, so the report separates what this run
 broke from what was already broken:
   git checkout --detach ${base}
   <re-run only the failing commands>
