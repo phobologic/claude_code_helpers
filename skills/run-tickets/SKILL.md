@@ -109,6 +109,16 @@ On `--resume` in ID mode, ask the user which existing `run/*` branch to reuse
 
 ## Phase 3: Launch the workflow
 
+First write the run record `<REPO_ROOT>/.worktrees/run-$STAMP.json` with the
+Write tool. `/run-status` reads it: Claude Code keeps no copy of a workflow's
+args it can find until the run has finished.
+
+```json
+{ "stamp": "<STAMP>", "launched": "<ISO-8601 local time>", "args": { ...same object as below... } }
+```
+
+Then launch:
+
 ```
 Workflow({
   name: "run-tickets",
@@ -128,10 +138,12 @@ If the name is not found, launch the same thing with
 Saved workflows are read once per session, so if `run-tickets.js` was edited
 during this session, launch by `scriptPath` to get the current version.
 
-Pass `args` as a JSON object, not a string. Then tell the user:
+Pass `args` as a JSON object, not a string. The launch result prints a `Run ID`
+(`wf_...`); add it to the run record as `"runId"`. Then tell the user:
 
-> Run started. Watch it with `/workflows` (phases, each agent's tool calls, and
-> a log line per ticket state change). Your session stays free meanwhile.
+> Run started. Watch it live with `/workflows` (phases, each agent's tool calls,
+> and a log line per ticket state change), or ask for `/run-status` for a
+> ticket-by-ticket snapshot. Your session stays free meanwhile.
 
 Do not poll. You are notified when the workflow completes.
 
@@ -183,6 +195,9 @@ git merge-base --is-ancestor ticket/<id> <branch> && git branch -D ticket/<id>
 ```
 
 Keep the branches of blocked tickets.
+
+Last, delete the run record `.worktrees/run-$STAMP.json`, unless a worktree was
+left in place (then the run is not fully cleaned up and the record still helps).
 
 ## Phase 5: Report
 
