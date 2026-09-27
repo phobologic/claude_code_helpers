@@ -363,6 +363,9 @@ async function runTicket(t, slot) {
     implRound += 1
     const impl = await agent(implementPrompt(t, slot, { ...work, round: implRound }), {
       label: `impl ${t.id}${implRound > 1 ? ` r${implRound}` : ''}`, phase: 'Implement', agentType: 'ticket-implementer', schema: IMPL_SCHEMA,
+      // The first round is where the design judgment happens; rework and conflict rounds
+      // follow a precise finding, so they keep the agent file's default (high).
+      ...(work.kind === 'new' ? { effort: 'xhigh' } : {}),
     })
     if (!impl) return block('implementer died or was stopped')
     if (impl.status !== 'done') return block(`implementer failed: ${impl.failure_reason || impl.summary}`)

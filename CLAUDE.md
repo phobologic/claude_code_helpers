@@ -121,7 +121,7 @@ Used by `/run-epic` and `/fix-tickets` to implement tickets in parallel with val
 
 Used only by the `run-tickets` workflow. They never use `SendMessage`; each call is a fresh agent that returns a typed result through `StructuredOutput`. Kept separate from the team agents above so neither set carries the other's protocol.
 
-1. **ticket-implementer** (opus, high): implements one ticket or one rework round (AC failures, review findings, merge conflict) in the worktree its prompt names. After committing, it breaks each condition it added, one at a time, to prove a test catches it, and returns that list (`conditions`) for the reviewer
+1. **ticket-implementer** (opus; xhigh for a ticket's first round, high for rework and conflict rounds): implements one ticket or one rework round (AC failures, review findings, merge conflict) in the worktree its prompt names. After committing, it breaks each condition it added, one at a time, to prove a test catches it, and returns that list (`conditions`) for the reviewer
 2. **ticket-verifier** (sonnet, medium): binary AC check, noted on the ticket; every criterion needs quoted code and a test assertion that could actually fail
 3. **ticket-reviewer** (opus, xhigh): adversarial diff review. Must resolve every risk the implementer flagged, audit that tests can fail by breaking each new condition in a `review-scratch` copy, and attack at least two risky paths before returning CLEAN (all three are required fields of its result). Inline findings come back for rework; out-of-scope ones become `tk` tickets, tagged `regression`, `worsened` or `preexisting`, after a `tk backlog find` duplicate check
 
