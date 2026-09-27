@@ -88,6 +88,20 @@ tk query '.[] | select(.parent=="<epic_id>")'
 
 In file mode, compare against your in-memory list of accumulated findings.
 
+In TK mode, also check tickets from earlier work, which may already cover it:
+```bash
+tk backlog find <file> <function or symbol>
+```
+If an open ticket outside this epic matches, add a note to it
+(`tk add-note <existing-id> "Seen again in /multi-review <EPIC_ID> by reviewer:<reviewer>: <file>:<lines>"`)
+instead of creating a ticket.
+
+**Pre-existing medium and low findings go to the backlog.** If the finding is
+not on a line the reviewed changes added or altered, and it is medium or low,
+create it under the repo's standing backlog epic instead of `<EPIC_ID>`:
+`--parent $(tk backlog ensure)`, with the extra tag `preexisting`. Critical and
+high findings stay in `<EPIC_ID>` wherever they are.
+
 **If it's a new finding:**
 
 - **TK mode**: Create a ticket:

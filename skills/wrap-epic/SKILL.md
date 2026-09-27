@@ -1,6 +1,6 @@
 ---
 name: wrap-epic
-description: Ship a completed /run-epic or /fix-tickets batch — merge the integration branch to main, prune worktrees, close the epic with a ship note, and report remaining work. Use only when the user types /wrap-epic.
+description: Ship a completed /run-tickets, /run-epic or /fix-tickets batch: merge the integration branch to main, prune worktrees, move leftover non-blocking findings to the repo's backlog epic, close the epic with a ship note, and report remaining work. Use only when the user types /wrap-epic.
 argument-hint: "[epic-id]"
 disable-model-invocation: true
 model: sonnet
@@ -8,9 +8,10 @@ model: sonnet
 
 # Wrap Epic
 
-Finalize a completed `/run-epic` or `/fix-tickets` run. The skill merges the
-integration branch into main, cleans up ephemeral state, closes the epic if
-appropriate, and leaves the user with a clear picture of what remains.
+Finalize a completed `/run-tickets`, `/run-epic` or `/fix-tickets` run. The
+skill merges the integration branch into main, cleans up ephemeral state, moves
+findings that should not hold the epic open to the repo's backlog, closes the
+epic if appropriate, and leaves the user with a clear picture of what remains.
 
 **This skill performs destructive operations.** Always present the plan and ask
 for explicit confirmation before executing anything.
@@ -39,7 +40,15 @@ Determine the epic and branch from arguments or the current branch:
 Once resolved, look up:
 - Epic ticket (`tk show <epic-id>`) — title, parent, any open child tickets
 - Integration branch commit range vs `main` (`git log main..<branch> --oneline`)
-- Open findings: children of the epic with status `open` or `in-progress`
+- Open findings: children of the epic with status `open` or `in_progress`,
+  split into:
+  - **Blocking:** tagged `regression` or `worsened`, or priority 0-1. These
+    are this epic's own breakage or serious bugs.
+  - **Movable:** everything else tagged `code-review`: pre-existing medium and
+    low findings, and older findings with no origin tag.
+- Backlog epic: `tk backlog` (the repo's one open epic tagged `backlog`).
+  If the epic being wrapped *is* the backlog epic, it is never closed: merge
+  its branch and prune, but skip the move and close steps.
 - Worktrees to clean: `git worktree list` filtered to paths under `.worktrees/`
   that belong to this run: `implementer-*` and `fix-batch-*` (wave skills),
   `epic-dag-*` and `fix-dag-*` (DAG skills), `run-*` (`/run-tickets`, which
@@ -59,25 +68,37 @@ Will do:
   3. Prune worktrees:
        .worktrees/implementer-1-...
        .worktrees/implementer-2-...
-  4. Close epic <id> with a ship note
-  5. Report sub-epic status under <parent-id> (if present)
+  4. Move <K> non-blocking findings to backlog <backlog-id>
+       pbp-ijkl  P3  preexisting  "Tooltip wraps on narrow screens"
+       pbp-mnop  P2  (no origin)  "Retry count is not configurable"   → duplicate of pbp-qrst: note + close
+  5. Close epic <id> with a ship note
+  6. Report sub-epic status under <parent-id> (if present)
 
 Will NOT do:
   - Push to remote (you push manually)
   - Delete the remote branch
   - Run tests or /multi-review
 
-⚠ Open review findings still parented under this epic:
-     pbp-abcd  P1  "Fix null deref in login handler"
-     pbp-efgh  P2  "Add retry to webhook sender"
-  You can merge anyway, defer the fixes, or stop and fix first.
+⚠ Blocking findings still open under this epic:
+     pbp-abcd  P1  preexisting  "Fix null deref in login handler"
+     pbp-efgh  P2  regression   "Webhook sender drops the retry header"
+  Recommended: stop and run /run-tickets <epic-id> first. You can also merge
+  anyway (they stay open, so the epic stays open) or move them to the backlog.
 
 Proceed? (yes / yes but skip merge / no)
 ```
 
 Rules:
-- If open findings exist, list them explicitly with priority and title — never
-  hide them. The user may still choose to merge; that's their call, not yours.
+- If open findings exist, list them explicitly with priority, origin and
+  title. Never hide them. The user may still choose to merge; that's their
+  call, not yours.
+- Movable findings go to the backlog by default (step 4). The user can keep
+  any of them in the epic instead. Blocking findings move only if the user
+  says so by id.
+- Before moving each one, check the backlog for a duplicate with
+  `tk backlog find <path> <symbol>` (from its **Files** line and title). Show
+  a duplicate in the plan as "duplicate of <id>: note + close".
+- If there is no backlog epic yet, step 4 creates it (`tk backlog ensure`).
 - If the epic has open non-finding children (tickets that weren't part of this
   run), list them separately and refuse to close the epic even on proceed.
 - If the branch has unpushed or uncommitted changes, surface that in the plan
@@ -108,13 +129,25 @@ errors — do not attempt to recover silently.
    ```
    If removal fails (uncommitted changes, locked), report the path and skip —
    don't force-remove. The user can inspect.
-4. **Close the epic.** Only if all children are closed:
+4. **Move findings to the backlog.** From the repo root:
+   ```
+   BACKLOG=$(tk backlog ensure)
+   tk set <id> --parent $BACKLOG      # each movable finding with no duplicate
+   tk add-note <id> "Moved from <epic-id> at wrap: not blocking that epic."
+   ```
+   For a duplicate, keep the backlog ticket and fold this one into it:
+   ```
+   tk add-note <existing-id> "Seen again in <epic-id> as <id>: <its title>. <anything its body adds>"
+   tk add-note <id> "Duplicate of <existing-id>; closed at wrap of <epic-id>."
+   tk close <id>
+   ```
+5. **Close the epic.** Only if all children are closed:
    ```
    tk add-note <epic-id> "Shipped: <N> tickets closed, <M> commits, touched <K> files. Merged to main at <sha>."
    tk close <epic-id>
    ```
    If the epic has open non-finding children, skip close and say so.
-5. **Report remaining work.** Show the epic tree so the user sees what
+6. **Report remaining work.** Show the epic tree so the user sees what
    sub-epics remain and how many tickets are open inside each:
    ```
    tk epic-tree <parent-id>     # if the wrapped epic has a parent
@@ -138,6 +171,7 @@ Wrapped <epic-id>.
   ✓ Merged <N> commits to main
   ✓ Deleted branch <branch>
   ✓ Pruned <K> worktrees
+  ✓ Moved <J> findings to backlog <backlog-id> (<D> folded into existing tickets)
   ✓ Closed epic (with ship note)
   Remaining in <parent-id>: <S> open sub-epics, <T> open direct tickets
 
@@ -150,5 +184,6 @@ Remember to `git push` when ready.
 - Never use `--force` on `git branch -d` or `git worktree remove`. If a
   non-destructive attempt fails, surface the reason and let the user decide.
 - Never close a ticket without first adding a note that explains what shipped.
+- Never close the backlog epic (tagged `backlog`). It is permanent.
 - If anything looks unexpected (unknown branch, orphan worktrees, mismatched
   epic metadata), stop and ask rather than guessing.

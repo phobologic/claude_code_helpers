@@ -13,7 +13,7 @@ language plugins, tool rules, and working style rules for `~/.claude/`.
 | `languages/` | Per-language Claude Code plugins (Go, Python, JS/SvelteKit) — auto-formatting hooks + coding rules |
 | `plugins/` | General-purpose Claude Code plugins — workflow automation and tool integrations |
 | `tools/` | Per-tool rule files (Railway, SQLAlchemy) — loaded via `.claude/rules/` symlinks |
-| `bin/` | Utility scripts: tk plugins (`tk-show-multi`, `tk-epic-status`, `tk-triage`, `tk-set`) and `git-auto-commit.sh` |
+| `bin/` | Utility scripts: tk plugins (`tk-show-multi`, `tk-epic-status`, `tk-triage`, `tk-set`, `tk-backlog`) and `git-auto-commit.sh` |
 | `hooks/` | Global Claude Code hooks (e.g. `no-inline-scripts.sh` — flags inline-interpreter and heredoc-to-file Bash patterns as a non-blocking, in-context nudge toward Write/Edit) |
 | `CLAUDE.global.md` | Global CLAUDE.md with personal working style rules |
 | `settings.global.json` | Global Claude Code settings — env, permissions, hooks, statusLine |
@@ -41,6 +41,7 @@ This creates:
 - `~/.local/bin/tk-epic-status` → `bin/tk-epic-status` *(tk plugin)*
 - `~/.local/bin/tk-triage` → `bin/tk-triage` *(tk plugin)*
 - `~/.local/bin/tk-set` → `bin/tk-set` *(tk plugin)*
+- `~/.local/bin/tk-backlog` → `bin/tk-backlog` *(tk plugin: the repo's standing backlog epic, and duplicate search)*
 
 It also adds `.tickets/` and `.tmp/` to `~/.config/git/ignore` so ticket files
 and scratch files are never accidentally committed.
@@ -68,7 +69,7 @@ are available globally:
 | `/spec [idea]` | Turn a rough idea into a phased plan with EARS ACs, adversarial review, and `tk` tickets |
 | `/run-epic <epic-id>` | Execute a `tk` epic with an agent team (implementers + AC verifier + quality reviewer) |
 | `/fix-tickets <id> [id ...] \| <epic-id>` | Implement a set of tickets in parallel — designed for multi-review fix batches |
-| `/run-tickets <epic-id> \| <id> [id ...] [--resume]` | **Experimental.** Workflow-backed ticket runner: scheduling lives in `workflows/run-tickets.js`, not an LLM team lead. Covers both `/run-epic` (AC verification when tickets have AC) and `/fix-tickets` (no AC) use cases. Watch with `/workflows`. Helpers: `bin/run-tickets-plan`, `bin/worktree-reset` |
+| `/run-tickets <epic-id> \| <id> [id ...] [--resume]` | **Experimental.** Workflow-backed ticket runner: scheduling lives in `workflows/run-tickets.js`, not an LLM team lead. Covers both `/run-epic` (AC verification when tickets have AC) and `/fix-tickets` (no AC) use cases. Watch with `/workflows`. Pre-existing medium and low findings go to the repo's backlog epic, so the epic can finish. Helpers: `bin/run-tickets-plan`, `bin/worktree-reset`, `bin/tk-backlog` |
 | `/run-status [run-id]` | Ticket-by-ticket snapshot of a `/run-tickets` run, from its run record and workflow journal (`bin/run-tickets-status`) |
 | `/review` | Code review of all uncommitted changes |
 | `/multi-review` | Parallel review by 5 specialized agents |
@@ -76,7 +77,7 @@ are available globally:
 | `/design-sprint [--scan] [-- guidance]` | Multi-agent GAN-style design sprint producing a frontend spec |
 | `/playwright-explore <url> [scenario:<name>] [roles:…] [time:…] [-- scenario]` | Spawn simulated users to explore a running app and file `tk` tickets |
 | `/epic-tree [--all] [epic-id ...]` | Show a tree of epics with open/closed ticket counts per level |
-| `/wrap-epic [epic-id]` | Ship a finished `/run-epic` or `/fix-tickets`: merge, prune worktrees, close epic, report what's left |
+| `/wrap-epic [epic-id]` | Ship a finished `/run-tickets`, `/run-epic` or `/fix-tickets`: merge, prune worktrees, move non-blocking findings to the backlog epic, close epic, report what's left |
 | `/team-status [epic-id]` | Read-only status snapshot for an in-flight `/run-epic`, `/fix-tickets`, or DAG variant |
 | `/setup-python-project [name]` | Scaffold a new Python project with uv, ruff, pytest, and GitHub Actions CI |
 | `/setup-js-project [name]` | Scaffold a new SvelteKit project with Biome, Prettier, Vitest, and GitHub Actions CI |

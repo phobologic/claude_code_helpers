@@ -126,7 +126,9 @@ def ticket_states(meta, events):
                 t["outcome"] = "blocked"
         elif kind == "review":
             t["review_rounds"] += 1
-            t["findings"] += res.get("tickets_created", [])
+            t["findings"] += res.get("tickets_created", [])  # runs from before the backlog split
+            t["findings"] += [f"{f['id']} ({'noted' if f.get('action') == 'noted' else f.get('parent', '?')})"
+                              for f in res.get("filed", [])]
             if res.get("verdict") == "REWORK" and res.get("findings"):
                 t["reworks"] += 1
             if res.get("verdict") == "ERROR" or t["reworks"] >= caps["qrReworks"]:

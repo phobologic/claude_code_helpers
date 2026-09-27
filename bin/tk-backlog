@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+# tk-plugin: Find or create the repo's standing backlog epic, and search tickets for an existing finding
+"""
+Usage:
+  tk backlog                      print the backlog epic's id (exit 1 if there is none)
+  tk backlog ensure               print it, creating it first if missing
+  tk backlog find [--all] TERM... tickets whose text contains every TERM
+                                  (case-insensitive), open ones only unless --all
+
+The backlog epic is the one open epic tagged `backlog`. It holds pre-existing
+problems found while working on something else, so they stop holding up the
+epic that found them. Everything that files findings checks `find` first and
+adds a note to an existing ticket instead of creating a duplicate.
+
+Run `ensure` from the repo root: tk derives new ticket ids from the current
+directory name.
+
+`find` output, one ticket per line:
+  <id>  <status>  P<priority>  parent=<id or ->  tags=<a,b>  <title>
+"""
+
+import os
+import re
+import subprocess
+import sys
+
+TAG = "backlog"
+TITLE = "Backlog: pre-existing findings"
+DESCRIPTION = (
+    "Standing backlog for this repo. Problems found while working on something else "
+    "(pre-existing bugs, low-priority polish, ideas) land here instead of in the epic "
+    "that found them, so that epic can finish. Never close this epic. Before filing a "
+    "finding anywhere, run `tk backlog find <path> <symbol>` and add a note to a match "
+    "instead of creating a duplicate. Work through it with `/run-tickets <ids>` or "
+    "`tk triage --epic <this id>`."
+)
+
+
+def tickets_dir():
+    env = os.environ.get("TICKETS_DIR")
+    if env:
+        return env
+    d = os.getcwd()
+    while d != "/":
+        if os.path.isdir(os.path.join(d, ".tickets")):
+            return os.path.join(d, ".tickets")
+        d = os.path.dirname(d)
+    sys.exit("tk backlog: no .tickets directory found")
+
+
+def parse(path):
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    m = re.match(r"---\n(.*?)\n---\n", text, re.DOTALL)
+    if not m:
+        return None
+    meta = {}
+    for line in m.group(1).splitlines():
+        if ":" in line:
+            k, v = line.split(":", 1)
+            meta[k.strip()] = v.strip()
+    tags = meta.get("tags", "")
+    meta["tags"] = [t.strip() for t in tags.strip("[]").split(",") if t.strip()]
+    title = re.search(r"^# (.+)$", text[m.end():], re.MULTILINE)
+    meta["title"] = title.group(1).strip() if title else ""
+    meta["id"] = meta.get("id") or os.path.basename(path)[:-3]
+    meta["text"] = text
+    return meta
+
+
+def all_tickets():
+    d = tickets_dir()
+    out = []
+    for name in sorted(os.listdir(d)):
+        if name.endswith(".md"):
+            t = parse(os.path.join(d, name))
+            if t:
+                out.append(t)
+    return out
+
+
+def backlog_epics():
+    found = [t for t in all_tickets()
+             if t.get("type") == "epic" and TAG in t["tags"] and t.get("status") != "closed"]
+    return sorted(found, key=lambda t: t.get("created", ""))
+
+
+def show_id(create):
+    found = backlog_epics()
+    if len(found) > 1:
+        print(f"tk backlog: {len(found)} open backlog epics ({', '.join(t['id'] for t in found)}); "
+              f"using the oldest. Merge the others into it.", file=sys.stderr)
+    if found:
+        print(found[0]["id"])
+        return 0
+    if not create:
+        print("tk backlog: no open epic tagged 'backlog'; run `tk backlog ensure` to create one",
+              file=sys.stderr)
+        return 1
+    tk = os.environ.get("TK_SCRIPT", "tk")
+    res = subprocess.run([tk, "create", TITLE, "-t", "epic", "-p", "3", "--tags", TAG, "-d", DESCRIPTION],
+                         capture_output=True, text=True)
+    if res.returncode != 0:
+        sys.exit(f"tk backlog: tk create failed: {res.stderr.strip()}")
+    print(res.stdout.strip().splitlines()[-1])
+    return 0
+
+
+def find(args):
+    include_closed = "--all" in args
+    terms = [a.lower() for a in args if a != "--all"]
+    if not terms:
+        sys.exit("tk backlog find: give at least one search term (a file path, a function name, ...)")
+    hits = [t for t in all_tickets()
+            if t.get("type") != "epic"
+            and (include_closed or t.get("status") != "closed")
+            and all(term in t["text"].lower() for term in terms)]
+    for t in hits:
+        print(f"{t['id']}  {t.get('status', '?')}  P{t.get('priority', '?')}  "
+              f"parent={t.get('parent') or '-'}  tags={','.join(t['tags'])}  {t['title']}")
+    return 0
+
+
+def main(argv):
+    if argv[:1] == ["--tk-describe"]:
+        print("tk-plugin: Find or create the repo's standing backlog epic, and search tickets for an existing finding")
+        return 0
+    if not argv:
+        return show_id(create=False)
+    if argv[0] == "ensure":
+        return show_id(create=True)
+    if argv[0] == "find":
+        return find(argv[1:])
+    sys.exit(__doc__)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

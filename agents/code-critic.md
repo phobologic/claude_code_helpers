@@ -147,7 +147,10 @@ Do NOT write to any `.code-review/*.md` files. Output inline only.
 
 ## Ticket Creation (tk mode only)
 
-For each **Critical, High, and Medium** finding, create a flat ticket. For simple issues:
+For each **Critical, High, and Medium** finding, first check whether a ticket
+already covers it: `tk backlog find <file> <function or symbol>`. If an open
+ticket matches, add a note to it (`tk add-note <id> "Seen again by code-critic: <file>:<line>, <new evidence>"`)
+instead of creating one. Otherwise create a flat ticket. For simple issues:
 
 ```bash
 tk create "<concise one-sentence title>" \

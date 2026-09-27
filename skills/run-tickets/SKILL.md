@@ -68,6 +68,14 @@ place:
 - ID mode: `shared_parent` if non-null (usually the epic the tickets belong
   to). Otherwise a session epic, created in Phase 2 after confirmation.
 
+**Backlog.** Each repo has one standing epic tagged `backlog` (`tk backlog`
+prints its id). Reviewers file pre-existing medium and low findings there
+instead of under the findings parent, and add notes to tickets that already
+exist instead of filing duplicates. That keeps each run's reviews from
+refilling the epic with problems it did not cause, so the epic can finish. If
+`tk backlog` finds none, it is created in Phase 2. When the run is over the
+backlog epic itself, it is both the findings parent and the backlog.
+
 **Pool size.** `SLOTS = min(4, stats.max_width)`: never more slots than the
 dependency graph can use at once, so a strict chain gets one. Slots are only
 a concurrency cap, so being one short on an unusual graph costs a little
@@ -87,7 +95,7 @@ Excluded:
 Warnings: <setup warnings, overlaps not sequenced, unannotated tickets, or "none">
 
 Integration branch: <branch> (<integration.reason>; <N> ahead of main, <M> behind)   Slots: <SLOTS>
-Findings parent: <id | new session epic>
+Findings parent: <id | new session epic>   Backlog: <id | new, created at setup>
 ```
 
 Confirm with `AskUserQuestion` (header "Run tickets"): **Proceed
@@ -137,6 +145,7 @@ existing `run/*` branch to reuse (`git branch --list 'run/*'`).
    Each call prints the absolute worktree path on stdout. Record them.
 4. **Session epic** (ID mode with no shared parent only):
    `tk create "run-tickets $STAMP" -t epic -p 2 -d "Findings from /run-tickets over <ids>"`.
+   **Backlog epic:** `BACKLOG=$(tk backlog ensure)`, from the repo root.
 5. **Claim.** `tk start <id>` for every runnable ticket, so a concurrent run
    cannot pick them up.
 
@@ -161,6 +170,7 @@ Workflow({
     integrationWorktree: "<integration worktree path>",
     slots: ["<slot-1 path>", ...],
     findingsParent: "<id>",
+    backlogParent: "<BACKLOG>",
     baseBranch: "<BASE>",                         // integration branch's starting commit (Phase 2)
     tickets: [{ id, title, deps, has_ac }, ...]   // from the plan, same order
   }
@@ -258,16 +268,23 @@ but say what was already broken.
 Integration check: <pass | fail | preexisting_only | no_checks | skipped>
   new: <failures this run introduced, or "none">
   pre-existing (already failing before this run): <failures, or "none">
-Findings filed: <ids from each ticket's findings + outOfScope, or "none">
+Findings in <findings parent>: <ids from each ticket's findings + outOfScope, or "none">
+Backlog <BACKLOG>: <new ids from each ticket's backlog>; noted again: <ids from noted, or "none">
 Worktrees left in place: <paths or "none">
+Blocking wrap: <every open child of the findings parent, from `tk query`, or "none: ready to wrap">
 
 Next:
   git log --oneline main..<branch>
   /code-review high  (or /multi-review) on main...<branch>
-  tk triage --epic <findings parent> --sort priority,confidence
+  /run-tickets <findings parent>          # only if "Blocking wrap" lists tickets
   /run-tickets <blocked ids> --resume     # after addressing the block reasons
-  /wrap-epic <epic-id or branch>          # merge to main when satisfied
+  /wrap-epic <epic-id or branch>          # when "Blocking wrap" is none
 ```
+
+"Blocking wrap" is the stopping rule. Findings under the findings parent are
+regressions this work caused, or serious bugs, so they are worth another run.
+Backlog findings are not. Do not suggest another run to clear the backlog; it
+is worked separately, whenever the user chooses.
 
 Findings from `/code-review` or `/multi-review` can go straight back through
 `/run-tickets <finding-epic-id>`.

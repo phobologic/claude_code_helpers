@@ -678,7 +678,10 @@ lead's context. Compare incoming findings against this list. Do not re-query
 Parse the finding. Compare its `title` (case-insensitive, fuzzy) against the
 dedup index.
 
-**If it's a new issue**, create a ticket and append `{id, title}` to the index:
+**If it's new to the index**, first check whether earlier work already filed
+it: `tk backlog find <route or component> <distinctive word from the title>`.
+If an open ticket matches, treat it as a duplicate (below) and add it to the
+index. Otherwise create a ticket and append `{id, title}` to the index:
 
 ```bash
 tk create "<title>" \

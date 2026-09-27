@@ -16,7 +16,9 @@ export const meta = {
 //   integrationBranch    e.g. epic/<id> or run/<stamp>
 //   integrationWorktree  worktree with integrationBranch checked out; merges happen here
 //   slots                absolute worktree paths, one per concurrent implementer
-//   findingsParent       epic that out-of-scope finding tickets are parented to
+//   findingsParent       epic for findings that block this work: regressions, and serious pre-existing bugs
+//   backlogParent        optional: the repo's standing backlog epic (`tk backlog ensure`) for other
+//                        pre-existing findings; without it, everything goes to findingsParent
 //   baseBranch           optional, default "main": commit or branch the integration check compares failures
 //                        against; the skill passes the integration branch's starting commit
 //   tickets              [{id, title, deps, has_ac}] in topological order
@@ -91,7 +93,20 @@ const QR_SCHEMA = {
         required: ['priority', 'location', 'description', 'fix'],
       },
     },
-    tickets_created: { type: 'array', items: { type: 'string' }, description: 'Bucket B tickets filed this round' },
+    filed: {
+      type: 'array',
+      description: 'Bucket B tickets created or noted this round',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          action: { type: 'string', enum: ['created', 'noted'], description: 'noted = an existing ticket got a note instead of a duplicate' },
+          origin: { type: 'string', enum: ['regression', 'worsened', 'preexisting'] },
+          parent: { type: 'string', enum: ['findings', 'backlog'] },
+        },
+        required: ['id', 'action', 'origin', 'parent'],
+      },
+    },
     implementer_flags: {
       type: 'array',
       description: 'every risk, caveat, or open question the implementer raised, and how it was resolved',
@@ -133,7 +148,7 @@ const QR_SCHEMA = {
       },
     },
   },
-  required: ['verdict', 'findings', 'tickets_created', 'implementer_flags', 'test_audit', 'risks_checked'],
+  required: ['verdict', 'findings', 'filed', 'implementer_flags', 'test_audit', 'risks_checked'],
 }
 
 const MERGE_SCHEMA = {
@@ -205,8 +220,10 @@ The verifier's full note is on the ticket (\`tk show ${t.id}\`). Fix these, keep
 ${work.findings.map((f, i) => `  ${i + 1}. [${f.priority.toUpperCase()}] ${f.location}: ${f.description} Suggested fix: ${f.fix}`).join('\n')}
 
 If a finding is genuinely out of scope (it would require touching files this ticket never named), do not fix it.
-Instead file it: \`tk create "<title>" -p <0-2 by priority> --parent ${A.findingsParent} --tags code-review,quality -d "<file:line, description, suggested fix, source ticket ${t.id}>"\`
-and list it in out_of_scope with the finding number and new ticket id. Fix every finding you do not push back on.`
+First check it is not already filed: \`(cd ${A.repoRoot} && tk backlog find <path> <symbol>)\`. If an open ticket covers it,
+add a note there (\`tk add-note <id> "..."\`) and use that id. Otherwise file it:
+\`tk create "<title>" -p <0-2 by priority> --parent ${A.findingsParent} --tags code-review,quality -d "<file:line, description, suggested fix, source ticket ${t.id}>"\`
+Either way, list it in out_of_scope with the finding number and ticket id. Fix every finding you do not push back on.`
   } else {
     task = `Merge conflict: ${branchOf(t)} no longer merges cleanly into ${A.integrationBranch}${work.files.length ? ` (conflicts in: ${work.files.join(', ')})` : ''}.
 Bring the integration branch into your ticket branch and resolve:
@@ -236,7 +253,10 @@ function qrPrompt(t, slot, round, implSummary) {
 Review ticket ${t.id} (${t.title}) on branch ${branchOf(t)} (round ${round}).
 Diff the ticket's own changes only:
   git diff ${A.integrationBranch}...${branchOf(t)}
-Findings parent: ${A.findingsParent}. Any Bucket B ticket you create must use --parent ${A.findingsParent}.
+Repo root (run tk create and tk backlog from here): ${A.repoRoot}
+Findings parent: ${A.findingsParent}
+Backlog parent: ${A.backlogParent || A.findingsParent}
+Route each Bucket B finding by origin and priority as your instructions say, and search before filing.
 
 The implementer's summary of this round, verbatim. Resolve every risk, caveat, or open question in it
 (step 2 of your instructions):
@@ -309,7 +329,7 @@ function withMergeLock(fn) {
 
 async function runTicket(t, slot) {
   const rec = { id: t.id, title: t.title, outcome: null, reason: '', sha: '', acFails: 0, qrRounds: 0, qrReworks: 0,
-    conflicts: 0, findings: [], outOfScope: [], summary: '' }
+    conflicts: 0, findings: [], backlog: [], noted: [], outOfScope: [], summary: '' }
   const block = reason => { rec.outcome = 'blocked'; rec.reason = reason; log(`${t.id}: BLOCKED (${reason})`); return rec }
 
   let work = { kind: 'new' }
@@ -345,7 +365,11 @@ async function runTicket(t, slot) {
     })
     if (!qr) return block('quality reviewer died or was stopped')
     if (qr.verdict === 'ERROR') return block(`reviewer could not run: ${qr.error || 'no detail'}`)
-    rec.findings.push(...qr.tickets_created)
+    for (const f of qr.filed || []) {
+      if (f.action === 'noted') rec.noted.push(f.id)
+      else if (f.parent === 'backlog' && A.backlogParent) rec.backlog.push(f.id)
+      else rec.findings.push(f.id)
+    }
     if (qr.verdict === 'REWORK' && qr.findings.length) {
       rec.qrReworks += 1
       log(`${t.id}: REWORK, ${qr.findings.length} finding(s) (${rec.qrReworks}/${CAPS.qrReworks})`)
@@ -355,7 +379,8 @@ async function runTicket(t, slot) {
       work = { kind: 'qr_rework', findings: qr.findings }
       continue
     }
-    log(`${t.id}: review ${qr.verdict}${qr.tickets_created.length ? `, filed ${qr.tickets_created.join(', ')}` : ''}`)
+    const filed = (qr.filed || []).map(f => `${f.id} (${f.action === 'noted' ? 'noted' : f.parent})`)
+    log(`${t.id}: review ${qr.verdict}${filed.length ? `, filed ${filed.join(', ')}` : ''}`)
 
     const merge = await withMergeLock(() => mergeHalted ? null : agent(mergePrompt(t), {
       label: `merge ${t.id}`, phase: 'Merge', schema: MERGE_SCHEMA, model: 'haiku', effort: 'low',

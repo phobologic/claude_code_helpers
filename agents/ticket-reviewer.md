@@ -41,8 +41,8 @@ findings.
 These apply to every finding:
 
 1. **Diff-scoped.** Findings sit on lines the ticket added or directly broke,
-   or on design choices the ticket made. Pre-existing problems go to Bucket B,
-   if they are worth filing at all.
+   or on design choices the ticket made. Pre-existing problems go to Bucket B
+   (usually the backlog), if they are worth filing at all.
 2. **Consolidate patterns.** N instances of one mistake is one finding listing
    every location, never N findings.
 3. **Worst first, and CLEAN is allowed, but only after the work below.** Never
@@ -156,7 +156,51 @@ they go in `findings`.
 
 **Bucket B, ticketed.** Fixing it would need files or changes the ticket never
 anticipated, or it is low priority (all lows go here, wherever they are).
-File each one under the findings parent from your prompt:
+
+Give each Bucket B finding an **origin**:
+
+- `regression`: this diff introduced it.
+- `worsened`: it existed before, but this diff made it more likely or more
+  visible.
+- `preexisting`: it was there before and this diff did not change it. You
+  found it by reading around the change.
+
+The origin decides where the ticket goes. The epic you are reviewing for
+should finish once its own work is sound, not once every nearby problem is
+fixed, so pre-existing problems wait in the repo's standing backlog:
+
+| Origin | Priority | Parent |
+|---|---|---|
+| `regression` or `worsened` | any | findings parent |
+| `preexisting` | critical or high | findings parent |
+| `preexisting` | medium or low | backlog parent |
+
+Both parents are in your prompt. Tag the ticket with its origin too.
+
+**Search before filing.** The same problem is often found again by a later
+review. Search every ticket, open ones first, by the file and the function or
+rule involved:
+
+```bash
+(cd <repo-root> && tk backlog find <path> <symbol>)          # open tickets
+(cd <repo-root> && tk backlog find --all <path> <symbol>)    # include closed
+```
+
+- **An open ticket already covers it:** do not create another. Add a note to
+  that ticket instead, then list it in `filed` with action `noted`:
+  ```bash
+  (cd <repo-root> && tk add-note <existing-id> "Seen again reviewing <ticket-id>: <new evidence, path:line>")
+  ```
+  If this diff made the problem worse, say so in the note, and treat it as
+  `worsened` for this review.
+- **Two or more earlier tickets, open or closed, already patched the same
+  function or rule:** the patches are not converging. File one ticket that
+  redesigns the rule, naming the earlier tickets and what they had in common,
+  rather than a further patch.
+
+Acceptance criteria on finding tickets must be checkable from code and tests.
+If a criterion can only be confirmed by a person using the running product,
+add the `needs-human` tag so `/run-tickets` does not pick the ticket up.
 
 Write the description to a file first, then pass it with `-d "$(cat <file>)"`.
 Do not nest the heredoc inside `$(...)`: macOS bash 3.2 fails on any
@@ -166,6 +210,7 @@ apostrophe in the body there, even with a quoted `'EOF'`.
 cat > "$TMPDIR/finding-<ticket-id>-<n>.md" <<'EOF'
 **Files**: <path>:<lines>
 **Source ticket**: <ticket-id>
+**Origin**: <regression | worsened | preexisting>: <why: the diff line that caused or worsened it, or why it predates the change>
 **Description**: <what is wrong and why it matters>
 **Suggested Fix**: <concrete change>
 **Acceptance Criteria**:
@@ -175,7 +220,7 @@ cat > "$TMPDIR/finding-<ticket-id>-<n>.md" <<'EOF'
 **Confidence**: <0-100>
 **Confidence rationale**: <specific evidence, see below>
 EOF
-tk create "<concise title>" -p <0-3> --parent <findings-parent> --tags code-review,quality -d "$(cat "$TMPDIR/finding-<ticket-id>-<n>.md")"
+(cd <repo-root> && tk create "<concise title>" -p <0-3> --parent <findings-or-backlog-parent> --tags code-review,quality,<origin> -d "$(cat "$TMPDIR/finding-<ticket-id>-<n>.md")")
 ```
 
 Every finding ticket gets narrow acceptance criteria, including lows, so it
@@ -192,7 +237,8 @@ tk add-note <ticket-id> <<'EOF'
 **Test audit**: <tests checked, and any that cannot fail>
 **Risks checked**: <each path: what you did, what you found>
 **Inline findings**: <numbered [PRIORITY] file:line: description, or "none">
-**Filed out of scope this round**: <ticket ids and titles, or "none">
+**Filed out of scope this round**: <ticket ids, origin, parent, and titles, or "none">
+**Noted on existing tickets**: <ticket ids, or "none">
 **Carried forward, not re-raised**: <earlier-round ticket ids, or "none, first round">
 EOF
 ```
@@ -230,10 +276,12 @@ Return through `StructuredOutput`:
 - `verdict`: `ERROR` if you could not review at all (ticket not found, branch
   missing, worktree check failed, history missing), with what you saw in
   `error`. Otherwise `REWORK` if Bucket A has anything; otherwise `FINDINGS`
-  if you filed Bucket B tickets for blocking-level issues, else `CLEAN`.
+  if you filed Bucket B tickets under the findings parent, else `CLEAN`.
 - `findings`: the Bucket A list (priority, `path:line`, description, fix).
   Empty unless `REWORK`.
-- `tickets_created`: every Bucket B ticket ID you filed this round.
+- `filed`: every Bucket B ticket you created or noted this round, with its
+  `origin`, `action` (`created` or `noted`), and `parent` (`findings` or
+  `backlog`).
 - `implementer_flags`: each flag from step 2 with its disposition and evidence.
 - `test_audit`: each test from step 3, its key assertion, and whether it can
   fail.
