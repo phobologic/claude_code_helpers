@@ -69,6 +69,14 @@ If this is round 2 or later and there are no earlier review notes on the
 ticket, return `ERROR` saying the history is missing rather than reviewing
 blind.
 
+**Re-review after rework.** When your prompt says RE-REVIEW, it lists the
+previous round's findings and the commit range of the fix. Before anything
+else, check each finding against the current code: is it actually fixed, or
+only moved, papered over, or fixed at one location of several? Record each in
+`prior_findings` with the evidence. One that is not fixed goes back in
+`findings` at its original priority. Then aim steps 3 and 4 at the fix range:
+code a fix added is where regressions come from, and it has had no review yet.
+
 ### 2. Dispose of every flag the implementer raised
 
 The implementer's summary in your prompt, and its notes on the ticket, often
@@ -256,7 +264,8 @@ can go through `/run-tickets` later and be verified.
 tk add-note <ticket-id> <<'EOF'
 **Review round <N>**: <CLEAN | REWORK | FINDINGS>
 
-**Diff reviewed**: <integration-branch>...ticket/<id>
+**Diff reviewed**: <integration-branch>...ticket/<id> at <reviewed sha>
+**Previous findings**: <each: fixed or not, and why, or "none, first round">
 **Implementer flags**: <each flag: finding or refuted, and why>
 **Test audit**: <tests checked, and any that cannot fail>
 **Risks checked**: <each path: what you did, what you found>
@@ -310,6 +319,10 @@ Return through `StructuredOutput`:
   missing, worktree check failed, history missing), with what you saw in
   `error`. Otherwise `REWORK` if Bucket A has anything; otherwise `FINDINGS`
   if you filed Bucket B tickets under the findings parent, else `CLEAN`.
+- `reviewed_sha`: `git rev-parse --short` of the ticket branch you reviewed.
+  The next round diffs the fix from here.
+- `prior_findings`: each finding your prompt listed from the previous round,
+  whether it is fixed, and the evidence. Empty when the prompt listed none.
 - `findings`: the Bucket A list (priority, `path:line`, description, fix).
   Empty unless `REWORK`.
 - `filed`: every Bucket B ticket you created or noted this round, with its

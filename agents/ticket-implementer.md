@@ -162,6 +162,7 @@ Run this checklist every round:
    git rev-list <integration-branch>..HEAD --count   # at least 1
    git status --porcelain                            # empty
    git log -1 --format=%h                            # goes in head_sha
+   git diff --numstat <integration-branch>...HEAD    # sizes the review, see src_lines_changed
    ```
 
 ## Result
@@ -173,6 +174,10 @@ Return through `StructuredOutput`:
   partial work first so the next attempt can build on it.
 - `head_sha`, `summary` (approach, files, probe findings, choices you made),
   `tests` (commands run and results), and `out_of_scope` on rework rounds.
+- `src_lines_changed`: from the `--numstat` output, added plus deleted lines
+  summed over every file that is not a test, fixture, or doc. Count the whole
+  ticket diff, not just this round. It sets the reviewer's effort, so count
+  honestly: an undercount gets your code a lighter review.
 - `conditions`: each condition from "Prove each new condition is tested",
   with its `location`, what you did to `break` it, whether a test `caught` it,
   and which `test`.

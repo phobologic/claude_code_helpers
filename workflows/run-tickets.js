@@ -27,6 +27,38 @@ export const meta = {
 const A = args
 const CAPS = Object.assign({ acFails: 3, qrReworks: 3, conflicts: 2 }, A.caps || {})
 
+// ---------- effort ----------
+// Effort follows objective signals, never a guess at how hard a ticket looks.
+// A ticket that many others wait on (transitively, as run-tickets-plan counts
+// them) stalls the most work if it blocks, so it gets the most thinking. Review
+// effort follows the size of the whole ticket diff, so a small fix to a big
+// ticket is still reviewed at full effort.
+const HIGH_FANOUT = 3        // transitive dependents at or above which a ticket is high-fanout
+const SMALL_DIFF = 50        // src lines changed below which review drops to high
+
+const ancestors = {}
+for (const t of A.tickets) {
+  ancestors[t.id] = new Set(t.deps.flatMap(d => [d, ...(ancestors[d] || [])]))
+}
+const dependents = {}
+for (const t of A.tickets) dependents[t.id] = A.tickets.filter(o => ancestors[o.id].has(t.id)).length
+const highFanout = t => dependents[t.id] >= HIGH_FANOUT
+const fanned = A.tickets.filter(highFanout)
+if (fanned.length) log(`high-fanout (max effort): ${fanned.map(t => `${t.id} (${dependents[t.id]} dependents)`).join(', ')}`)
+
+// First round is where the design judgment happens; rework and conflict rounds
+// follow a precise finding, so they keep the agent file's default (high).
+function implEffort(t, work) {
+  if (work.kind !== 'new') return {}
+  return { effort: highFanout(t) ? 'max' : 'xhigh' }
+}
+
+// The reviewer's agent file defaults to xhigh; only small, low-fanout diffs drop.
+function reviewEffort(t, impl) {
+  const small = Number.isInteger(impl.src_lines_changed) && impl.src_lines_changed < SMALL_DIFF
+  return small && !highFanout(t) ? { effort: 'high' } : {}
+}
+
 // ---------- schemas ----------
 
 const IMPL_SCHEMA = {
@@ -46,6 +78,10 @@ const IMPL_SCHEMA = {
       },
     },
     failure_reason: { type: 'string' },
+    src_lines_changed: {
+      type: 'integer',
+      description: 'lines added plus deleted against the integration branch, excluding test and doc files; sizes the review',
+    },
     conditions: {
       type: 'array',
       description: 'each condition this round added or changed in src, broken once to see whether a test catches it',
@@ -62,7 +98,7 @@ const IMPL_SCHEMA = {
       },
     },
   },
-  required: ['status', 'summary', 'conditions'],
+  required: ['status', 'summary', 'src_lines_changed', 'conditions'],
 }
 
 const AC_SCHEMA = {
@@ -94,6 +130,20 @@ const QR_SCHEMA = {
   properties: {
     verdict: { type: 'string', enum: ['CLEAN', 'REWORK', 'FINDINGS', 'ERROR'] },
     error: { type: 'string', description: 'with ERROR: what in the environment prevented the review' },
+    reviewed_sha: { type: 'string', description: 'short sha of the ticket branch tip you reviewed' },
+    prior_findings: {
+      type: 'array',
+      description: 'each finding from the previous review round listed in your prompt, and whether the fix holds; empty when none were listed',
+      items: {
+        type: 'object',
+        properties: {
+          finding: { type: 'integer' },
+          fixed: { type: 'boolean' },
+          evidence: { type: 'string' },
+        },
+        required: ['finding', 'fixed', 'evidence'],
+      },
+    },
     findings: {
       type: 'array',
       description: 'Bucket A (inline-fixable) findings; empty unless verdict is REWORK',
@@ -163,7 +213,7 @@ const QR_SCHEMA = {
       },
     },
   },
-  required: ['verdict', 'findings', 'filed', 'implementer_flags', 'test_audit', 'risks_checked'],
+  required: ['verdict', 'reviewed_sha', 'prior_findings', 'findings', 'filed', 'implementer_flags', 'test_audit', 'risks_checked'],
 }
 
 const MERGE_SCHEMA = {
@@ -268,7 +318,21 @@ function conditionLines(conditions) {
   return conditions.map(c => `  - ${c.location} ${c.condition}: broke it by ${c.break}; ${c.caught ? `caught by ${c.test}` : `NOT caught: ${c.test}`}`).join('\n')
 }
 
-function qrPrompt(t, slot, round, implSummary, conditions, final) {
+function priorReviewNote(t, prior) {
+  if (!prior) return ''
+  return `
+RE-REVIEW after rework. The previous round (at ${prior.sha}) sent back these findings:
+${prior.findings.map((f, i) => `  ${i + 1}. [${f.priority.toUpperCase()}] ${f.location}: ${f.description}`).join('\n')}
+First check each one is actually fixed and record it in \`prior_findings\`; one that is not fixed goes back in
+\`findings\`. The fix since that round is where regressions come from, so aim steps 3 and 4 at it:
+  git log --oneline ${prior.sha}..${branchOf(t)}
+  git diff ${prior.sha}..${branchOf(t)}
+Still read the full ticket diff for context, but code the previous round passed only gets re-raised under the
+round 2 rules in your instructions.
+`
+}
+
+function qrPrompt(t, slot, round, implSummary, conditions, final, prior) {
   const finalNote = final ? `
 FINAL ROUND: this ticket has had ${CAPS.qrReworks - 1} rework round(s). Another REWORK blocks it, and every ticket
 that depends on it stalls. Return REWORK only for critical or high findings. File each medium finding as a ticket
@@ -279,7 +343,7 @@ in \`filed\`, and return FINDINGS so this ticket merges. See "Final round" in yo
 Review ticket ${t.id} (${t.title}) on branch ${branchOf(t)} (round ${round}).${finalNote}
 Diff the ticket's own changes only:
   git diff ${A.integrationBranch}...${branchOf(t)}
-Repo root (run tk create and tk backlog from here): ${A.repoRoot}
+${priorReviewNote(t, prior)}Repo root (run tk create and tk backlog from here): ${A.repoRoot}
 Findings parent: ${A.findingsParent}
 Backlog parent: ${A.backlogParent || A.findingsParent}
 Route each Bucket B finding by origin and priority as your instructions say, and search before filing.
@@ -296,7 +360,8 @@ ${conditionLines(conditions)}
 
 Read-only apart from tk: do not edit files or commit. Mutate code only in a \`review-scratch ${slot}\` copy;
 commands for it may \`cd\` to the path it prints (use the literal path: shell variables do not persist between calls). Write the round
-verdict note on the ticket, then return the verdict with every field your instructions require.`
+verdict note on the ticket, then return the verdict with every field your instructions require, including
+\`reviewed_sha\` from \`git rev-parse --short ${branchOf(t)}\`.`
 }
 
 function mergePrompt(t) {
@@ -365,13 +430,12 @@ async function runTicket(t, slot) {
 
   let work = { kind: 'new' }
   let implRound = 0
+  let priorReview = null
   while (true) {
     implRound += 1
     const impl = await agent(implementPrompt(t, slot, { ...work, round: implRound }), {
       label: `impl ${t.id}${implRound > 1 ? ` r${implRound}` : ''}`, phase: 'Implement', agentType: 'ticket-implementer', schema: IMPL_SCHEMA,
-      // The first round is where the design judgment happens; rework and conflict rounds
-      // follow a precise finding, so they keep the agent file's default (high).
-      ...(work.kind === 'new' ? { effort: 'xhigh' } : {}),
+      ...implEffort(t, work),
     })
     if (!impl) return block('implementer died or was stopped')
     if (impl.status !== 'done') return block(`implementer failed: ${impl.failure_reason || impl.summary}`)
@@ -396,11 +460,15 @@ async function runTicket(t, slot) {
     rec.qrRounds += 1
     // One more REWORK would reach the cap, so this review may only send back critical or high findings.
     const finalRound = rec.qrReworks + 1 >= CAPS.qrReworks
-    const qr = await agent(qrPrompt(t, slot, rec.qrRounds, impl.summary, impl.conditions, finalRound), {
+    const qr = await agent(qrPrompt(t, slot, rec.qrRounds, impl.summary, impl.conditions, finalRound, priorReview), {
       label: `review ${t.id}${rec.qrRounds > 1 ? ` r${rec.qrRounds}` : ''}`, phase: 'Review', agentType: 'ticket-reviewer', schema: QR_SCHEMA,
+      ...reviewEffort(t, impl),
     })
     if (!qr) return block('quality reviewer died or was stopped')
     if (qr.verdict === 'ERROR') return block(`reviewer could not run: ${qr.error || 'no detail'}`)
+    // Only a REWORK carries into the next review; after a conflict round the review starts fresh.
+    priorReview = qr.verdict === 'REWORK' && qr.findings.length && qr.reviewed_sha
+      ? { sha: qr.reviewed_sha, findings: qr.findings } : null
     for (const f of qr.filed || []) {
       if (f.action === 'noted') rec.noted.push(f.id)
       else if (f.parent === 'backlog' && A.backlogParent) rec.backlog.push(f.id)
@@ -478,5 +546,7 @@ return {
   integrationBranch: A.integrationBranch,
   mergeHalted,
   integration,
+  // Recorded so run-tickets-status archives which thresholds each run used.
+  policy: { highFanout: HIGH_FANOUT, smallDiff: SMALL_DIFF },
   tickets: results,
 }
