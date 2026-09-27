@@ -443,6 +443,14 @@ tickets.>
 - The <component> shall <property>
 ```
 
+**Use these headings verbatim.** `run-tickets-plan` parses them: it detects ACs by an
+`Acceptance Criteria` heading (or `**Acceptance Criteria**` / `Acceptance criteria:`) and
+reads the file list from a line starting `**Files**:` (colon outside the bold). A ticket
+whose ACs sit under any other label, such as the plan draft's `**AC:**`, is treated as
+having no ACs and skips AC verification; a `**Files:**` line (colon inside the bold) yields
+no files and disables overlap detection. Never generate ticket bodies by copying task
+blocks out of the Phase 3 plan; rewrite each into this template. Step 6.5 checks the result.
+
 Then create the ticket from it and delete the file:
 
 ```bash
@@ -514,6 +522,24 @@ tk ready   # should surface multiple parallel tasks if your plan declared SLICES
 
 If a SLICES phase shows only one ready task (filter with `tk triage --tag phase-2` or
 similar), you have a stray dep — re-check.
+
+### Step 6.5: Verify the runner can read every ticket
+
+Print: `"Verifying tickets parse for the runner..."`
+
+Run the same planner `/run-tickets` uses and check every task:
+
+```bash
+run-tickets-plan $EXEC | jq -r '.tickets[] | "\(.id) has_ac=\(.has_ac) files=\(.files | length) \(.title)"'
+run-tickets-plan $EXEC | jq -r '.excluded[]?'
+```
+
+Every task must show `has_ac=true` and `files` greater than 0, and nothing may be
+excluded. If any ticket fails, fix its description (usually a heading that does not match
+the Step 6.3 template) and re-run this check. Do not print the Phase 7 summary or report
+the spec as done until every task passes. If `run-tickets-plan` is not installed, say so
+and fall back to checking each ticket file for a `## Acceptance Criteria` heading and a
+`**Files**:` line.
 
 ## Phase 7 -- Summary
 
