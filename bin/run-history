@@ -1,0 +1,324 @@
+#!/usr/bin/env python3
+"""
+Usage: run-history [--json] [--all-repos] [--since YYYY-MM-DD]
+
+Cross-run numbers for /run-tickets, from the archives `run-tickets-status
+--archive` writes to ~/.claude/run-history/<repo>/<run-id>.json. Run it from a
+repo to cover that repo's runs; --all-repos covers every archived repo.
+
+Every breakdown is per ticket attempt (one ticket in one run) and carries its
+count, so thin samples are visible. Groups:
+
+  policy        the effort thresholds the run used (runs from before they were
+                recorded show as "pre-policy")
+  impl effort   effort of the ticket's first implementation round
+  review effort effort of the ticket's first review round
+  src lines     non-test lines changed (unknown for runs before it was reported)
+  dependents    tickets that transitively depend on this one
+
+Escapes are the check on the rest. Lighter review means fewer findings and
+fewer rework rounds, which looks like improvement even when bugs are slipping
+through. An escape is a finding filed later against code a merged ticket
+wrote: a later reviewer's `preexisting` finding, or a bug a person filed. The
+script reads each finding ticket's `**Files**: path:lines` in .tickets/,
+blames those lines as they stood when the finding was filed, and credits the
+ticket named in each blamed commit's `(<ticket-id>)` suffix, when that ticket
+is not the finding's own source ticket. Line numbers drift, so treat escapes
+as a trend, not a per-ticket verdict. Findings without a Files line, or whose
+lines no longer blame cleanly, are counted as unattributed.
+"""
+
+import glob
+import json
+import os
+import re
+import subprocess
+import sys
+from collections import defaultdict
+
+HISTORY = os.path.expanduser("~/.claude/run-history")
+COMMIT_TICKET_RE = re.compile(r"\(([A-Za-z0-9]+-[A-Za-z0-9]+)\)\s*$")
+FILES_RE = re.compile(r"^\*\*Files\*\*:\s*(.+)$", re.M)
+SOURCE_RE = re.compile(r"^\*\*Source ticket\*\*:\s*([A-Za-z0-9]+-[A-Za-z0-9]+)", re.M)
+ORIGIN_RE = re.compile(r"^\*\*Origin\*\*:\s*`?(regression|worsened|preexisting)", re.M)
+LOC_RE = re.compile(r"([\w./-]+\.\w+)(?::(\d+)(?:-(\d+))?)?(?:\s*\(([^)]*)\))?")
+SYMBOL_RE = re.compile(r"[A-Za-z_$][\w$]*")
+
+
+def locations(files_field):
+    """(path, blame -L spec) pairs from a Files field: `path:12-30`, `path:12`, or `path (symA, symB)`."""
+    out = []
+    for path, a, b, syms in LOC_RE.findall(files_field):
+        if a:
+            out.append((path, f"{a},{b or a}"))
+        # Blame's -L :<name> finds the function by git's funcname rules.
+        for s in SYMBOL_RE.findall(syms or "")[:3] if not a else []:
+            out.append((path, f":{s}"))
+    return out
+
+
+def git(root, *args):
+    r = subprocess.run(["git", *args], cwd=root, capture_output=True, text=True)
+    return r.stdout if r.returncode == 0 else None
+
+
+def repo_root():
+    out = git(os.getcwd(), "rev-parse", "--path-format=absolute", "--git-common-dir")
+    if not out:
+        sys.exit("not in a git repository (run from a repo, or pass --all-repos)")
+    return os.path.dirname(out.strip())
+
+
+# ---------- archives ----------
+
+def load_archives(repos, since):
+    runs = []
+    for folder in repos:
+        for path in sorted(glob.glob(os.path.join(folder, "*.json"))):
+            try:
+                with open(path) as f:
+                    run = json.load(f)
+            except (OSError, json.JSONDecodeError):
+                continue
+            if since and (run.get("started") or "") < since:
+                continue
+            runs.append(run)
+    return runs
+
+
+def policy_key(run):
+    p = run.get("policy")
+    return "pre-policy" if not p else ", ".join(f"{k}={v}" for k, v in sorted(p.items()))
+
+
+def attempts(runs):
+    """One row per ticket per run, for tickets that actually started."""
+    rows = []
+    for run in runs:
+        for t in run.get("tickets", []):
+            steps = t.get("steps") or []
+            if not steps:
+                continue
+            first = lambda kind: next((s for s in steps if s["step"] == kind), {})
+            rows.append({
+                "run_id": run["run_id"], "repo": run.get("repo"), "started": run.get("started"),
+                "policy": policy_key(run), "id": t["id"], "outcome": t.get("outcome") or "unfinished",
+                "status": t.get("status", ""), "dependents": t.get("dependents"),
+                "src_lines": t.get("src_lines_changed"),
+                "impl_effort": first("impl").get("effort") or "?",
+                "review_effort": first("review").get("effort") or "?",
+                "reworks": t.get("reworks", 0), "ac_fails": t.get("ac_fails", 0),
+                "review_rounds": t.get("review_rounds", 0),
+                "tokens": sum(s.get("tokens") or 0 for s in steps),
+                "has_tokens": any(s.get("tokens") for s in steps),
+                "seconds": sum(s.get("seconds") or 0 for s in steps),
+                "prior_fixed": (t.get("prior_findings") or {}).get("fixed", 0),
+                "prior_total": (t.get("prior_findings") or {}).get("total", 0),
+            })
+    return rows
+
+
+def lines_bucket(n):
+    if n is None:
+        return "unknown"
+    return "<50" if n < 50 else "50-199" if n < 200 else "200-499" if n < 500 else "500+"
+
+
+def dependents_bucket(n):
+    if n is None:
+        return "unknown"
+    return "0" if n == 0 else "1-2" if n < 3 else "3+"
+
+
+# ---------- escapes ----------
+
+def read_tickets(root):
+    tickets = {}
+    for path in glob.glob(os.path.join(root, ".tickets", "*.md")):
+        try:
+            text = open(path, encoding="utf-8", errors="replace").read()
+        except OSError:
+            continue
+        m = re.match(r"^---\n(.*?)\n---\n(.*)$", text, re.S)
+        if not m:
+            continue
+        front = {}
+        for line in m.group(1).splitlines():
+            if ":" in line:
+                k, v = line.split(":", 1)
+                front[k.strip()] = v.strip()
+        front["body"] = m.group(2)
+        front["tags"] = [s.strip() for s in front.get("tags", "").strip("[]").split(",") if s.strip()]
+        tickets[front.get("id", os.path.basename(path)[:-3])] = front
+    return tickets
+
+
+def blame_ticket_ids(root, rev, path, spec):
+    out = git(root, "blame", "--line-porcelain", "-L", spec, rev, "--", path)
+    if not out:
+        return None
+    ids = []
+    for line in out.splitlines():
+        if line.startswith("summary "):
+            m = COMMIT_TICKET_RE.search(line)
+            ids.append(m.group(1) if m else None)
+    return ids
+
+
+def blame_rev(root, source, created):
+    """Where the finding's line numbers point: the reviewed branch tip if the source ticket merged, else main then."""
+    if source:
+        out = git(root, "log", "--all", "--merges", "-F", f"--grep=Merge {source}:", "--format=%H", "-1")
+        if out and out.strip():
+            return out.strip() + "^2"
+    out = git(root, "rev-list", "-1", f"--before={created}", "main")
+    return out.strip() if out and out.strip() else None
+
+
+def escapes(root, merged_ids):
+    tickets = read_tickets(root)
+    found, unattributed = [], []
+    for tid, t in tickets.items():
+        body = t["body"]
+        files = FILES_RE.search(body)
+        # Review findings, plus any bug a person filed with a Files line; plain work tickets are not findings.
+        if "code-review" not in t["tags"] and not (t.get("type") == "bug" and files):
+            continue
+        source = (SOURCE_RE.search(body) or [None, None])[1]
+        origin = (ORIGIN_RE.search(body) or [None, None])[1] or next(
+            (o for o in ("regression", "worsened", "preexisting") if o in t["tags"]), None)
+        locs = locations(files.group(1)) if files else []
+        rev = blame_rev(root, source, t.get("created", "")) if locs else None
+        culprits, traced = defaultdict(int), False
+        for path, spec in locs:
+            ids = blame_ticket_ids(root, rev, path, spec) if rev else None
+            traced = traced or ids is not None
+            for i in ids or []:
+                if i and i != source and i != tid and i in merged_ids:
+                    culprits[i] += 1
+        rec = {"repo": root, "finding": tid, "created": t.get("created"), "source": source, "origin": origin,
+               "priority": t.get("priority"), "title": t["body"].lstrip("# ").splitlines()[0] if t["body"] else ""}
+        # Traced lines with no culprit belong to the source ticket itself or to code no run wrote: not escapes.
+        if culprits:
+            for c, n in culprits.items():
+                found.append({**rec, "culprit": c, "lines": n})
+        elif not traced:
+            reason = ("no Files line" if not files else "no lines or symbols in Files" if not locs
+                      else "no commit to blame at" if rev is None else "lines did not blame")
+            unattributed.append({**rec, "reason": reason})
+    return found, unattributed
+
+
+# ---------- report ----------
+
+def group(rows, key, esc_by_ticket):
+    out = defaultdict(lambda: {"attempts": 0, "merged": 0, "blocked": 0, "reworks": 0, "tokens": 0,
+                               "token_rows": 0, "escapes": 0})
+    for r in rows:
+        g = out[key(r)]
+        g["attempts"] += 1
+        g["merged"] += r["outcome"] == "merged"
+        g["blocked"] += r["outcome"] == "blocked"
+        g["reworks"] += r["reworks"]
+        if r["has_tokens"]:
+            g["tokens"] += r["tokens"]
+            g["token_rows"] += 1
+        if r["outcome"] == "merged":
+            g["escapes"] += esc_by_ticket.get((r["repo"], r["id"]), 0)
+    for g in out.values():
+        g["reworks_per_attempt"] = round(g["reworks"] / g["attempts"], 2)
+        g["escapes_per_merged"] = round(g["escapes"] / g["merged"], 2) if g["merged"] else None
+        g["tokens_per_attempt"] = round(g["tokens"] / g["token_rows"]) if g["token_rows"] else None
+    return dict(sorted(out.items()))
+
+
+def fmt_k(n):
+    return "-" if n is None else f"{n / 1_000_000:.1f}M" if n >= 1_000_000 else f"{round(n / 1000)}k"
+
+
+def print_group(title, groups):
+    print(f"\n{title}")
+    print(f"  {'':<28} {'n':>4} {'merged':>7} {'blocked':>8} {'rework/n':>9} {'escapes/merged':>15} {'tokens/n':>9}")
+    for k, g in groups.items():
+        esc = "-" if g["escapes_per_merged"] is None else f"{g['escapes_per_merged']:.2f}"
+        print(f"  {k:<28} {g['attempts']:>4} {g['merged']:>7} {g['blocked']:>8} {g['reworks_per_attempt']:>9.2f}"
+              f" {esc:>15} {fmt_k(g['tokens_per_attempt']):>9}")
+
+
+def main(argv):
+    as_json = "--json" in argv
+    all_repos = "--all-repos" in argv
+    since = argv[argv.index("--since") + 1] if "--since" in argv else None
+
+    root = None if all_repos else repo_root()
+    folders = sorted(glob.glob(os.path.join(HISTORY, "*"))) if all_repos else [os.path.join(HISTORY, os.path.basename(root))]
+    runs = load_archives(folders, since)
+    if not runs:
+        print("no archived /run-tickets runs" + ("" if all_repos else f" for {os.path.basename(root)}")
+              + " (run-tickets-status --archive <run-id> adds one)")
+        return
+    rows = attempts(runs)
+
+    esc, unattributed, skipped = [], [], []
+    for repo in sorted({r["repo"] for r in rows if r["repo"]}):
+        if not os.path.isdir(os.path.join(repo, ".tickets")):
+            skipped.append(repo)
+            continue
+        merged_ids = {r["id"] for r in rows if r["repo"] == repo and r["outcome"] == "merged"}
+        found, missing = escapes(repo, merged_ids)
+        esc += found
+        unattributed += missing
+    esc_by_ticket = defaultdict(int)
+    for e in esc:
+        esc_by_ticket[(e["repo"], e["culprit"])] += 1
+
+    groups = {
+        "policy": group(rows, lambda r: r["policy"], esc_by_ticket),
+        "impl_effort": group(rows, lambda r: r["impl_effort"], esc_by_ticket),
+        "review_effort": group(rows, lambda r: r["review_effort"], esc_by_ticket),
+        "src_lines": group(rows, lambda r: lines_bucket(r["src_lines"]), esc_by_ticket),
+        "dependents": group(rows, lambda r: dependents_bucket(r["dependents"]), esc_by_ticket),
+    }
+    prior_total = sum(r["prior_total"] for r in rows)
+    report = {
+        "runs": len(runs), "attempts": len(rows),
+        "first_run": min((r.get("started") or "") for r in runs), "last_run": max((r.get("started") or "") for r in runs),
+        "groups": groups,
+        "re_review": {"previous_findings": prior_total, "fixed": sum(r["prior_fixed"] for r in rows)},
+        "blocked": [{"run_id": r["run_id"], "id": r["id"], "reworks": r["reworks"], "status": r["status"]}
+                    for r in rows if r["outcome"] == "blocked"],
+        "escapes": {"findings_attributed": len({(e["repo"], e["finding"]) for e in esc}),
+                    "unattributed": len(unattributed), "repos_skipped": skipped, "items": esc,
+                    "unattributed_items": unattributed},
+        "attempts_detail": rows,
+    }
+    if as_json:
+        print(json.dumps(report, indent=2, default=str))
+        return
+
+    scope = "all repos" if all_repos else os.path.basename(root)
+    print(f"run-history for {scope}: {len(runs)} runs, {len(rows)} ticket attempts, "
+          f"{report['first_run'][:10]} to {report['last_run'][:10]}")
+    print("(n = ticket attempts; tokens are runtime totals with input, finished runs only)")
+    for key, title in (("policy", "by policy"), ("impl_effort", "by first implementation effort"),
+                       ("review_effort", "by first review effort"), ("src_lines", "by non-test lines changed"),
+                       ("dependents", "by dependents")):
+        print_group(title, groups[key])
+    rr = report["re_review"]
+    print(f"\nre-reviews: {rr['fixed']}/{rr['previous_findings']} previous findings fixed"
+          if rr["previous_findings"] else "\nre-reviews: none recorded yet (prior_findings is new)")
+    if report["blocked"]:
+        print("\nblocked:")
+        for b in report["blocked"]:
+            print(f"  {b['run_id']} {b['id']} (reworks {b['reworks']}): {b['status'][:160]}")
+    e = report["escapes"]
+    print(f"\nescapes: {len(esc)} across {e['findings_attributed']} findings traced to merged tickets; "
+          f"{e['unattributed']} findings could not be traced")
+    for item in sorted(esc, key=lambda x: x["created"] or "")[-15:]:
+        print(f"  {item['culprit']} <- {item['finding']} [{item['origin'] or '?'}, p{item['priority']}] {item['title'][:90]}")
+    if skipped:
+        print(f"  not traced (no .tickets/ at the archived path): {', '.join(skipped)}")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
