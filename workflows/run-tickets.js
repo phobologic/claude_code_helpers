@@ -46,8 +46,23 @@ const IMPL_SCHEMA = {
       },
     },
     failure_reason: { type: 'string' },
+    conditions: {
+      type: 'array',
+      description: 'each condition this round added or changed in src, broken once to see whether a test catches it',
+      items: {
+        type: 'object',
+        properties: {
+          condition: { type: 'string' },
+          location: { type: 'string', description: 'path:line' },
+          break: { type: 'string', description: 'the mutation tried: guard deleted, condition inverted, boundary shifted' },
+          caught: { type: 'boolean' },
+          test: { type: 'string', description: 'the test that failed, or why none can' },
+        },
+        required: ['condition', 'location', 'break', 'caught', 'test'],
+      },
+    },
   },
-  required: ['status', 'summary'],
+  required: ['status', 'summary', 'conditions'],
 }
 
 const AC_SCHEMA = {
@@ -248,7 +263,12 @@ The implementation is on branch ${branchOf(t)}. Diff it against the integration 
 Read-only: do not edit files or commit. Record the result as a note on the ticket per your instructions, then return the verdict.`
 }
 
-function qrPrompt(t, slot, round, implSummary) {
+function conditionLines(conditions) {
+  if (!conditions || !conditions.length) return '(none reported)'
+  return conditions.map(c => `  - ${c.location} ${c.condition}: broke it by ${c.break}; ${c.caught ? `caught by ${c.test}` : `NOT caught: ${c.test}`}`).join('\n')
+}
+
+function qrPrompt(t, slot, round, implSummary, conditions) {
   return `${header(slot)}
 Review ticket ${t.id} (${t.title}) on branch ${branchOf(t)} (round ${round}).
 Diff the ticket's own changes only:
@@ -264,7 +284,12 @@ The implementer's summary of this round, verbatim. Resolve every risk, caveat, o
 ${implSummary || '(no summary)'}
 ---
 
-Read-only apart from tk: do not edit files or commit. Scratch files go under $TMPDIR. Write the round
+Conditions the implementer says it broke one at a time, and what caught each (step 3 of your instructions:
+re-check at least one of these, and test every condition in the diff that is missing from this list):
+${conditionLines(conditions)}
+
+Read-only apart from tk: do not edit files or commit. Mutate code only in a \`review-scratch ${slot}\` copy;
+commands for it may \`cd\` to the path it prints (use the literal path: shell variables do not persist between calls). Write the round
 verdict note on the ticket, then return the verdict with every field your instructions require.`
 }
 
@@ -360,7 +385,7 @@ async function runTicket(t, slot) {
     }
 
     rec.qrRounds += 1
-    const qr = await agent(qrPrompt(t, slot, rec.qrRounds, impl.summary), {
+    const qr = await agent(qrPrompt(t, slot, rec.qrRounds, impl.summary, impl.conditions), {
       label: `review ${t.id}${rec.qrRounds > 1 ? ` r${rec.qrRounds}` : ''}`, phase: 'Review', agentType: 'ticket-reviewer', schema: QR_SCHEMA,
     })
     if (!qr) return block('quality reviewer died or was stopped')

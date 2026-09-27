@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Make a throwaway copy of a worktree's committed code for mutation testing.
+#
+# Usage: review-scratch <worktree> [label]
+#   <worktree>  a git worktree (usually a /run-tickets slot); its HEAD is copied
+#   [label]     names the copy (default: the worktree's branch, e.g. ticket-tv-zo7u)
+#
+# Prints the copy's path: a fresh directory under $TMPDIR/review-scratch/ with
+# - the worktree's HEAD, exported with `git archive` (committed files only),
+# - the repo's .worktreelinks paths symlinked (node_modules, so tests run) and
+#   .worktreeinclude paths copied, as worktree-init does,
+# - its own throwaway git repo with one commit, so `git diff` shows exactly
+#   what you mutated and `git checkout -- <file>` undoes it.
+#
+# The copy is independent of the real repo: edit, break, and run anything in
+# it. Leave it in place afterwards; $TMPDIR is cleaned by the system.
+set -euo pipefail
+
+SRC="${1:?Usage: review-scratch <worktree> [label]}"
+SRC=$(cd "$SRC" && pwd -P)
+cd "$SRC"
+git rev-parse --is-inside-work-tree >/dev/null
+
+# The main checkout holds the real node_modules etc. that .worktreelinks names.
+REPO_ROOT=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
+BRANCH=$(git branch --show-current || true)
+LABEL="${2:-${BRANCH:-detached}}"
+LABEL="${LABEL//\//-}"
+SHA=$(git rev-parse --short HEAD)
+
+BASE="${TMPDIR:-/tmp}"
+BASE="${BASE%/}/review-scratch"
+mkdir -p "$BASE"
+DEST=$(mktemp -d "$BASE/$LABEL-$SHA.XXXXXX")
+
+git archive HEAD | tar -x -C "$DEST"
+
+if [[ -f "$REPO_ROOT/.worktreeinclude" ]]; then
+  while IFS= read -r entry || [[ -n "$entry" ]]; do
+    [[ -z "$entry" || "$entry" =~ ^# || "$entry" == *..* ]] && continue
+    entry="${entry%/}"
+    [[ -e "$REPO_ROOT/$entry" ]] || continue
+    mkdir -p "$(dirname "$DEST/$entry")"
+    cp -R "$REPO_ROOT/$entry" "$DEST/$entry"
+  done < "$REPO_ROOT/.worktreeinclude"
+fi
+
+LINKED=()
+if [[ -f "$REPO_ROOT/.worktreelinks" ]]; then
+  while IFS= read -r entry || [[ -n "$entry" ]]; do
+    [[ -z "$entry" || "$entry" =~ ^# || "$entry" == *..* ]] && continue
+    entry="${entry%/}"
+    [[ -e "$REPO_ROOT/$entry" && ! -e "$DEST/$entry" ]] || continue
+    mkdir -p "$(dirname "$DEST/$entry")"
+    ln -s "$REPO_ROOT/$entry" "$DEST/$entry"
+    LINKED+=("$entry")
+  done < "$REPO_ROOT/.worktreelinks"
+fi
+
+cd "$DEST"
+git init -q
+for entry in ${LINKED[@]+"${LINKED[@]}"}; do
+  echo "/$entry" >> .git/info/exclude
+done
+git add -A
+git -c user.name=review-scratch -c user.email=review-scratch@localhost \
+  commit -q --no-verify -m "review-scratch: $LABEL at $SHA"
+
+echo "$DEST"

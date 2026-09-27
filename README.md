@@ -69,7 +69,7 @@ are available globally:
 | `/spec [idea]` | Turn a rough idea into a phased plan with EARS ACs, adversarial review, and `tk` tickets |
 | `/run-epic <epic-id>` | Execute a `tk` epic with an agent team (implementers + AC verifier + quality reviewer) |
 | `/fix-tickets <id> [id ...] \| <epic-id>` | Implement a set of tickets in parallel — designed for multi-review fix batches |
-| `/run-tickets <epic-id> \| <id> [id ...] [--resume]` | **Experimental.** Workflow-backed ticket runner: scheduling lives in `workflows/run-tickets.js`, not an LLM team lead. Covers both `/run-epic` (AC verification when tickets have AC) and `/fix-tickets` (no AC) use cases. Watch with `/workflows`. Pre-existing medium and low findings go to the repo's backlog epic, so the epic can finish. Helpers: `bin/run-tickets-plan`, `bin/worktree-reset`, `bin/tk-backlog` |
+| `/run-tickets <epic-id> \| <id> [id ...] [--resume]` | **Experimental.** Workflow-backed ticket runner: scheduling lives in `workflows/run-tickets.js`, not an LLM team lead. Covers both `/run-epic` (AC verification when tickets have AC) and `/fix-tickets` (no AC) use cases. Watch with `/workflows`. Pre-existing medium and low findings go to the repo's backlog epic, so the epic can finish. Helpers: `bin/run-tickets-plan`, `bin/worktree-reset`, `bin/tk-backlog`, `bin/review-scratch` (a throwaway copy of a branch for mutation testing) |
 | `/run-status [run-id]` | Ticket-by-ticket snapshot of a `/run-tickets` run, running or finished, with per-step timing (`bin/run-tickets-status`; `--list` for recent runs) |
 | `/review` | Code review of all uncommitted changes |
 | `/multi-review` | Parallel review by 5 specialized agents |

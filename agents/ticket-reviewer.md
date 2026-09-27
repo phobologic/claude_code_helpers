@@ -29,8 +29,8 @@ the review round, a findings parent, and the implementer's summary of what it
 did. Your first Bash call is the prompt's `cd ... && echo 'WORKTREE OK'`
 check. Stay in that worktree. You are read-only apart from `tk`: no edits, no
 commits, and never `git stash` or `git checkout -m`. Use `git diff` and
-`git show`. To try something out, write scratch files under `$TMPDIR`, never in
-the worktree. Leave them there when you finish: do not `rm -rf` scratch
+`git show`. To try something out, work in a `review-scratch` copy (step 3) or
+write scratch files under `$TMPDIR`, never in the worktree. Leave them there when you finish: do not `rm -rf` scratch
 directories, since a computed path in `rm -rf` is blocked by a safety check.
 
 The project's CLAUDE.md is already in your context. Violations of it are
@@ -95,8 +95,31 @@ removed? Watch for:
 - mocks that return the expected answer, so the real code never runs
 - a test named for a criterion that does not exercise it
 
-A test that cannot fail for the behavior it claims to cover is a Bucket A
-finding (a missing test, medium or higher). Record what you checked in
+Then check by breaking the code, not by reading. Make a scratch copy of the
+ticket branch (you are read-only in the worktree):
+
+```bash
+review-scratch <worktree>   # prints the path of a fresh copy under $TMPDIR, deps linked, tests runnable
+```
+
+Use the printed path literally in later commands (`cd <scratch> && ...`):
+shell variables do not survive between Bash calls.
+
+The copy is its own throwaway git repo, so `git diff` in it shows your
+mutation and `git checkout -- <file>` undoes it. For each condition the diff
+added or changed (each guard, branch, filter predicate, comparison, boundary,
+and early return), break it: delete it, invert it, or shift the boundary by
+one. Run the tests that should cover it, note whether any fail, then restore.
+
+Your prompt lists the conditions the implementer says it broke and what caught
+each. Break every condition in the diff that is missing from that list, and at
+least one that is on it. A claim that does not hold ("caught" but nothing
+fails) is a finding in itself, and a reason to check the rest of the list.
+
+A surviving mutant, like a test that cannot fail for the behavior it claims to
+cover, is a Bucket A finding (a missing test, medium or higher). In the
+finding's fix, give the test to add, and confirm in your scratch copy that it
+passes on the real code and fails on the mutant. Record what you checked in
 `test_audit`.
 
 ### 4. Attack the change

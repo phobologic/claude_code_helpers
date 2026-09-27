@@ -91,6 +91,32 @@ that come back. Mention what you found in `summary`.
    wrong tool version), do not work around it: return `failed` and say
    exactly what the hook needed.
 
+## Prove each new condition is tested
+
+Reverting the whole fix and seeing a test fail only shows the tests notice the
+fix is missing. It does not show that each condition inside it is tested, and
+an untested condition is the most common reason review sends a ticket back.
+After committing, check each one:
+
+1. List every condition your change added or changed in `src` (not tests): each
+   guard, branch, filter predicate, comparison and boundary (`<` versus `<=`),
+   and each early return.
+2. For each, break it in the worktree (delete the guard, invert the condition,
+   or shift the boundary by one), run the tests that should cover it, and
+   note whether any fail.
+3. Restore with `git checkout -- <file>` after each one. Never commit a
+   mutant. When done, `git status --porcelain` must be empty.
+4. When nothing fails, add a test that does, commit it, and break that
+   condition again to confirm the new test catches it.
+
+Report every condition in `conditions` with the test that failed. Only claim
+what you ran. If a condition genuinely cannot be tested (a type-narrowing
+guard, say), mark it not caught and explain why in `note`. The reviewer
+re-checks conditions you did not list, and spot-checks the ones you did.
+
+Skip this for changes with no behavior in `src` (docs, test-only, config) and
+return an empty `conditions` list.
+
 ## Rework rounds
 
 - **AC failures:** fix each listed criterion, and keep every other criterion
@@ -124,11 +150,14 @@ Run this checklist every round:
 2. **Full test suite green**, not only the tests near your change.
 3. **Every acceptance criterion re-checked** against the current code, not
    only the ones you just worked on.
-4. **Renames and removals swept.** The final grep for the old name must return
+4. **Every condition this round added or changed was broken once**, as in
+   "Prove each new condition is tested", and each is caught by a test or
+   explained. On rework rounds, cover the conditions the rework touched.
+5. **Renames and removals swept.** The final grep for the old name must return
    nothing across the project, checking every variant: dotted, underscored,
    and dashed forms, camelCase, PascalCase and UPPER_CASE, filename forms, and
    import forms. Justify any match you keep.
-5. **Work committed:**
+6. **Work committed:**
    ```bash
    git rev-list <integration-branch>..HEAD --count   # at least 1
    git status --porcelain                            # empty
@@ -144,6 +173,9 @@ Return through `StructuredOutput`:
   partial work first so the next attempt can build on it.
 - `head_sha`, `summary` (approach, files, probe findings, choices you made),
   `tests` (commands run and results), and `out_of_scope` on rework rounds.
+- `conditions`: each condition from "Prove each new condition is tested",
+  with its `location`, what you did to `break` it, whether a test `caught` it,
+  and which `test`.
 
 ## Rules
 
@@ -153,6 +185,9 @@ Return through `StructuredOutput`:
   `HUSKY=0` or similar, no disabling a lint rule or skipping a test to get
   green. A check you cannot satisfy is a reason to return `failed`, not to
   switch the check off.
+- **Only claim what you checked.** "The tests cover it" or "each guard is
+  load-bearing" needs a run behind every case it covers. Say which cases you
+  checked and which you did not.
 - **Flag your own doubts.** Put every risk, caveat, or open design question in
   `summary`, and phrase it so the reviewer can check it. The reviewer is told
   to resolve each one; that only helps if you name them.
