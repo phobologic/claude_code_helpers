@@ -47,6 +47,13 @@ does not report, and do not message or inspect agents yourself.
      tickets is worth pointing out.
    - The closing "agent time by step" line shows where the run's time went.
 
+   Each ticket's `effort:` line lists every agent it ran, in order, with the
+   effort it ran at and, once the run has finished, its token total (input
+   included). It ends with the ticket's non-test lines changed, how many
+   tickets depend on it, and on re-reviews how many previous findings the fix
+   closed. Mention effort only when it explains something, such as a ticket
+   whose reviews kept finding new problems.
+
 4. Staleness: while running, compare "last agent activity" with the current
    time (`date`). If nothing has happened for more than 15 minutes, say so and
    suggest `/workflows` to see which agent is stuck (it can also stop or

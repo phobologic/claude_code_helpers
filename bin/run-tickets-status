@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """
-Usage: run-tickets-status [--json] [run-id]
+Usage: run-tickets-status [--json | --archive] [run-id]
        run-tickets-status --list
+
+--archive writes the --json report to ~/.claude/run-history/<repo>/<run-id>.json.
+Claude Code deletes the journal and agent logs after cleanupPeriodDays (30 by
+default), so the archive is what later analysis of effort, tokens, and rework
+across runs reads.
 
 Status snapshot of a /run-tickets workflow run, built from records rather than
 agent prose:
@@ -32,6 +37,7 @@ import sys
 from datetime import datetime, timezone
 
 PROJECTS = os.path.expanduser("~/.claude/projects")
+HISTORY = os.path.expanduser("~/.claude/run-history")
 LABEL_RE = re.compile(r"^(impl|ac|review|merge) (\S+)(?: r(\d+))?$")
 STEP_NAMES = {"impl": "implementing", "ac": "verifying AC", "review": "reviewing", "merge": "merging"}
 STEP_SHORT = {"impl": "impl", "ac": "AC", "review": "review", "merge": "merge"}
@@ -135,7 +141,8 @@ def ticket_states(args, result, events):
     def fresh(t):
         return {"id": t["id"], "title": t["title"], "deps": t["deps"], "has_ac": t["has_ac"],
                 "impl_rounds": 0, "ac_fails": 0, "review_rounds": 0, "reworks": 0, "conflicts": 0,
-                "active": None, "last": None, "outcome": None, "sha": "", "findings": [], "agents": []}
+                "active": None, "last": None, "outcome": None, "sha": "", "findings": [], "agents": [],
+                "results": {}, "src_lines_changed": None, "prior_fixed": 0, "prior_total": 0}
 
     tickets = {t["id"]: fresh(t) for t in args.get("tickets", [])}
     labels, integration, integration_agent = {}, None, None
@@ -171,8 +178,11 @@ def ticket_states(args, result, events):
         kind, t = m.group(1), tickets[m.group(2)]
         t["active"] = None
         t["last"] = (kind, res)
+        t["results"][ev["agentId"]] = res
         if kind == "impl":
             t["impl_rounds"] += 1
+            if isinstance(res.get("src_lines_changed"), int):
+                t["src_lines_changed"] = res["src_lines_changed"]
             if res.get("status") != "done":
                 t["outcome"] = "blocked"
         elif kind == "ac":
@@ -185,6 +195,9 @@ def ticket_states(args, result, events):
             t["findings"] += res.get("tickets_created", [])  # runs from before the backlog split
             t["findings"] += [f"{f['id']} ({'noted' if f.get('action') == 'noted' else f.get('parent', '?')})"
                               for f in res.get("filed", [])]
+            prior = res.get("prior_findings") or []
+            t["prior_total"] += len(prior)
+            t["prior_fixed"] += sum(1 for p in prior if p.get("fixed"))
             if res.get("verdict") == "REWORK" and res.get("findings"):
                 t["reworks"] += 1
             if res.get("verdict") == "ERROR" or t["reworks"] >= caps["qrReworks"]:
@@ -266,6 +279,73 @@ def agent_span(run_dir, agent_id):
     return (start, end) if start else None
 
 
+def agent_effort(run_dir, agent_id):
+    """(effort, model) one agent ran at, from the first response line of its log.
+
+    Token counts are deliberately not read here: most response lines are
+    logged mid-stream with a partial usage count, so summing them undercounts.
+    The finished-run metadata has the runtime's own per-agent totals instead.
+    """
+    path = os.path.join(run_dir, f"agent-{agent_id}.jsonl")
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if '"type":"assistant"' not in line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                msg = ev.get("message") if isinstance(ev.get("message"), dict) else {}
+                return ev.get("effort"), msg.get("model")
+    except OSError:
+        pass
+    return None, None
+
+
+def progress_by_agent(final):
+    """Per-agent runtime totals (tokens, tool calls) from the finished-run metadata, keyed by agent id."""
+    return {p["agentId"]: p for p in (final or {}).get("workflowProgress") or []
+            if p.get("type") == "workflow_agent" and p.get("agentId")}
+
+
+def step_records(t, run_dir, progress):
+    """One record per agent the ticket ran: what it was, how hard it thought, what it cost, what it said."""
+    steps, rounds = [], {}
+    for kind, aid in t["agents"]:
+        rounds[kind] = rounds.get(kind, 0) + 1
+        res = t["results"].get(aid) or {}
+        span = agent_span(run_dir, aid) if run_dir else None
+        effort, model = agent_effort(run_dir, aid) if run_dir else (None, None)
+        prog = progress.get(aid) or {}
+        rec = {"step": kind, "round": rounds[kind], "agent_id": aid, "effort": effort,
+               "model": model or prog.get("model"),
+               "seconds": (span[1] - span[0]).total_seconds() if span else None,
+               # Runtime totals, input included; only finished runs have them.
+               "tokens": prog.get("tokens"), "tool_calls": prog.get("toolCalls"),
+               "result": res.get("verdict") or res.get("status") or res.get("result")}
+        if kind == "impl" and isinstance(res.get("src_lines_changed"), int):
+            rec["src_lines_changed"] = res["src_lines_changed"]
+        if kind == "review":
+            rec["findings"] = len(res.get("findings") or [])
+            prior = res.get("prior_findings") or []
+            rec["prior_findings"] = {"fixed": sum(1 for p in prior if p.get("fixed")), "total": len(prior)}
+        steps.append(rec)
+    return steps
+
+
+def dependents_of(tickets):
+    """Transitive dependents per ticket, as run-tickets-plan and the workflow count them."""
+    anc = {}
+    for t in tickets:  # topological order
+        anc[t["id"]] = set().union(*[{d} | anc.get(d, set()) for d in t["deps"]])
+    return {t["id"]: sum(1 for o in tickets if t["id"] in anc[o["id"]]) for t in tickets}
+
+
+def fmt_tokens(n):
+    return f"{n / 1_000_000:.1f}M" if n >= 1_000_000 else f"{round(n / 1000)}k" if n >= 1000 else str(n)
+
+
 def ticket_timing(t, run_dir, run_start, now):
     steps, first, last, running_for = {}, None, None, None
     for i, (kind, aid) in enumerate(t["agents"]):
@@ -300,6 +380,31 @@ def timing_line(tm, outcome):
     began = f", began {fmt_dur(tm['began_after_launch'])} after launch" if (tm["began_after_launch"] or 0) >= 30 else ""
     running = f"; current step running {fmt_dur(tm['running_for'])}" if tm["running_for"] is not None else ""
     return f"time: {fmt_dur(tm['wall'])} {span}{began} ({', '.join(parts)}){running}"
+
+
+def effort_line(t):
+    def one(s):
+        name = STEP_SHORT[s["step"]] + (f" r{s['round']}" if s["round"] > 1 else "")
+        cost = f" {fmt_tokens(s['tokens'])}" if s.get("tokens") else ""
+        # Haiku takes no effort setting, so its log has none.
+        return f"{name} {s.get('effort') or '-'}{cost}"
+    size = f"src lines {t['src_lines_changed']}" if t["src_lines_changed"] is not None else "src lines ?"
+    fixed = (f"; previous findings fixed {t['prior_findings']['fixed']}/{t['prior_findings']['total']}"
+             if t["prior_findings"]["total"] else "")
+    return f"effort: {', '.join(one(s) for s in t['steps'])}; {size}, dependents {t['dependents']}{fixed}"
+
+
+def archive(report):
+    """Keep the report past Claude Code's transcript cleanup, one file per run."""
+    root = repo_root()
+    folder = os.path.join(HISTORY, os.path.basename(root))
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, f"{report['run_id']}.json")
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({"repo": root, **report}, f, indent=2, default=str)
+    os.replace(tmp, path)
+    return path
 
 
 # ---------- output ----------
@@ -356,8 +461,13 @@ def main(argv):
     run_end = run_start and final and final.get("durationMs") and \
         from_ms(final["startTime"] + final["durationMs"])
 
+    dependents = dependents_of(args.get("tickets", []))
+    progress = progress_by_agent(final)
     for t in tickets:
         t["timing"] = ticket_timing(t, run_dir, run_start, now)
+        t["steps"] = step_records(t, run_dir, progress)
+        t["dependents"] = dependents.get(t["id"], 0)
+        t["prior_findings"] = {"fixed": t["prior_fixed"], "total": t["prior_total"]}
     integration_span = agent_span(run_dir, integration_agent) if run_dir and integration_agent else None
 
     # Agent time by step across the run: where the hours actually went.
@@ -367,6 +477,10 @@ def main(argv):
             totals[kind] = totals.get(kind, 0) + secs
     if integration_span:
         totals["integration check"] = (integration_span[1] - integration_span[0]).total_seconds()
+    tokens = {}
+    for t in tickets:
+        for s in t["steps"]:
+            tokens[s["step"]] = tokens.get(s["step"], 0) + (s.get("tokens") or 0)
 
     # Agent transcripts are appended on every tool call, so the newest one is
     # the best "is anything still happening" signal.
@@ -384,9 +498,18 @@ def main(argv):
         "merge_halted": (result or {}).get("mergeHalted"),
         "integration_check": integration,
         "agent_seconds_by_step": totals,
-        "tickets": [{k: t[k] for k in ("id", "title", "status", "impl_rounds", "ac_fails", "review_rounds",
-                                       "reworks", "conflicts", "findings", "timing")} for t in tickets],
+        "tokens_by_step": tokens,  # runtime totals, input included; empty until the run finishes
+        # The effort thresholds the run used; absent for runs from before they existed.
+        "policy": (result or {}).get("policy"),
+        "tickets": [{k: t[k] for k in ("id", "title", "status", "outcome", "deps", "has_ac", "dependents",
+                                       "src_lines_changed", "impl_rounds", "ac_fails", "review_rounds",
+                                       "reworks", "conflicts", "prior_findings", "findings", "timing", "steps")}
+                    for t in tickets],
     }
+    if "--archive" in argv:
+        path = archive(report)
+        print(f"archived {run_id} to {path}")
+        return
     if as_json:
         print(json.dumps(report, indent=2, default=str))
         return
@@ -411,6 +534,8 @@ def main(argv):
         print(f"  {'':<{width}}  {t['title']}  ({counts})")
         if t["timing"]:
             print(f"  {'':<{width}}  {timing_line(t['timing'], t['outcome'])}")
+        if t["steps"]:
+            print(f"  {'':<{width}}  {effort_line(t)}")
         if t["findings"]:
             print(f"  {'':<{width}}  findings filed: {', '.join(t['findings'])}")
     if integration:
@@ -421,6 +546,9 @@ def main(argv):
         order = ["impl", "ac", "review", "merge", "integration check"]
         print("\nagent time by step: " + ", ".join(f"{STEP_SHORT.get(k, k)} {fmt_dur(totals[k])}" for k in order if k in totals)
               + f"  (sum {fmt_dur(sum(totals.values()))}; steps of different tickets overlap)")
+    if any(tokens.values()):
+        print("tokens by step: " + ", ".join(f"{STEP_SHORT[k]} {fmt_tokens(tokens[k])}"
+                                                    for k in ("impl", "ac", "review", "merge") if tokens.get(k)))
 
 
 if __name__ == "__main__":

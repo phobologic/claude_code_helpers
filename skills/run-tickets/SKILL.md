@@ -255,6 +255,16 @@ git merge-base --is-ancestor ticket/<id> <branch> && git branch -D ticket/<id>
 
 Keep the branches of blocked tickets.
 
+Archive the run's metrics before deleting anything the report reads. Claude
+Code deletes the journal and agent logs after 30 days, and the archive is what
+later tuning of effort and rework across runs is based on:
+
+```bash
+run-tickets-status --archive <run-id>   # writes ~/.claude/run-history/<repo>/<run-id>.json
+```
+
+If it fails, say so in the report and carry on; it does not block cleanup.
+
 Last, delete the run record `.worktrees/run-$STAMP.json`, unless a worktree was
 left in place (then the run is not fully cleaned up and the record still helps).
 
