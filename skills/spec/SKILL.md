@@ -8,7 +8,7 @@ description: >
 argument-hint: "[idea description]"
 disable-model-invocation: true
 model: opus
-effort: high
+effort: xhigh
 ---
 
 # Spec
@@ -165,6 +165,36 @@ If two tasks share files, they have a real dep (sequence them). If task B's `Con
 names task A's `Produces`, they have a real dep. Otherwise they don't — even if they're
 "in the same phase."
 
+### Shared rules
+
+A **shared rule** is one decision the system makes that more than one task
+depends on or changes: "the day is over when nothing is left to do", "a
+request is open until filled or past expiry", "only the owner may edit a
+post". When no task owns the rule, each task implements its own path into it,
+the paths disagree, and review later files one fix per path. That drift is
+expensive: in one epic, six follow-up tickets each patched a different path
+into one rule, and the sixth patch caused a regression.
+
+While sketching Files / Produces / Consumes, list every rule that two or more
+tasks decide, check, or change. Include rules that already exist in the code
+(read the code to find where it decides them), not only new ones. For each:
+
+- **Name and statement:** `R1: <the rule in one testable sentence>`.
+- **Owner:** the one function or module that decides it (`path:function`).
+  If the code has no single owner today (the rule is re-derived in several
+  places), the first task that touches it creates one, lists it under
+  `Produces`, and moves the existing call sites onto it. Later tasks
+  `Consume` it, which also gives them a real dep.
+- **Tasks:** every task that touches the rule.
+
+Every task that touches a rule carries the rule's statement and owner in its
+description, and an AC that it decides the rule through the owner, for
+example: "When a brew finishes, the notebook shall offer the rest line only
+if `dayIsDone()` (R1) returns true."
+
+Rules that only one task touches are ordinary ACs, not shared rules. Most
+plans have zero to three shared rules; none is a fine answer.
+
 ### Plan format
 
 ```
@@ -173,6 +203,11 @@ names task A's `Produces`, they have a real dep. Otherwise they don't — even i
 **Goal:** One sentence.
 **Non-goals:** Bulleted list.
 **Key constraints:** Bulleted list.
+
+### Shared rules
+- R1: [the rule in one testable sentence]. Owner: [path:function, or "created by Task N.M"].
+  Tasks: [N.M, N.M, ...]
+[or "None: no rule is decided by more than one task."]
 
 ### Dependency structure
 Describe the parallelism shape explicitly. Example:
@@ -188,6 +223,7 @@ Phases 2 and 3 can be picked up simultaneously after Phase 1 ships.
   **Files**: [paths this task touches]
   **Produces:** [contracts other tasks may consume — or "none (terminal foundation)"]
   **Consumes:** [contracts this reads — or "none (greenfield)"]
+  **Shared rules:** [R1, ... that this task touches, or omit the line]
   **AC:**
   - When [trigger], the system shall [behavior]
   - The [component] shall [property]
@@ -437,6 +473,10 @@ tickets.>
 - **Files**: <paths this task creates or modifies>
 - **Produces:** <contracts/artifacts other tasks may consume, or "none">
 - **Consumes:** <contracts this reads, naming the producing task or pre-existing surface>
+
+## Shared rules
+<Only if the task touches one. For each: "R1: <statement>. Owner: <path:function>.
+Decide it only through the owner; do not re-derive it here." Omit the section otherwise.>
 
 ## Acceptance Criteria
 - When <trigger>, the system shall <behavior>

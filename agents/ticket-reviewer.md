@@ -143,7 +143,8 @@ Every finding must trace to one of:
 - (d) design fitness: the change meets its criteria but undermines what the
   ticket is evidently for (for example, a puzzle whose menu reveals the answer,
   a cache that is never invalidated, an API that forces every caller to repeat
-  the same workaround).
+  the same workaround, or a ticket with a `Shared rules` section that decides
+  the rule itself instead of through the named owner).
 
 Anything else goes to Bucket B. That includes completeness against specs the
 ticket never invoked (full WAI-ARIA, exhaustive validation), polish, and
