@@ -20,6 +20,9 @@ Resolves the input to a set of runnable tickets and prints one JSON object:
   overlaps          [{file, tickets}] for files named by 2+ tickets that have no
                     dependency path between them (likely merge conflicts)
   unannotated       ids of runnable tickets with no **Files**: line
+  large             [{id, title, ac_count, dependents}] for tickets with more than 6
+                    acceptance criteria: likely too big to settle within the rework
+                    cap, and everything downstream stalls if one blocks
   stats             {ready_now, longest_chain, max_width}
 
 Tickets are excluded when closed, when they are epics, when in_progress (unless
@@ -79,6 +82,24 @@ def parse_files(body):
             if "/" in part or "." in part:
                 files.append(part)
     return sorted(set(files))
+
+
+LARGE_AC_COUNT = 6
+
+
+def ac_count(body):
+    """Number of list items under the acceptance criteria heading, up to the next heading."""
+    m = AC_RE.search(body)
+    if not m:
+        return 0
+    count = 0
+    for line in body[m.end():].splitlines()[1:]:
+        stripped = line.strip()
+        if stripped.startswith("#") or (stripped.startswith("**") and not stripped.startswith("**-")):
+            break
+        if re.match(r"^([-*+]|\d+[.)])\s+", stripped):
+            count += 1
+    return count
 
 
 def setup_warnings():
@@ -192,6 +213,7 @@ def main(argv):
             "parent": m.get("parent") or None,
             "raw_deps": m.get("deps", []),
             "has_ac": bool(AC_RE.search(body)),
+            "ac_count": ac_count(body),
             "files": parse_files(body),
         }
 
@@ -266,8 +288,9 @@ def main(argv):
 
     parents = {t["parent"] for t in info.values()}
     shared_parent = next(iter(parents)) if len(parents) == 1 else None
-    tickets =[{k: info[t][k] for k in ("id", "title", "priority", "parent", "deps", "has_ac", "files")}
+    tickets = [{k: info[t][k] for k in ("id", "title", "priority", "parent", "deps", "has_ac", "ac_count", "files")}
                for t in order]
+    dependents = {t["id"]: sum(1 for o in tickets if t["id"] in anc(o["id"])) for t in tickets}
     print(json.dumps({
         "mode": mode,
         "epic_id": epic_id,
@@ -278,6 +301,8 @@ def main(argv):
         "cycles": cycles,
         "overlaps": overlaps,
         "unannotated": [t["id"] for t in tickets if not t["files"]],
+        "large": [{"id": t["id"], "title": t["title"], "ac_count": t["ac_count"], "dependents": dependents[t["id"]]}
+                  for t in tickets if t["ac_count"] > LARGE_AC_COUNT],
         "setup_warnings": setup_warnings(),
         "stats": {
             "ready_now": sum(1 for t in tickets if not t["deps"]),

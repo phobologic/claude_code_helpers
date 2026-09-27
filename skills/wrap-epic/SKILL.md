@@ -42,8 +42,9 @@ Once resolved, look up:
 - Integration branch commit range vs `main` (`git log main..<branch> --oneline`)
 - Open findings: children of the epic with status `open` or `in_progress`,
   split into:
-  - **Blocking:** tagged `regression` or `worsened`, or priority 0-1. These
-    are this epic's own breakage or serious bugs.
+  - **Blocking:** tagged `regression`, `worsened` or `deferred-rework`, or
+    priority 0-1. These are this epic's own breakage, review findings deferred
+    so a ticket could merge instead of hitting the rework cap, or serious bugs.
   - **Movable:** everything else tagged `code-review`: pre-existing medium and
     low findings, and older findings with no origin tag.
 - Backlog epic: `tk backlog` (the repo's one open epic tagged `backlog`).

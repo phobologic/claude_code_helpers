@@ -38,7 +38,7 @@ run-tickets-plan [--include-in-progress] <args>
 
 Pass `--include-in-progress` only for `--resume`. The output has `tickets`
 (topologically ordered, each with in-set `deps`, `has_ac`, `files`),
-`excluded` (with reasons), `cycles`, `overlaps`, `unannotated`,
+`excluded` (with reasons), `cycles`, `overlaps`, `unannotated`, `large`,
 `setup_warnings`, and `stats`.
 
 If `tickets` is empty, show the `excluded` list and stop.
@@ -60,6 +60,18 @@ tickets with no dependency path between them. Those will likely conflict at
 merge. Propose `tk dep <later> <earlier>` edges (earlier = the ticket that
 defines the shared surface, else the lower ID) and ask once whether to add them.
 If yes, run the `tk dep` calls and re-run `run-tickets-plan`.
+
+**Large tickets.** Each entry in `large` has more than 6 acceptance criteria.
+Big tickets take the most review rounds to settle, and one that hits the
+rework cap stalls its `dependents`. List them with their criteria count and
+dependents, and offer to split each one before running. A split is usually a
+reusable core (an algorithm, a parser, a model) plus the features on it, or
+one ticket per separately testable command or screen. If the user agrees,
+create the new tickets with `tk create`, move the criteria across, wire them
+with `tk dep`, close the original with a note naming its replacements, and
+re-run the planner. A ticket that already has work on its `ticket/<id>`
+branch (a `--resume`) is usually better finished than split. Proceeding
+unsplit is the user's call.
 
 **Findings parent.** Out-of-scope finding tickets go next to the work that
 produced them, so repeated runs over the same epic keep their findings in one
@@ -92,7 +104,7 @@ Tickets: <N> runnable (<K> with AC), <R> ready now · longest chain <L> · max w
 
 Excluded:
   [<id>] <title>: <reason>
-Warnings: <setup warnings, overlaps not sequenced, unannotated tickets, or "none">
+Warnings: <setup warnings, overlaps not sequenced, unannotated tickets, large tickets, or "none">
 
 Integration branch: <branch> (<integration.reason>; <N> ahead of main, <M> behind)   Slots: <SLOTS>
 Findings parent: <id | new session epic>   Backlog: <id | new, created at setup>

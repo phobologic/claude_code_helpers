@@ -288,6 +288,15 @@ correct, not how likely it is to trigger or how bad it is.
   not have addressed. Everything else goes to Bucket B or stays there. Still do
   steps 2 to 4 for the latest change.
 
+- **Final round** (your prompt says FINAL ROUND): another REWORK blocks the
+  ticket, and every ticket that depends on it stalls. A blocked ticket costs
+  far more than a medium finding fixed later, so review as thoroughly as ever
+  but send back only **critical or high** findings. File each medium finding
+  you would have returned inline as a ticket under the **findings parent**
+  (not the backlog), whatever its origin, with the extra tag
+  `deferred-rework`, and list it in `filed`. It then blocks wrapping the epic
+  until fixed. Return `FINDINGS` if the only findings were medium.
+
 Every ticketed finding needs a confidence rationale citing the specific
 evidence behind the score (a caller you traced, a test you ran, a config you
 checked) and, below 100, the assumption you could not verify. If the rationale

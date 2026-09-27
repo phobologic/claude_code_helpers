@@ -176,9 +176,22 @@ or ask the spec author questions. For each ticket:
 - **Hidden complexity.** Does any ticket's description sound simple but
   actually require significant research, design decisions, or algorithmic
   work? A ticket titled "Add caching layer" might be hiding a week of work.
-- **Ticket sizing.** Could any single ticket reasonably be implemented, tested,
-  and validated in one focused session? If it feels like it would exhaust an
-  agent's context window, it's too big.
+- **Ticket sizing (High when too big).** Could any single ticket reasonably be
+  implemented, tested, and validated in one focused session? Flag as High, with
+  a proposed split, any ticket that:
+  - has more than 6 acceptance criteria,
+  - builds several separate user-facing pieces (commands, endpoints, screens,
+    CLI subcommands) that could each be tested alone, or
+  - combines a reusable core (an algorithm, a parser, a data model) with the
+    features built on it. Split the core out as its own ticket that the
+    features consume.
+
+  Size costs more than it seems. Every round of review covers the whole diff,
+  and each fix adds new code for the next round to check, so a ticket that is
+  twice as big takes more than twice as many rounds to settle. A 1,900-line
+  "pathfinding plus seven walking commands" ticket used every rework round
+  allowed and blocked six tickets that depended on it. Splitting it into the
+  pathfinding core and the commands would have kept each review small.
 
 ## Output Format
 

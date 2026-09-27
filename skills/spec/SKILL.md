@@ -293,8 +293,12 @@ Write each AC using EARS (Easy Approach to Requirements Syntax) patterns:
 - Each AC must be independently verifiable -- a developer should be able to write a
   test case for it
 - Cover the happy path, key error cases, and any performance or security constraints
-- Aim for 3-5 ACs per task. Fewer than 2 means underspecified; more than 5-6 means the
-  task should be split
+- Aim for 3-5 ACs per task. Fewer than 2 means underspecified; more than 6 means the
+  task must be split. So does a task that builds several separately testable pieces
+  (commands, endpoints, screens), or a reusable core plus the features on top of it:
+  make the core its own task that the features consume. Review time grows faster than
+  diff size, and one oversized ticket that hits the rework cap stalls everything
+  downstream of it. `run-tickets-plan` flags tickets over 6 ACs.
 - If you cannot write even one concrete, testable AC for a task, that task is not understood
   well enough to ticket -- pause and ask
 

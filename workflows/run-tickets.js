@@ -268,9 +268,15 @@ function conditionLines(conditions) {
   return conditions.map(c => `  - ${c.location} ${c.condition}: broke it by ${c.break}; ${c.caught ? `caught by ${c.test}` : `NOT caught: ${c.test}`}`).join('\n')
 }
 
-function qrPrompt(t, slot, round, implSummary, conditions) {
+function qrPrompt(t, slot, round, implSummary, conditions, final) {
+  const finalNote = final ? `
+FINAL ROUND: this ticket has had ${CAPS.qrReworks - 1} rework round(s). Another REWORK blocks it, and every ticket
+that depends on it stalls. Return REWORK only for critical or high findings. File each medium finding as a ticket
+under the findings parent instead (tag it deferred-rework; the epic cannot be wrapped until it is fixed), list it
+in \`filed\`, and return FINDINGS so this ticket merges. See "Final round" in your instructions.
+` : ''
   return `${header(slot)}
-Review ticket ${t.id} (${t.title}) on branch ${branchOf(t)} (round ${round}).
+Review ticket ${t.id} (${t.title}) on branch ${branchOf(t)} (round ${round}).${finalNote}
 Diff the ticket's own changes only:
   git diff ${A.integrationBranch}...${branchOf(t)}
 Repo root (run tk create and tk backlog from here): ${A.repoRoot}
@@ -388,7 +394,9 @@ async function runTicket(t, slot) {
     }
 
     rec.qrRounds += 1
-    const qr = await agent(qrPrompt(t, slot, rec.qrRounds, impl.summary, impl.conditions), {
+    // One more REWORK would reach the cap, so this review may only send back critical or high findings.
+    const finalRound = rec.qrReworks + 1 >= CAPS.qrReworks
+    const qr = await agent(qrPrompt(t, slot, rec.qrRounds, impl.summary, impl.conditions, finalRound), {
       label: `review ${t.id}${rec.qrRounds > 1 ? ` r${rec.qrRounds}` : ''}`, phase: 'Review', agentType: 'ticket-reviewer', schema: QR_SCHEMA,
     })
     if (!qr) return block('quality reviewer died or was stopped')
