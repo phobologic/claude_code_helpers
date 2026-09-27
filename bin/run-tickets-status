@@ -1,20 +1,27 @@
 #!/usr/bin/env python3
 """
 Usage: run-tickets-status [--json] [run-id]
+       run-tickets-status --list
 
 Status snapshot of a /run-tickets workflow run, built from records rather than
 agent prose:
 
   run record   <repo>/.worktrees/run-<stamp>.json, written by /run-tickets at
-               launch: the workflow args (tickets, deps, branch) and the run id
+               launch: the workflow args (tickets, deps, branch) and the run id.
+               The post-run cleanup deletes it.
   journal      the workflow's log of agent starts and typed results, found by
                run id under ~/.claude/projects/*/*/subagents/workflows/
+  agent logs   agent-<id>.jsonl next to the journal; their first and last
+               timestamps give each step's timing
   run metadata ~/.claude/projects/*/*/workflows/<run-id>.json, which Claude Code
-               writes only when the run finishes; holds the final result
+               writes only when the run finishes: args, final result, start
+               time and duration. Finished runs are found through it after the
+               run record is gone.
 
-With no run-id, uses the newest run record in the current repo. Because the
-record lives in the repo and the journal is found by id, this works from any
-Claude Code session, not only the one that launched the run.
+With no run-id, reports the newest run for the current repo, running or
+finished. --list shows recent runs for the repo. Because every source is found
+by run id or repo path, this works from any Claude Code session, not only the
+one that launched the run.
 """
 
 import glob
@@ -27,6 +34,7 @@ from datetime import datetime, timezone
 PROJECTS = os.path.expanduser("~/.claude/projects")
 LABEL_RE = re.compile(r"^(impl|ac|review|merge) (\S+)(?: r(\d+))?$")
 STEP_NAMES = {"impl": "implementing", "ac": "verifying AC", "review": "reviewing", "merge": "merging"}
+STEP_SHORT = {"impl": "impl", "ac": "AC", "review": "review", "merge": "merge"}
 
 
 def load_json(path):
@@ -49,16 +57,66 @@ def repo_root():
     sys.exit("run-tickets-status: not inside a git repository")
 
 
-def find_record(run_id):
-    records = []
-    for path in glob.glob(os.path.join(repo_root(), ".worktrees", "run-*.json")):
+def parse_ts(value):
+    """ISO-8601 to an aware datetime; a time with no offset (the run record's) is local."""
+    dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return dt if dt.tzinfo else dt.astimezone()
+
+
+def from_ms(ms):
+    return datetime.fromtimestamp(ms / 1000, timezone.utc)
+
+
+def fmt_dur(seconds):
+    if seconds is None:
+        return "?"
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes = (seconds + 30) // 60
+    return f"{minutes}m" if minutes < 60 else f"{minutes // 60}h{minutes % 60:02d}m"
+
+
+def fmt_clock(dt):
+    return dt.astimezone().strftime("%Y-%m-%d %H:%M") if dt else "?"
+
+
+# ---------- finding runs ----------
+
+def run_candidates(root):
+    """Every run of this repo keyed by run id: its run record and/or final metadata."""
+    runs = {}
+    for path in glob.glob(os.path.join(root, ".worktrees", "run-*.json")):
         rec = load_json(path)
-        if rec and rec.get("runId") and (run_id is None or rec["runId"] == run_id):
-            records.append((os.path.getmtime(path), rec))
-    if not records:
-        sys.exit("run-tickets-status: no /run-tickets run record in .worktrees/"
-                 + (f" for {run_id}" if run_id else "") + " (records are removed by the post-run cleanup)")
-    return sorted(records, key=lambda r: r[0])[-1][1]
+        if rec and rec.get("runId"):
+            runs.setdefault(rec["runId"], {})["record"] = rec
+            runs[rec["runId"]]["mtime"] = os.path.getmtime(path)
+    for path in glob.glob(os.path.join(PROJECTS, "*", "*", "workflows", "wf_*.json")):
+        meta = load_json(path)
+        if not meta or meta.get("workflowName") != "run-tickets":
+            continue
+        if (meta.get("args") or {}).get("repoRoot") != root and meta.get("runId") not in runs:
+            continue
+        entry = runs.setdefault(meta["runId"], {})
+        entry["final"] = meta
+        entry["mtime"] = max(entry.get("mtime", 0), os.path.getmtime(path))
+    return runs
+
+
+def find_run(run_id):
+    runs = run_candidates(repo_root())
+    if run_id:
+        if run_id not in runs:
+            # Not this repo's, or its record is gone: look the metadata up by id alone.
+            for path in glob.glob(os.path.join(PROJECTS, "*", "*", "workflows", f"{run_id}.json")):
+                runs[run_id] = {"final": load_json(path), "mtime": os.path.getmtime(path)}
+        if run_id not in runs:
+            sys.exit(f"run-tickets-status: no run {run_id} (no run record in .worktrees/ and no finished-run metadata)")
+        return run_id, runs[run_id]
+    if not runs:
+        sys.exit("run-tickets-status: no /run-tickets runs found for this repo")
+    newest = max(runs, key=lambda r: runs[r]["mtime"])
+    return newest, runs[newest]
 
 
 def read_journal(run_id):
@@ -69,28 +127,25 @@ def read_journal(run_id):
         return matches[0], [json.loads(line) for line in f if line.strip()]
 
 
-def read_final(run_id):
-    matches = glob.glob(os.path.join(PROJECTS, "*", "*", "workflows", f"{run_id}.json"))
-    return load_json(matches[0]) if matches else None
+# ---------- ticket state ----------
 
-
-def ticket_states(meta, events):
-    args = meta.get("args", {})
+def ticket_states(args, result, events):
     caps = {"acFails": 3, "qrReworks": 3, "conflicts": 2, **(args.get("caps") or {})}
-    tickets = {t["id"]: {"id": t["id"], "title": t["title"], "deps": t["deps"], "has_ac": t["has_ac"],
-                         "impl_rounds": 0, "ac_fails": 0, "review_rounds": 0, "reworks": 0, "conflicts": 0,
-                         "active": None, "last": None, "outcome": None, "sha": "", "findings": []}
-               for t in args.get("tickets", [])}
-    labels, integration = {}, None
+
+    def fresh(t):
+        return {"id": t["id"], "title": t["title"], "deps": t["deps"], "has_ac": t["has_ac"],
+                "impl_rounds": 0, "ac_fails": 0, "review_rounds": 0, "reworks": 0, "conflicts": 0,
+                "active": None, "last": None, "outcome": None, "sha": "", "findings": [], "agents": []}
+
+    tickets = {t["id"]: fresh(t) for t in args.get("tickets", [])}
+    labels, integration, integration_agent = {}, None, None
 
     for ev in events:
         if ev["type"] == "launched":
             # Defensive: a resumed run appends to the same journal without a new
             # "launched" marker today, but if one appears, rebuild from there.
-            for t in tickets.values():
-                t.update(impl_rounds=0, ac_fails=0, review_rounds=0, reworks=0, conflicts=0,
-                         active=None, last=None, outcome=None, sha="", findings=[])
-            labels, integration = {}, None
+            tickets = {t["id"]: fresh(t) for t in args.get("tickets", [])}
+            labels, integration, integration_agent = {}, None, None
             continue
         if ev["type"] == "started":
             labels[ev["agentId"]] = ev.get("label", "")
@@ -99,8 +154,9 @@ def ticket_states(meta, events):
                 t = tickets[m.group(2)]
                 t["active"] = (m.group(1), int(m.group(3) or 1))
                 t["outcome"] = None
+                t["agents"].append((m.group(1), ev["agentId"]))
             elif ev.get("label") == "integration check":
-                integration = {"status": "running"}
+                integration, integration_agent = {"status": "running"}, ev["agentId"]
             continue
         if ev["type"] != "result":
             continue
@@ -144,12 +200,12 @@ def ticket_states(meta, events):
                 t["outcome"] = "blocked"
 
     # A finished run's result is authoritative for outcomes and reasons.
-    final = {r["id"]: r for r in (meta.get("result") or {}).get("tickets", [])}
+    final = {r["id"]: r for r in (result or {}).get("tickets", [])}
     for tid, t in tickets.items():
         if tid in final:
             t["outcome"] = final[tid]["outcome"]
             t["reason"] = final[tid].get("reason", "")
-    return list(tickets.values()), integration
+    return list(tickets.values()), integration, integration_agent
 
 
 def describe(t, tickets_by_id, finished):
@@ -175,47 +231,175 @@ def describe(t, tickets_by_id, finished):
     return f"waiting on {', '.join(waiting)}" if waiting else "queued for a worktree slot"
 
 
+# ---------- timing ----------
+
+def _first_timestamp(lines):
+    for line in lines:
+        try:
+            ts = json.loads(line).get("timestamp")
+        except (json.JSONDecodeError, AttributeError):
+            continue
+        if ts:
+            return parse_ts(ts)
+    return None
+
+
+def agent_span(run_dir, agent_id):
+    """(start, end) of one agent, from the first and last timestamps in its log.
+
+    Reads only the two ends of the file: transcripts run to megabytes. The
+    chunk boundaries can cut a line in half, and those halves fail to parse
+    and are skipped.
+    """
+    path = os.path.join(run_dir, f"agent-{agent_id}.jsonl")
+    try:
+        with open(path, "rb") as f:
+            head = f.read(262144).decode("utf-8", "replace").splitlines()
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 262144))
+            tail = f.read().decode("utf-8", "replace").splitlines()
+        mtime = datetime.fromtimestamp(os.path.getmtime(path), timezone.utc)
+    except OSError:
+        return None
+    start = _first_timestamp(head)
+    end = _first_timestamp(reversed(tail)) or mtime
+    return (start, end) if start else None
+
+
+def ticket_timing(t, run_dir, run_start, now):
+    steps, first, last, running_for = {}, None, None, None
+    for i, (kind, aid) in enumerate(t["agents"]):
+        span = agent_span(run_dir, aid) if run_dir else None
+        if not span:
+            continue
+        start, end = span
+        if t["active"] and i == len(t["agents"]) - 1:
+            end = now
+            running_for = (now - start).total_seconds()
+        steps[kind] = steps.get(kind, 0) + (end - start).total_seconds()
+        first = min(first, start) if first else start
+        last = max(last, end) if last else end
+    if not first:
+        return None
+    wall = (last - first).total_seconds()
+    return {
+        "began_after_launch": (first - run_start).total_seconds() if run_start else None,
+        "wall": wall,
+        "steps": steps,
+        "waiting": max(0, wall - sum(steps.values())),
+        "running_for": running_for,
+    }
+
+
+def timing_line(tm, outcome):
+    parts = [f"{STEP_SHORT[k]} {fmt_dur(tm['steps'][k])}" for k in ("impl", "ac", "review", "merge") if k in tm["steps"]]
+    if tm["waiting"] >= 30:
+        parts.append(f"waiting {fmt_dur(tm['waiting'])}")
+    span = {"merged": "start to merge", "blocked": "start to block"}.get(outcome, "so far")
+    # A late start means the ticket waited on a dependency or a free slot.
+    began = f", began {fmt_dur(tm['began_after_launch'])} after launch" if (tm["began_after_launch"] or 0) >= 30 else ""
+    running = f"; current step running {fmt_dur(tm['running_for'])}" if tm["running_for"] is not None else ""
+    return f"time: {fmt_dur(tm['wall'])} {span}{began} ({', '.join(parts)}){running}"
+
+
+# ---------- output ----------
+
+def list_runs():
+    runs = run_candidates(repo_root())
+    if not runs:
+        print("no /run-tickets runs found for this repo")
+        return
+    rows = []
+    for run_id, entry in runs.items():
+        final, record = entry.get("final"), entry.get("record")
+        args = (final or {}).get("args") or (record or {}).get("args") or {}
+        tickets = ((final or {}).get("result") or {}).get("tickets") or []
+        merged = sum(1 for t in tickets if t.get("outcome") == "merged")
+        if final and final.get("startTime"):
+            started = from_ms(final["startTime"])
+            summary = f"finished in {fmt_dur(final.get('durationMs', 0) / 1000)}, merged {merged}/{len(args.get('tickets', []))}"
+        else:
+            started = parse_ts(record["launched"]) if record and record.get("launched") else None
+            summary = f"not finished, {len(args.get('tickets', []))} tickets"
+        ids = " ".join(t["id"] for t in args.get("tickets", []))
+        rows.append((started or datetime.min.replace(tzinfo=timezone.utc), run_id, summary, ids))
+    for started, run_id, summary, ids in sorted(rows, reverse=True)[:15]:
+        print(f"{run_id}  {fmt_clock(started)}  {summary}  [{ids}]")
+
+
 def main(argv):
+    if "--list" in argv:
+        list_runs()
+        return
     as_json = "--json" in argv
     rest = [a for a in argv if not a.startswith("--")]
-    record = find_record(rest[0] if rest else None)
-    run_id = record["runId"]
-    final = read_final(run_id)
-    meta = {"args": record["args"], "result": (final or {}).get("result")}
+    run_id, entry = find_run(rest[0] if rest else None)
+    final, record = entry.get("final"), entry.get("record")
+    args = (final or {}).get("args") or (record or {}).get("args") or {}
+    result = (final or {}).get("result")
+    finished = final is not None
 
     journal_path, events = read_journal(run_id)
-    tickets, integration = ticket_states(meta, events)
-    finished = final is not None
+    run_dir = os.path.dirname(journal_path) if journal_path else None
+    tickets, integration, integration_agent = ticket_states(args, result, events)
     by_id = {t["id"]: t for t in tickets}
     for t in tickets:
         t["status"] = describe(t, by_id, finished)
 
+    now = datetime.now(timezone.utc)
+    if final and final.get("startTime"):
+        run_start = from_ms(final["startTime"])
+    elif record and record.get("launched"):
+        run_start = parse_ts(record["launched"])
+    else:
+        run_start = None
+    run_end = run_start and final and final.get("durationMs") and \
+        from_ms(final["startTime"] + final["durationMs"])
+
+    for t in tickets:
+        t["timing"] = ticket_timing(t, run_dir, run_start, now)
+    integration_span = agent_span(run_dir, integration_agent) if run_dir and integration_agent else None
+
+    # Agent time by step across the run: where the hours actually went.
+    totals = {}
+    for t in tickets:
+        for kind, secs in ((t["timing"] or {}).get("steps") or {}).items():
+            totals[kind] = totals.get(kind, 0) + secs
+    if integration_span:
+        totals["integration check"] = (integration_span[1] - integration_span[0]).total_seconds()
+
     # Agent transcripts are appended on every tool call, so the newest one is
     # the best "is anything still happening" signal.
-    stamps = []
-    if journal_path:
-        stamps = [os.path.getmtime(p) for p in glob.glob(os.path.join(os.path.dirname(journal_path), "agent-*.jsonl"))]
+    stamps = [os.path.getmtime(p) for p in glob.glob(os.path.join(run_dir, "agent-*.jsonl"))] if run_dir else []
     last_activity = datetime.fromtimestamp(max(stamps), timezone.utc).astimezone() if stamps else None
 
     report = {
         "run_id": run_id,
         "state": "finished" if finished else ("running" if journal_path else "launching"),
-        "started": record.get("launched"),
+        "started": run_start.isoformat(timespec="seconds") if run_start else None,
+        "ended": run_end.isoformat(timespec="seconds") if run_end else None,
+        "duration_seconds": ((run_end or now) - run_start).total_seconds() if run_start else None,
         "last_activity": last_activity.isoformat(timespec="seconds") if last_activity else None,
-        "integration_branch": meta.get("args", {}).get("integrationBranch"),
-        "merge_halted": (meta.get("result") or {}).get("mergeHalted"),
+        "integration_branch": args.get("integrationBranch"),
+        "merge_halted": (result or {}).get("mergeHalted"),
         "integration_check": integration,
+        "agent_seconds_by_step": totals,
         "tickets": [{k: t[k] for k in ("id", "title", "status", "impl_rounds", "ac_fails", "review_rounds",
-                                       "reworks", "conflicts", "findings")} for t in tickets],
+                                       "reworks", "conflicts", "findings", "timing")} for t in tickets],
     }
     if as_json:
-        print(json.dumps(report, indent=2))
+        print(json.dumps(report, indent=2, default=str))
         return
 
     merged = sum(1 for t in tickets if t["outcome"] == "merged")
-    print(f"run-tickets {report['run_id']}  [{report['state']}]  branch {report['integration_branch']}")
-    print(f"launched {report['started']}  last agent activity {report['last_activity']}  "
-          f"merged {merged}/{len(tickets)}")
+    print(f"run-tickets {run_id}  [{report['state']}]  branch {report['integration_branch']}")
+    if run_end:
+        timing = f"launched {fmt_clock(run_start)}, finished {fmt_clock(run_end)} ({fmt_dur(report['duration_seconds'])})"
+    else:
+        timing = (f"launched {fmt_clock(run_start)}, running {fmt_dur(report['duration_seconds'])}" if run_start
+                  else "launch time unknown")
+        timing += f"  last agent activity {fmt_clock(last_activity)}"
+    print(f"{timing}  merged {merged}/{len(tickets)}")
     if report["merge_halted"]:
         print(f"MERGES HALTED: {report['merge_halted']}")
     print()
@@ -225,11 +409,18 @@ def main(argv):
                   f"review {t['review_rounds']}, merge conflicts {t['conflicts']}")
         print(f"  {t['id']:<{width}}  {t['status']}")
         print(f"  {'':<{width}}  {t['title']}  ({counts})")
+        if t["timing"]:
+            print(f"  {'':<{width}}  {timing_line(t['timing'], t['outcome'])}")
         if t["findings"]:
             print(f"  {'':<{width}}  findings filed: {', '.join(t['findings'])}")
     if integration:
-        print(f"\nintegration check: {integration.get('status')}"
+        took = f" in {fmt_dur(totals['integration check'])}" if "integration check" in totals else ""
+        print(f"\nintegration check: {integration.get('status')}{took}"
               + (f", {integration['summary']}" if integration.get("summary") else ""))
+    if totals:
+        order = ["impl", "ac", "review", "merge", "integration check"]
+        print("\nagent time by step: " + ", ".join(f"{STEP_SHORT.get(k, k)} {fmt_dur(totals[k])}" for k in order if k in totals)
+              + f"  (sum {fmt_dur(sum(totals.values()))}; steps of different tickets overlap)")
 
 
 if __name__ == "__main__":
