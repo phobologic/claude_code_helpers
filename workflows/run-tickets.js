@@ -150,7 +150,8 @@ const QR_SCHEMA = {
       items: {
         type: 'object',
         properties: {
-          priority: { type: 'string', enum: ['critical', 'high', 'medium'] },
+          // low only for regressions in the ticket's own files (see Bucket A in the reviewer's instructions)
+          priority: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] },
           location: { type: 'string', description: 'path:line' },
           description: { type: 'string' },
           fix: { type: 'string' },
@@ -335,8 +336,8 @@ round 2 rules in your instructions.
 function qrPrompt(t, slot, round, implSummary, conditions, final, prior) {
   const finalNote = final ? `
 FINAL ROUND: this ticket has had ${CAPS.qrReworks - 1} rework round(s). Another REWORK blocks it, and every ticket
-that depends on it stalls. Return REWORK only for critical or high findings. File each medium finding as a ticket
-under the findings parent instead (tag it deferred-rework; the epic cannot be wrapped until it is fixed), list it
+that depends on it stalls. Return REWORK only for critical or high findings. File each medium or low finding you
+would have sent back as a ticket under the findings parent instead (tag it deferred-rework; the epic cannot be wrapped until it is fixed), list it
 in \`filed\`, and return FINDINGS so this ticket merges. See "Final round" in your instructions.
 ` : ''
   return `${header(slot)}

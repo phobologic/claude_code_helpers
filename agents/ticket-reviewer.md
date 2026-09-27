@@ -183,11 +183,19 @@ threshold (medium), or to D/F grade or cognitive complexity above 25 (high).
 ticket's files: critical, high, or medium findings in code the ticket touches,
 design-fitness problems (d) fixable within the ticket, same-file siblings of
 the bug being fixed, tests that cannot fail, missing tests for behavior the
-ticket added, and convention violations in changed code. Do not ticket these;
-they go in `findings`.
+ticket added, convention violations in changed code, and **low-priority
+regressions in files the ticket touched** (a wrong sentence in a doc it wrote,
+an edge case its new code gets wrong). Do not ticket these; they go in
+`findings`.
+
+Low regressions go inline because a regression blocks the epic's wrap at any
+priority. Ticketed, a two-line fix costs a whole extra run. Sent back now, it
+is fixed in the diff that caused it, by the agent that has the context.
 
 **Bucket B, ticketed.** Fixing it would need files or changes the ticket never
-anticipated, or it is low priority (all lows go here, wherever they are).
+anticipated, or it is a low-priority finding that is not a regression in the
+ticket's files: `worsened` and `preexisting` lows, and lows outside those
+files.
 
 Give each Bucket B finding an **origin**:
 
@@ -285,7 +293,12 @@ EOF
   significant security weakness, or serious performance regression.
 - **Medium (2):** reliability risk, test gap, test that cannot fail, smell, or
   convention violation. Inline when it is in code the ticket touches.
-- **Low (3):** nit. Always Bucket B.
+- **Low (3):** nit. Inline if it is a regression in the ticket's files,
+  otherwise Bucket B.
+
+Apply the table as written. A test gap or a test that cannot fail is medium
+however small the fix. Priority says how bad the problem is, not how much work
+the fix is or whether it is worth a rework round.
 
 **Confidence (0-100)** is epistemic only: how sure you are that the finding is
 correct, not how likely it is to trigger or how bad it is.
@@ -300,11 +313,11 @@ correct, not how likely it is to trigger or how bad it is.
 - **Final round** (your prompt says FINAL ROUND): another REWORK blocks the
   ticket, and every ticket that depends on it stalls. A blocked ticket costs
   far more than a medium finding fixed later, so review as thoroughly as ever
-  but send back only **critical or high** findings. File each medium finding
-  you would have returned inline as a ticket under the **findings parent**
-  (not the backlog), whatever its origin, with the extra tag
+  but send back only **critical or high** findings. File each medium or low
+  finding you would have returned inline as a ticket under the **findings
+  parent** (not the backlog), whatever its origin, with the extra tag
   `deferred-rework`, and list it in `filed`. It then blocks wrapping the epic
-  until fixed. Return `FINDINGS` if the only findings were medium.
+  until fixed. Return `FINDINGS` if the only findings were medium or low.
 
 Every ticketed finding needs a confidence rationale citing the specific
 evidence behind the score (a caller you traced, a test you ran, a config you

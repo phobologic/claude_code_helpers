@@ -293,7 +293,8 @@ Integration check: <pass | fail | preexisting_only | no_checks | skipped>
 Findings in <findings parent>: <ids from each ticket's findings + outOfScope, or "none">
 Backlog <BACKLOG>: <new ids from each ticket's backlog>; noted again: <ids from noted, or "none">
 Worktrees left in place: <paths or "none">
-Blocking wrap: <every open child of the findings parent, from `tk query`, or "none: ready to wrap">
+Blocking wrap: <"none: ready to wrap", or one line per open child of the findings parent:>
+  <id>  P<priority>  <origin tags: regression | worsened | preexisting, plus deferred-rework>  from <Source ticket>  "<title>"
 
 Next:
   git log --oneline main..<branch>
@@ -307,6 +308,20 @@ Next:
 regressions this work caused, or serious bugs, so they are worth another run.
 Backlog findings are not. Do not suggest another run to clear the backlog; it
 is worked separately, whenever the user chooses.
+
+Build each "Blocking wrap" line from the record, not from your reading of the
+finding: the priority and tags from `tk query`, and the source ticket from the
+finding's `**Source ticket**` line. A finding with no origin tag shows
+`(no origin)`. Priority does not decide whether a finding blocks: a P3
+regression blocks exactly as a P1 does, because the rule exists to keep this
+epic from shipping its own breakage, and only pre-existing problems are let
+through to the backlog.
+
+Never recommend moving a `regression`, `worsened` or `deferred-rework` finding
+to the backlog. If the user wants one moved anyway, that is an exception to
+the rule: say so in those words, and have them name it by id. Any note you
+write on the ticket when moving it records it as an exception, with the
+origin unchanged.
 
 Findings from `/code-review` or `/multi-review` can go straight back through
 `/run-tickets <finding-epic-id>`.

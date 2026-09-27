@@ -84,7 +84,8 @@ Will NOT do:
      pbp-abcd  P1  preexisting  "Fix null deref in login handler"
      pbp-efgh  P2  regression   "Webhook sender drops the retry header"
   Recommended: stop and run /run-tickets <epic-id> first. You can also merge
-  anyway (they stay open, so the epic stays open) or move them to the backlog.
+  anyway (they stay open, so the epic stays open). Moving one to the backlog
+  is an exception to the rule: name it by id if you want that.
 
 Proceed? (yes / yes but skip merge / no)
 ```
@@ -95,7 +96,9 @@ Rules:
   call, not yours.
 - Movable findings go to the backlog by default (step 4). The user can keep
   any of them in the epic instead. Blocking findings move only if the user
-  says so by id.
+  says so by id. Priority never makes a finding movable: a P3 regression is
+  blocking. The note on a moved blocking finding says it was moved as an
+  exception at the user's request and keeps its origin.
 - Before moving each one, check the backlog for a duplicate with
   `tk backlog find <path> <symbol>` (from its **Files** line and title). Show
   a duplicate in the plan as "duplicate of <id>: note + close".
