@@ -1,5 +1,6 @@
 export const meta = {
-  name: 'run-tickets',
+  // Not 'run-tickets': saved workflows are listed alongside skills, and that name is the skill's.
+  name: 'run-tickets-engine',
   description: 'Implement a tk ticket DAG in parallel worktrees with AC verification, quality review, and serialized merges',
   whenToUse: 'Launched by the /run-tickets skill after it has planned the ticket graph and created worktrees. Not meant to be run directly.',
   phases: [
@@ -726,6 +727,8 @@ if (results.some(r => r.outcome === 'merged') && !mergeHalted) {
 }
 
 return {
+  // The lead reads this in the completion notification, which can arrive long after the skill was loaded.
+  next: 'Finish this run: read ~/.claude/skills/run-tickets/finish.md and follow it in full.',
   integrationBranch: A.integrationBranch,
   mergeHalted,
   integration,

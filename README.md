@@ -15,7 +15,7 @@ language plugins, tool rules, and working style rules for `~/.claude/`.
 | `tools/` | Per-tool rule files (Railway, SQLAlchemy) — loaded via `.claude/rules/` symlinks |
 | `bin/` | Utility scripts: tk plugins (`tk-show-multi`, `tk-epic-status`, `tk-triage`, `tk-set`, `tk-backlog`) and `git-auto-commit.sh` |
 | `hooks/` | Global Claude Code hooks (e.g. `no-inline-scripts.sh` — flags inline-interpreter and heredoc-to-file Bash patterns as a non-blocking, in-context nudge toward Write/Edit) |
-| `tests/` | Dependency-free tests for the `run-tickets` workflow script (run in Node with fake agents) and `bin/run-tickets-plan` |
+| `tests/` | Dependency-free tests for the `run-tickets-engine` workflow script (run in Node with fake agents), `bin/run-tickets-plan`, `bin/run-tickets-setup` and `bin/run-tickets-finish`, and `bin/wrap-epic-plan` |
 | `CLAUDE.global.md` | Global CLAUDE.md with personal working style rules |
 | `settings.global.json` | Global Claude Code settings — env, permissions, hooks, statusLine |
 | `install.sh` | Sets up `~/.claude/` symlinks from scratch |
@@ -70,7 +70,7 @@ are available globally:
 | `/spec [idea]` | Turn a rough idea into a phased plan with EARS ACs, adversarial review, and `tk` tickets. Reads the code and design docs first, then asks every product decision with a recommendation |
 | `/run-epic <epic-id>` | Execute a `tk` epic with an agent team (implementers + AC verifier + quality reviewer) |
 | `/fix-tickets <id> [id ...] \| <epic-id>` | Implement a set of tickets in parallel — designed for multi-review fix batches |
-| `/run-tickets <epic-id> \| <id> [id ...] [--resume]` | **Experimental.** Workflow-backed ticket runner: scheduling lives in `workflows/run-tickets.js`, not an LLM team lead. Covers both `/run-epic` (AC verification when tickets have AC) and `/fix-tickets` (no AC) use cases. Asks you about decision-shaped tickets before dispatch, keeps tickets that share a file from running at once, and gates every merge on lint, types and tests. Watch with `/workflows`. Pre-existing medium and low findings go to the repo's backlog epic, so the epic can finish. Helpers: `bin/run-tickets-plan`, `bin/worktree-reset`, `bin/tk-backlog`, `bin/review-scratch` (a throwaway copy of a branch for mutation testing) |
+| `/run-tickets <epic-id> \| <id> [id ...] [--resume]` | **Experimental.** Workflow-backed ticket runner: scheduling lives in `workflows/run-tickets-engine.js`, not an LLM team lead. Covers both `/run-epic` (AC verification when tickets have AC) and `/fix-tickets` (no AC) use cases. Asks you about decision-shaped tickets before dispatch, keeps tickets that share a file from running at once, and gates every merge on lint, types and tests. Watch with `/workflows`. Pre-existing medium and low findings go to the repo's backlog epic, so the epic can finish. Helpers: `bin/run-tickets-plan`, `bin/run-tickets-setup`, `bin/run-tickets-finish`, `bin/wrap-epic-plan`, `bin/worktree-reset`, `bin/tk-backlog`, `bin/review-scratch` (a throwaway copy of a branch for mutation testing) |
 | `/run-status [run-id]` | Ticket-by-ticket snapshot of a `/run-tickets` run, running or finished, with per-step timing (`bin/run-tickets-status`; `--list` for recent runs) |
 | `/review` | Code review of all uncommitted changes |
 | `/multi-review` | Parallel review by 5 specialized agents |

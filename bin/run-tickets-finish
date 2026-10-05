@@ -1,0 +1,311 @@
+#!/usr/bin/env python3
+# Cleanup helper for /run-tickets: record outcomes in tk, archive the run, remove its worktrees and branches.
+"""
+Usage: run-tickets-finish [--result FILE] [--dry-run] <run-id>
+
+Run from the repo root once the run-tickets workflow has finished. The workflow
+args come from the run record (<root>/.worktrees/run-<stamp>.json, written at
+launch). The workflow's return value comes from FILE when given (the JSON in the
+completion notification's <result>), else from Claude Code's finished-run
+metadata (~/.claude/projects/*/*/workflows/<run-id>.json).
+
+In order:
+  1. Archive the run with run-tickets-status --archive, before anything it reads
+     is removed. A failure is reported and does not stop cleanup.
+  2. Tickets. merged: closed with a note if still open (the merge step normally
+     closed it). blocked: reopened, with a note giving the reason and the branch
+     that holds the work. stalled: reopened, with a note naming what it waited on.
+  3. Each human check whose text carries DISPUTED: becomes a ticket tagged
+     needs-human under the findings parent, so the owner confirms the disputed
+     criterion before the epic wraps.
+     Steps 2 and 3 are marked done in the run record and skipped on a re-run.
+  4. Worktrees are removed without --force, integration worktree first. After a
+     merge halt the integration worktree is left as is and its status reported.
+  5. Slot placeholder branches are deleted once their worktree is gone, if they
+     hold no commits of their own. ticket/<id> branches of merged tickets are
+     deleted once the integration branch contains them. Blocked tickets keep theirs.
+  6. The run record is deleted, unless a worktree was left in place.
+
+--dry-run reports the actions it would take and changes nothing.
+
+Prints one JSON object:
+
+  run_id, integration_branch, findings_parent, backlog_parent
+  merge_halted        the workflow's mergeHalted, or null
+  integration_status  `git status --short` lines of the kept integration worktree
+  integration         the workflow's integration check result, unchanged
+  tickets             [{id, title, outcome, sha, reason, acFails, qrRounds,
+                        conflicts, gateFails, action}]
+  decided             [{id, decision}]: owner answers the run carried, from the args
+  needs_decision      [{id, reason}]: blocked because the implementer says the
+                      ticket needs an owner's choice. The lead checks the claim.
+  human_checks        [{id, check}]: criteria a person should check by hand
+  disputed            [{source, check, ticket}]: the needs-human tickets filed
+  findings, backlog, noted
+                      ids across all tickets (findings includes out-of-scope
+                      tickets the implementers filed)
+  worktrees_removed   paths
+  worktrees_left      [{path, reason}]
+  branches_deleted    names
+  branches_kept       [{name, reason}]
+  archive             {"path": ...} or {"error": ...}
+  record_deleted      bool
+  errors              commands that failed; cleanup carried on past them
+
+Set TK_SCRIPT to use another tk binary, RUN_TICKETS_STATUS for another status
+script, and TICKETS_DIR when the tickets are not in <root>/.tickets.
+"""
+
+import glob
+import json
+import os
+import re
+import subprocess
+import sys
+
+BIN = os.path.dirname(os.path.realpath(__file__))
+TK = os.environ.get("TK_SCRIPT", "tk")
+STATUS = os.environ.get("RUN_TICKETS_STATUS", os.path.join(BIN, "run-tickets-status"))
+PROJECTS = os.path.expanduser("~/.claude/projects")
+DISPUTED_RE = re.compile(r"(?:^|: )DISPUTED:")
+
+
+def die(msg):
+    print(f"run-tickets-finish: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def load_json(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+class Runner:
+    """Runs or, in a dry run, only records the commands that change something."""
+
+    def __init__(self, root, dry):
+        self.root, self.dry, self.errors = root, dry, []
+
+    def read(self, *cmd, cwd=None):
+        return subprocess.run(list(cmd), cwd=cwd or self.root, capture_output=True, text=True)
+
+    def act(self, *cmd):
+        """True when the command succeeded (or would run, in a dry run)."""
+        if self.dry:
+            return True
+        res = self.read(*cmd)
+        if res.returncode != 0:
+            self.errors.append(f"{' '.join(cmd)}: {(res.stderr or res.stdout).strip()}")
+        return res.returncode == 0
+
+    def tk(self, *args):
+        return self.act(TK, *args)
+
+
+def ticket_status(tickets_dir, tid):
+    try:
+        with open(os.path.join(tickets_dir, f"{tid}.md")) as f:
+            m = re.search(r"^status:\s*(\S+)", f.read(), re.MULTILINE)
+    except OSError:
+        return None
+    return m.group(1) if m else None
+
+
+def find_record(root, run_id):
+    for path in glob.glob(os.path.join(root, ".worktrees", "run-*.json")):
+        rec = load_json(path)
+        if rec and rec.get("runId") == run_id:
+            return path, rec
+    return None, None
+
+
+def find_final(run_id):
+    for path in glob.glob(os.path.join(PROJECTS, "*", "*", "workflows", f"{run_id}.json")):
+        meta = load_json(path)
+        if meta:
+            return meta
+    return None
+
+
+def registered_worktrees(r):
+    out = r.read("git", "worktree", "list", "--porcelain").stdout
+    return {os.path.realpath(line[len("worktree "):]) for line in out.splitlines() if line.startswith("worktree ")}
+
+
+def branch_exists(r, name):
+    return r.read("git", "show-ref", "--verify", "--quiet", f"refs/heads/{name}").returncode == 0
+
+
+def record_tickets(r, report, args, result, tickets_dir):
+    branch = args.get("integrationBranch", "")
+    for t in result.get("tickets", []):
+        tid, outcome = t["id"], t.get("outcome")
+        reason = t.get("reason") or ""
+        status = ticket_status(tickets_dir, tid)
+        action = "none"
+        if outcome == "merged":
+            if status != "closed":
+                note = f"/run-tickets: merged into {branch} at {t.get('sha') or '?'}; closed at cleanup."
+                action = "closed" if r.tk("add-note", tid, note) and r.tk("close", tid) else "close failed"
+        elif outcome == "blocked":
+            note = f"/run-tickets: blocked: {reason}. Work so far is on branch ticket/{tid}."
+            action = "reopened" if r.tk("status", tid, "open") and r.tk("add-note", tid, note) else "reopen failed"
+            if "needs decision:" in reason:
+                report["needs_decision"].append({"id": tid, "reason": reason})
+        elif outcome == "stalled":
+            note = f"/run-tickets: stalled: {reason}."
+            action = "reopened" if r.tk("status", tid, "open") and r.tk("add-note", tid, note) else "reopen failed"
+        report["tickets"].append({
+            "id": tid, "title": t.get("title", ""), "outcome": outcome, "sha": t.get("sha", ""),
+            "reason": reason, "acFails": t.get("acFails", 0), "qrRounds": t.get("qrRounds", 0),
+            "conflicts": t.get("conflicts", 0), "gateFails": t.get("gateFails", 0), "action": action,
+        })
+
+        for check in t.get("humanChecks") or []:
+            if not DISPUTED_RE.search(check):
+                report["human_checks"].append({"id": tid, "check": check})
+                continue
+            body = (f"**Source ticket**: {tid}\n"
+                    f"**Merged at**: {t.get('sha') or '?'} on {branch}\n"
+                    f"**Disputed criterion**: {check}\n\n"
+                    "The verifier found this criterion's premise false and passed the ticket without "
+                    "meeting it as written. Confirm the criterion should change (note why here, then "
+                    "close this ticket), or reopen the work on the source ticket.")
+            new_id = None
+            if not r.dry:
+                res = r.read(TK, "create", f"Confirm disputed criterion on {tid}", "-t", "task", "-p", "2",
+                             "--parent", args.get("findingsParent", ""), "--tags", "needs-human", "-d", body)
+                if res.returncode == 0:
+                    new_id = res.stdout.strip().splitlines()[-1]
+                else:
+                    r.errors.append(f"tk create (disputed check on {tid}): {res.stderr.strip()}")
+            report["disputed"].append({"source": tid, "check": check, "ticket": new_id})
+
+
+def clean_git(r, report, args, result):
+    branch = args.get("integrationBranch")
+    integration = args.get("integrationWorktree")
+    present = registered_worktrees(r)
+    paths = ([integration] if integration else []) + list(args.get("slots", []))
+    for path in paths:
+        if os.path.realpath(path) not in present:
+            continue
+        if path == integration and result.get("mergeHalted"):
+            report["worktrees_left"].append({"path": path, "reason": "merge step halted; inspect before removing"})
+            st = r.read("git", "status", "--short", cwd=path)
+            report["integration_status"] = st.stdout.splitlines()
+            continue
+        if r.act("git", "worktree", "remove", path):
+            report["worktrees_removed"].append(path)
+        else:
+            report["worktrees_left"].append({"path": path, "reason": r.errors[-1]})
+
+    removed = set(report["worktrees_removed"])
+    for path in args.get("slots", []):
+        name = os.path.basename(path.rstrip("/"))
+        if path not in removed or not branch_exists(r, name):
+            continue
+        unique = r.read("git", "rev-list", "--count", name, "--not", "main", branch).stdout.strip()
+        if unique == "0":
+            if r.act("git", "branch", "-D", name):
+                report["branches_deleted"].append(name)
+        else:
+            report["branches_kept"].append({"name": name, "reason": f"{unique or '?'} commit(s) not on main or {branch}"})
+
+    for t in result.get("tickets", []):
+        name = f"ticket/{t['id']}"
+        if not branch_exists(r, name):
+            continue
+        if t.get("outcome") != "merged":
+            report["branches_kept"].append({"name": name, "reason": f"{t.get('outcome')}: kept for inspection or --resume"})
+        elif r.read("git", "merge-base", "--is-ancestor", name, branch).returncode == 0:
+            if r.act("git", "branch", "-D", name):
+                report["branches_deleted"].append(name)
+        else:
+            report["branches_kept"].append({"name": name, "reason": f"not contained in {branch}"})
+
+
+def main(argv):
+    dry = "--dry-run" in argv
+    result_file = None
+    rest = []
+    it = iter(a for a in argv if a != "--dry-run")
+    for a in it:
+        if a == "--result":
+            result_file = next(it, None) or die("--result needs a file")
+        else:
+            rest.append(a)
+    if len(rest) != 1:
+        die(__doc__)
+    run_id = rest[0]
+
+    root = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True).stdout.strip()
+    if not root:
+        die("not inside a git repository")
+    if "/.worktrees/" in root:
+        root = root.split("/.worktrees/")[0]
+    root = os.path.realpath(root)
+    tickets_dir = os.environ.get("TICKETS_DIR") or os.path.join(root, ".tickets")
+
+    record_path, record = find_record(root, run_id)
+    final = None if result_file else find_final(run_id)
+    result = load_json(result_file) if result_file else (final or {}).get("result")
+    if result_file and result is None:
+        die(f"could not read a JSON result from {result_file}")
+    if result is None:
+        die(f"no result for {run_id} yet: the run has not finished, or Claude Code has not written its "
+            "metadata. Pass --result <file> with the JSON from the completion notification's <result>.")
+    args = (record or {}).get("args") or (final or {}).get("args")
+    if not args:
+        die(f"no run record in {root}/.worktrees/ and no metadata with args for {run_id}")
+
+    r = Runner(root, dry)
+    report = {
+        "run_id": run_id, "dry_run": dry,
+        "integration_branch": args.get("integrationBranch"),
+        "findings_parent": args.get("findingsParent"), "backlog_parent": args.get("backlogParent"),
+        "merge_halted": result.get("mergeHalted"), "integration_status": [],
+        "integration": result.get("integration"),
+        "tickets": [], "needs_decision": [], "human_checks": [], "disputed": [],
+        "decided": [{"id": t["id"], "decision": t["decision"]} for t in args.get("tickets", []) if t.get("decision")],
+        "findings": sorted({i for t in result.get("tickets", []) for i in (t.get("findings") or []) + (t.get("outOfScope") or [])}),
+        "backlog": sorted({i for t in result.get("tickets", []) for i in t.get("backlog") or []}),
+        "noted": sorted({i for t in result.get("tickets", []) for i in t.get("noted") or []}),
+        "worktrees_removed": [], "worktrees_left": [], "branches_deleted": [], "branches_kept": [],
+        "archive": None, "record_deleted": False, "errors": r.errors,
+    }
+
+    # 1. Archive first: it reads the run record, journal, and agent logs.
+    if dry:
+        report["archive"] = {"path": None}
+    else:
+        res = r.read(STATUS, "--archive", run_id)
+        report["archive"] = ({"path": res.stdout.strip().splitlines()[-1] if res.stdout.strip() else None}
+                             if res.returncode == 0 else {"error": (res.stderr or res.stdout).strip()})
+
+    # 2-3. Tickets, once per run.
+    if record and record.get("ticketsRecorded"):
+        report["tickets_already_recorded"] = True
+    else:
+        record_tickets(r, report, args, result, tickets_dir)
+        if record_path and not dry:
+            record["ticketsRecorded"] = True
+            with open(record_path, "w") as f:
+                json.dump(record, f, indent=2)
+
+    # 4-5. Worktrees and branches.
+    clean_git(r, report, args, result)
+
+    # 6. Run record.
+    if record_path and not report["worktrees_left"] and not dry:
+        os.remove(record_path)
+        report["record_deleted"] = True
+
+    print(json.dumps(report, indent=2))
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

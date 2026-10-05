@@ -1,4 +1,4 @@
-// Runs workflows/run-tickets.js in plain Node with fake agents, to check its scheduling and merge handling
+// Runs workflows/run-tickets-engine.js in plain Node with fake agents, to check its scheduling and merge handling
 // without a real /run-tickets run.
 //
 //   node tests/run-tickets-workflow.test.mjs
@@ -13,7 +13,7 @@
 // anything the /run-tickets skill's lead does before or after the workflow.
 import { readFileSync } from 'node:fs'
 
-const src = readFileSync(process.env.WF_SRC || new URL('../workflows/run-tickets.js', import.meta.url), 'utf8')
+const src = readFileSync(process.env.WF_SRC || new URL('../workflows/run-tickets-engine.js', import.meta.url), 'utf8')
   .replace('export const meta =', 'const meta =')
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
 const sleep = ms => new Promise(r => setTimeout(r, ms))
@@ -241,6 +241,7 @@ const implDone = (sha, extra = {}) => ({ result: { status: 'done', head_sha: sha
 {
   const { out } = await run({ ...base, slots: ['s1'], gates: ['npm test'], tickets: [T('P', [], ['p'])] })
   check('the result records the policy the run used', out.policy.fileLocks === true && out.policy.mergeGates === true)
+  check('the result points the lead at the finish steps', /skills\/run-tickets\/finish\.md/.test(out.next || ''))
 }
 
 console.log(failures ? `\n${failures} check(s) failed` : '\nall checks passed')

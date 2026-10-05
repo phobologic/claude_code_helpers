@@ -74,7 +74,7 @@ Findings:
   ...
 
 Recommendations:
-  - <specific change: file and setting, e.g. SMALL_DIFF in workflows/run-tickets.js>, because <finding #>
+  - <specific change: file and setting, e.g. SMALL_DIFF in workflows/run-tickets-engine.js>, because <finding #>
   - Pipeline bugs to fix now: <from the blocked list, or "none">
 
 Open questions: <what more data would settle, and roughly how many more runs that takes>

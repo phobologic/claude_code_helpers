@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+# Setup helper for /run-tickets: integration branch, worktrees, epics, and ticket claims.
+"""
+Usage: run-tickets-setup --stamp STAMP --branch BRANCH --slots N --tickets ID[,ID...]
+                         [--merge-main] [--session-epic]
+
+Run from the repo root after the owner has confirmed the plan. It does, in order:
+
+  1. Create BRANCH from main if it does not exist. Refuses (exit 2) when BRANCH
+     is checked out in the main repo or in a worktree outside this run, since the
+     integration worktree needs it.
+  2. Create the integration worktree .worktrees/run-STAMP-integration on BRANCH.
+  3. With --merge-main, merge main into BRANCH there. On a conflict it aborts the
+     merge and stops (exit 3) before creating anything else, so the lead can ask
+     the owner. Re-running without --merge-main continues: existing worktrees are
+     reused.
+  4. Record BRANCH's commit as baseBranch, the point the final integration check
+     compares failures against.
+  5. Create N slot worktrees .worktrees/run-STAMP-slot-1..N, each on a
+     placeholder branch named after the slot (git worktree add's default);
+     implementers check out their ticket branch there. run-tickets-finish
+     deletes the placeholders.
+  6. Find or create the backlog epic (tk backlog ensure).
+  7. With --session-epic, create the findings epic for an ID-mode run whose
+     tickets share no parent.
+  8. tk start every ticket, so a concurrent run cannot pick them up.
+
+Prints one JSON object on stdout:
+
+  repoRoot, integrationBranch, integrationWorktree, slots, baseBranch,
+  backlogParent      the Workflow args these steps decide, ready to copy
+  sessionEpic        the new findings epic's id, or null
+  createdBranch      true when step 1 created BRANCH
+  mergeMain          null, {"result": "merged"|"up_to_date"}, or
+                     {"result": "conflict", "files": [...]} (exit 3)
+
+Worktrees are made with worktree-init so .worktreelinks (including .tickets/)
+is applied. Set TK_SCRIPT to use another tk binary.
+"""
+
+import json
+import os
+import subprocess
+import sys
+
+BIN = os.path.dirname(os.path.realpath(__file__))
+TK = os.environ.get("TK_SCRIPT", "tk")
+
+
+def die(msg, code=1, out=None):
+    if out is not None:
+        print(json.dumps(out, indent=2))
+    print(f"run-tickets-setup: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def run(cmd, cwd=None, check=True):
+    res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    if check and res.returncode != 0:
+        die(f"{' '.join(cmd)} failed: {(res.stderr or res.stdout).strip()}")
+    return res
+
+
+def git(*args, cwd=None, check=True):
+    return run(["git", *args], cwd=cwd, check=check)
+
+
+def parse_args(argv):
+    opts = {"merge_main": False, "session_epic": False}
+    it = iter(argv)
+    for a in it:
+        if a in ("--stamp", "--branch", "--slots", "--tickets"):
+            try:
+                opts[a[2:]] = next(it)
+            except StopIteration:
+                die(f"{a} needs a value")
+        elif a == "--merge-main":
+            opts["merge_main"] = True
+        elif a == "--session-epic":
+            opts["session_epic"] = True
+        else:
+            die(f"unknown argument {a!r}\n{__doc__}")
+    missing = [k for k in ("stamp", "branch", "slots", "tickets") if not opts.get(k)]
+    if missing:
+        die(f"missing --{', --'.join(missing)}\n{__doc__}")
+    try:
+        opts["slots"] = int(opts["slots"])
+    except ValueError:
+        die(f"--slots must be a number, got {opts['slots']!r}")
+    if opts["slots"] < 1:
+        die("--slots must be at least 1")
+    opts["tickets"] = [t for t in opts["tickets"].split(",") if t]
+    return opts
+
+
+def worktrees():
+    """Registered worktrees as {path: branch or None}."""
+    out, path = {}, None
+    for line in git("worktree", "list", "--porcelain").stdout.splitlines():
+        if line.startswith("worktree "):
+            path = line[len("worktree "):]
+            out[path] = None
+        elif line.startswith("branch ") and path:
+            out[path] = line[len("branch "):].removeprefix("refs/heads/")
+    return out
+
+
+def worktree_init(name, root, branch=None):
+    cmd = [os.path.join(BIN, "worktree-init"), name, root] + ([branch] if branch else [])
+    return run(cmd).stdout.strip().splitlines()[-1]
+
+
+def main(argv):
+    o = parse_args(argv)
+    root = git("rev-parse", "--show-toplevel").stdout.strip()
+    if os.path.isfile(os.path.join(root, ".git")):
+        die(f"run from the main repo, not the linked worktree {root}")
+    root = os.path.realpath(root)
+    stamp, branch = o["stamp"], o["branch"]
+    integration_path = os.path.join(root, ".worktrees", f"run-{stamp}-integration")
+
+    # 1. Branch
+    for path, b in worktrees().items():
+        if b == branch and os.path.realpath(path) != integration_path:
+            where = "the main repo" if os.path.realpath(path) == root else path
+            die(f"{branch} is checked out in {where}; switch it away so the integration worktree can use it", 2)
+    created = git("show-ref", "--verify", "--quiet", f"refs/heads/{branch}", check=False).returncode != 0
+    if created:
+        git("branch", branch, "main", cwd=root)
+
+    # 2. Integration worktree
+    integration = worktree_init(f"run-{stamp}-integration", root, branch)
+
+    # 3. Merge main in
+    merge_main = None
+    if o["merge_main"]:
+        if git("merge-base", "--is-ancestor", "main", branch, cwd=root, check=False).returncode == 0:
+            merge_main = {"result": "up_to_date"}
+        elif git("merge", "--no-edit", "main", cwd=integration, check=False).returncode == 0:
+            merge_main = {"result": "merged"}
+        else:
+            files = git("diff", "--name-only", "--diff-filter=U", cwd=integration, check=False).stdout.split()
+            git("merge", "--abort", cwd=integration, check=False)
+            die(f"merging main into {branch} conflicts in {', '.join(files) or '(unknown files)'}; aborted",
+                3, {"integrationBranch": branch, "integrationWorktree": integration,
+                    "mergeMain": {"result": "conflict", "files": files}})
+
+    # 4. Base for the integration check
+    base = git("rev-parse", branch, cwd=root).stdout.strip()
+
+    # 5. Slots
+    slots = [worktree_init(f"run-{stamp}-slot-{n}", root) for n in range(1, o["slots"] + 1)]
+
+    # 6-7. Epics
+    backlog = run([TK, "backlog", "ensure"], cwd=root).stdout.strip().splitlines()[-1]
+    session = None
+    if o["session_epic"]:
+        session = run([TK, "create", f"run-tickets {stamp}", "-t", "epic", "-p", "2",
+                       "-d", f"Findings from /run-tickets over {' '.join(o['tickets'])}"],
+                      cwd=root).stdout.strip().splitlines()[-1]
+
+    # 8. Claim
+    for tid in o["tickets"]:
+        run([TK, "start", tid], cwd=root)
+
+    print(json.dumps({
+        "repoRoot": root,
+        "integrationBranch": branch,
+        "integrationWorktree": integration,
+        "slots": slots,
+        "baseBranch": base,
+        "backlogParent": backlog,
+        "sessionEpic": session,
+        "createdBranch": created,
+        "mergeMain": merge_main,
+    }, indent=2))
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

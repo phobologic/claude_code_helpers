@@ -41,6 +41,8 @@ HISTORY = os.path.expanduser("~/.claude/run-history")
 LABEL_RE = re.compile(r"^(impl|ac|review|merge) (\S+)(?: r(\d+))?$")
 STEP_NAMES = {"impl": "implementing", "ac": "verifying AC", "review": "reviewing", "merge": "merging"}
 STEP_SHORT = {"impl": "impl", "ac": "AC", "review": "review", "merge": "merge"}
+# The workflow was named run-tickets until 2026-10-05; finished-run metadata keeps the name it ran under.
+WORKFLOW_NAMES = ("run-tickets-engine", "run-tickets")
 
 
 def load_json(path):
@@ -99,7 +101,7 @@ def run_candidates(root):
             runs[rec["runId"]]["mtime"] = os.path.getmtime(path)
     for path in glob.glob(os.path.join(PROJECTS, "*", "*", "workflows", "wf_*.json")):
         meta = load_json(path)
-        if not meta or meta.get("workflowName") != "run-tickets":
+        if not meta or meta.get("workflowName") not in WORKFLOW_NAMES:
             continue
         if (meta.get("args") or {}).get("repoRoot") != root and meta.get("runId") not in runs:
             continue
