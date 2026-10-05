@@ -576,7 +576,7 @@ async function runTicket(t, slot) {
     }
 
     const merge = await withMergeLock(() => mergeHalted ? null : agent(mergePrompt(t), {
-      label: `merge ${t.id}`, phase: 'Merge', schema: MERGE_SCHEMA, model: 'haiku', effort: 'low',
+      label: `merge ${t.id}`, phase: 'Merge', schema: MERGE_SCHEMA, model: 'sonnet', effort: 'medium',
     }))
     if (mergeHalted && !merge) return block(`not merged: run halted after merge error: ${mergeHalted}`)
     if (!merge) {
