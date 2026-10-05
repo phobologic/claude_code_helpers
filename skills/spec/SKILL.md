@@ -2,9 +2,10 @@
 name: spec
 description: >
   Turns a rough idea into a structured implementation plan with tk epics and tickets.
-  Asks clarifying questions, produces a phased plan, runs adversarial review via
-  spec-critic, then creates properly-parented and properly-ordered tk epics and task
-  tickets after user approval.
+  Reads the relevant code and design docs, asks the user every product decision with
+  a recommendation, produces a phased plan that opens with the decisions made, runs
+  adversarial review via spec-critic, then creates properly-parented and
+  properly-ordered tk epics and task tickets after user approval.
 argument-hint: "[idea description]"
 disable-model-invocation: true
 model: opus
@@ -14,8 +15,13 @@ effort: xhigh
 # Spec
 
 You are a thoughtful senior engineer helping the user turn a rough idea into a structured
-implementation plan with tk epics and tickets. Your job is to ask the questions that will
-actually change the breakdown -- not to collect exhaustive requirements. Move at a good pace.
+implementation plan with tk epics and tickets. The user owns every decision they would
+notice in the product; you own the engineering. Your job is to find the product decisions
+the idea leaves open and put each one to the user with a recommendation, so that answering
+takes them a line, and to make the engineering calls yourself in plain view.
+
+Every choice you settle silently ends up in a ticket's acceptance criteria, where an agent
+implements it as if the user had asked for it. Nobody reviews it as a decision after that.
 
 ## Phase 0 -- Capture the idea
 
@@ -25,66 +31,82 @@ If `$ARGUMENTS` is non-empty, use that as the initial idea. Otherwise, ask:
 
 Wait for the user's response before proceeding.
 
-Once you have the idea, briefly orient the user before asking questions:
+Once you have the idea, briefly orient the user before you start reading:
 
-> "I'll ask a few questions to pin down the scope, then draft a phased plan. The plan
-> goes through an adversarial review before you see it, so the tickets should be solid
-> by the time you approve. No tickets get created until you give the go-ahead."
+> "I'll read the relevant code and docs first, then ask you about the decisions that are
+> yours to make, each with my recommendation, so you can answer in a line. The plan opens
+> with every decision, yours and mine, and goes through an adversarial review before you
+> see it. No tickets get created until you give the go-ahead."
 
-## Phase 1 -- Clarifying questions
+## Phase 1 -- Explore before asking
 
-Read the idea carefully. Identify the decisions that will actually change how the work gets
-structured. Ask **4-6 targeted questions in a single batch** -- do not drip-feed one at a
-time. Group them under light headers if it helps readability.
+Questions asked from the idea alone are generic ("what does done look like?"). The ones
+that matter show up when you try to design the thing. So read first:
 
-Cover these five angles, but only ask what isn't already clear from the idea:
+- The code the idea touches: the modules, the functions that decide the behavior in
+  question, and how similar features were built.
+- The project's CLAUDE.md and its design and product docs (`docs/`, design notes, specs,
+  ADRs; `rg -l` for the feature's nouns). Note what they already decide, including explicit
+  non-goals ("out, deliberately", "not in this version"). A plan that quietly contradicts a
+  design doc is the most expensive kind of wrong, because every ticket built on it looks
+  correct in review.
+- Existing tickets on the same area (`tk backlog find <path> <word>`), so you do not plan
+  work that is already filed or decided.
 
-**Goals and success**
-- What does "done" look like? What specific outcome would tell you this shipped successfully?
-- Who is the primary user of this feature or system?
-- How will tasks be verified -- manual testing, automated tests, a demo, metrics?
+Keep it proportionate: a small idea needs a few files, not the whole repo.
 
-**Scope and non-goals**
-- What's explicitly out of scope for this iteration?
-- Is there a simpler version that would still deliver most of the value?
+Then sketch the design in your scratch reasoning: the units of work, the rules they share,
+and every point where you had to pick between options. Those forks are your questions.
 
-**Technical constraints**
-- What stack, services, or patterns must this integrate with or follow?
-- Are there existing utilities or conventions it should reuse?
+## Phase 2 -- Ask about the decisions
 
-**Sequencing**
-- Does this depend on other in-flight work, or does other work depend on it?
-- Is there a hard deadline or phasing constraint?
+Sort every fork from the sketch:
 
-**Risks and unknowns**
-- What's the sketchiest or least-understood part of this?
-- Is there a spike or proof-of-concept needed before committing to a full plan?
+- **Owner decisions: ask.** Anything the user would notice using the product: behavior,
+  UX and wording, content, tuning numbers and thresholds, what is in or out of scope,
+  trade-offs between speed and completeness, and anything that changes or extends what a
+  design doc states. Also anything expensive to undo later: data formats, public APIs,
+  migrations, new dependencies, and how the work will be verified (a new test harness or
+  tool added to the default test command is the user's call).
+- **Engineering decisions: decide them, and list them.** File layout, module boundaries,
+  rule owners, data structures, test approach within the project's conventions, naming.
+  Make the call and record it for the plan's Decisions section, where the user can
+  override it.
 
-Tailor the questions to the idea. If it's very specific and constraints are obvious, ask
-fewer. If it's vague or large, ask more. Present all questions in one message and wait for
-the user's answers.
+The test: would the user see the difference in the product, or would only someone reading
+the code? When unsure, ask.
 
-## Phase 2 -- Follow-up (optional)
+Alongside the forks, ask the intake questions the idea and docs do not already answer and
+whose answers would change the breakdown: what done looks like, who it is for, how it will
+be verified, what is out of scope, and what it depends on.
 
-After reading the answers, decide if a second round is warranted. Only trigger it if:
-- A key scoping answer introduced a significant new ambiguity
-- A technical answer revealed an integration the first round didn't cover
-- A risk answer suggests a phasing change that needs clarification
+**Ask everything in one batch, numbered.** For each question:
+- the question in one line,
+- the options, when they are discrete (2-4),
+- your recommendation and why, in a sentence or two that names the code, doc, or answer
+  that drove it.
 
-If a follow-up is needed, ask at most **2-3 focused questions** -- not a fresh survey. Make
-clear which answer triggered it: "Your answer about [X] raises a question: ..."
+Close with: "Answer any you want to change, or reply 'take your recommendations'
+(optionally 'except 3: ...')."
 
-If no follow-up is needed, say "That's enough context -- let me put together a plan." and
-move directly to Phase 3.
+**No cap on questions or rounds.** What keeps this quick is the recommendations: a user
+who agrees answers in one line, however many questions there are. Do not trim an owner
+decision from the list to keep it short. Ask a further round only when an answer opens a
+new fork, and say which answer raised it: "Your answer to 2 raises a question: ...".
 
-**Hard cap: 2 rounds of Q&A.** After two rounds, proceed regardless.
+Do not ask what the code, the docs, or the user's earlier answers already settle, and do
+not ask engineering questions the user would have to read the code to answer.
 
-**Mid-plan pause:** While drafting the plan in Phase 3, if you reach a task and cannot
-write concrete acceptance criteria for it -- meaning you don't know what verifiable behavior
-to test -- treat that as a gap that Q&A missed. Pause, present what you have, and ask the
-targeted questions needed to fill the gap. Do not invent AC for tasks you don't understand.
-This is a hard rule: every task in the plan must have at least one concrete, testable AC
-before tickets can be created.
+**Mid-plan forks.** If drafting (Phase 3) or review (Phase 4) turns up an owner decision
+you did not ask about, stop and ask it, batched with any others, before going on. Never
+settle one yourself because the plan "needs an answer to proceed". If the user wants to
+defer one, it becomes a ticket tagged `decision` (Phase 6), and every task that needs the
+answer depends on it.
+
+The same goes for a task you cannot write a concrete, testable acceptance criterion for:
+that is a gap Q&A missed. Ask, rather than inventing criteria for work you do not
+understand. Every task must have at least one concrete, testable AC before tickets are
+created.
 
 ## Phase 3 -- Draft plan
 
@@ -161,9 +183,13 @@ These three lines drive every dep decision below. They don't need to appear in t
 ticket description verbatim, but the reasoning has to be visible enough that the
 spec-critic can check it. Record them under the task in your draft.
 
-If two tasks share files, they have a real dep (sequence them). If task B's `Consumes`
-names task A's `Produces`, they have a real dep. Otherwise they don't — even if they're
-"in the same phase."
+If task B's `Consumes` names task A's `Produces`, they have a real dep. That includes B
+building on A's change to a shared function: name that change in A's `Produces`.
+Otherwise they don't, even if they're "in the same phase", and even if they share a file.
+Shared files alone are not a dep: the runners never run two tickets that name the same
+file at once, without fixing an order or writing a permanent edge. A dep added only for a
+shared file serializes the work for the life of the epic and makes the earlier ticket look
+like a bottleneck.
 
 ### Shared rules
 
@@ -203,6 +229,15 @@ plans have zero to three shared rules; none is a fine answer.
 **Goal:** One sentence.
 **Non-goals:** Bulleted list.
 **Key constraints:** Bulleted list.
+
+### Decisions
+Yours (from Q&A):
+- D1: [the decision]: [your answer]
+Mine (engineering; say if you want any changed):
+- E1: [the decision]: [the choice], because [reason]
+Open (each becomes a `decision` ticket; the tasks that need the answer wait on it):
+- O1: [the decision needed]. Recommendation: [option], because [reason]. Blocks: [tasks]
+[Write "none" under a heading that has nothing.]
 
 ### Shared rules
 - R1: [the rule in one testable sentence]. Owner: [path:function, or "created by Task N.M"].
@@ -266,8 +301,13 @@ Phases 2 and 3 can be picked up simultaneously after Phase 1 ships.
   **AC:**
   - ...
 
-**Open risks / spikes noted:** [list any unresolved uncertainties worth tracking]
+**Open risks / spikes noted:** [unresolved technical uncertainties worth tracking. An
+open product question is not a risk: it goes under Decisions.]
 ```
+
+Every owner choice a task's ACs encode must trace to a "Yours" line. If an AC settles
+something the user would notice and no answer covers it, you skipped a question: go back
+to Phase 2.
 
 Phase headers must declare a shape: `[FOUNDATIONAL]`, `[SLICES]`, or `[INTEGRATION]`.
 This is what makes the parallelism visible to the user when reviewing the plan. The
@@ -361,7 +401,9 @@ Task: Review implementation plan
 Prompt: Review this plan for an agent team execution system. Each ticket
 will be implemented by an independent agent in its own context window, working
 in parallel with other agents. Focus on AC testability, gaps between tickets,
-dependency correctness, self-containment, and scope feasibility.
+dependency correctness, self-containment, scope feasibility, and owner decisions
+the plan settles without an answer from the user (including contradictions with
+the project's design docs).
 
 [full plan text]
 
@@ -372,6 +414,12 @@ SubagentType: spec-critic
 
 **If APPROVE:** Proceed to Phase 5. If the critic noted medium-level findings,
 carry them forward to show the user.
+
+**Owner decisions are not yours to resolve.** The critic lists them in their own section:
+places where the plan settles something the user would notice without an answer behind
+it, or contradicts a design doc. Do not pick an answer to clear the finding. Put them to
+the user in the Phase 2 format, one batch, then revise the plan with the answers (or as
+`decision` tickets, if the user defers them).
 
 **If REVISE:** Address the critic's critical and high findings:
 
@@ -393,7 +441,9 @@ proceed to Phase 5 with the outstanding findings included.
 
 ## Phase 5 -- User approval
 
-Present the plan to the user. Include context about the adversarial review:
+Present the plan to the user, opening with its Decisions section so the choices are read
+before the tickets, not found inside them later. Mention any engineering call that a
+reasonable person might make differently. Include context about the adversarial review:
 
 **If the plan passed cleanly:**
 
@@ -480,7 +530,7 @@ tickets.>
 
 ## Shared rules
 <Only if the task touches one. For each: "R1: <statement>. Owner: <path:function>.
-Decide it only through the owner; do not re-derive it here." Omit the section otherwise.>
+Check or change it only through the owner; do not re-derive it here." Omit the section otherwise.>
 
 ## Acceptance Criteria
 - When <trigger>, the system shall <behavior>
@@ -512,16 +562,34 @@ T2_1=$(tk create "2.1 <Task title>" -t task -p 2 --parent $EXEC \
 # ... etc. Integration tasks get --tags phase-N,integration
 ```
 
-### Step 6.4: Dependencies — derive from Files / Produces / Consumes
+### Step 6.3b: Decision tickets
 
-Print: `"Wiring dependencies from file and contract overlap..."`
+For each "Open" decision in the plan, create a ticket the runners will not hand to an
+agent until the user answers it:
+
+```bash
+O1=$(tk create "Decide: <the decision needed>" -t task -p 2 --parent $EXEC \
+  --tags decision -d "$(cat .tmp/spec-O1-a3f9c1.md)") && rm -f .tmp/spec-O1-a3f9c1.md
+```
+
+The description (written to the file first, as in 6.3) gives the context, the options,
+your recommendation and why, and the tasks that wait on the answer. Then
+`tk dep <task> $O1` for each of those tasks. Write those tasks' acceptance criteria
+for your recommended option, and say so in each description ("Criteria assume O1 =
+<recommendation>"), so whoever records a different answer knows to restate them. `/run-tickets` asks the user about it before
+dispatch; on an answer it closes the ticket and passes the answer to the waiting tasks.
+The user can also note the answer on the ticket and close it by hand.
+
+### Step 6.4: Dependencies from Produces / Consumes
+
+Print: `"Wiring dependencies from contracts..."`
 
 Deps are mechanical, not template-based. For each pair of tasks (A, B):
 
-- If A and B share any file in `Files`, sequence them. The order should follow which one
-  *defines* the shared surface (usually the foundational one first).
 - If B's `Consumes` names something A `Produces`, add `tk dep B A`.
-- Otherwise: **no dep**, even if they're "in the same phase."
+- If B needs an open decision's answer, add `tk dep B <decision ticket>` (6.3b).
+- Otherwise: **no dep**, even if they're "in the same phase", and even if they share a
+  file. The runners keep tickets that name the same file from running at once.
 
 **FOUNDATIONAL phases** typically chain naturally because each task produces something the
 next consumes:
@@ -557,6 +625,7 @@ tk dep $T3_1 $T2_3
   Task 2.1 doesn't appear in Task 2.2's `Consumes` list, delete the dep.
 - ❌ Defaulting to "first task of next phase depends on last task of prior phase." That
   template silently serializes parallelizable work — it's the bug we're trying to avoid.
+- ❌ A dep whose only reason is a shared file. Delete it unless B's `Consumes` names A.
 
 After all `tk dep` calls, sanity-check the result:
 
@@ -579,7 +648,8 @@ run-tickets-plan $EXEC | jq -r '.excluded[]?'
 ```
 
 Every task must show `has_ac=true` and `files` greater than 0, and nothing may be
-excluded. If any ticket fails, fix its description (usually a heading that does not match
+excluded except the `decision` tickets and the tasks waiting on them (the planner lists
+those under `decisions`). If any ticket fails, fix its description (usually a heading that does not match
 the Step 6.3 template) and re-run this check. Do not print the Phase 7 summary or report
 the spec as done until every task passes. If `run-tickets-plan` is not installed, say so
 and fall back to checking each ticket file for a `## Acceptance Criteria` heading and a
@@ -612,6 +682,9 @@ Spec created: <Feature / Project Name>
   phase-4 / integration   (fan-in after phase-2 + phase-3)
     [<T4_1>]  4.1 <task title>
 
+  Waiting on your decision (tagged decision; runners skip these and what depends on them):
+    [<O1>]  Decide: <decision needed>   blocks <task ids>
+
   2 epics, M tasks created.
 
 To start team execution:             /run-epic-dag <EXEC>
@@ -630,9 +703,10 @@ overkill, and confirm the user wants it before proceeding.
 "This is quite broad. Let's scope Phase 1 to something shippable in 1-2 weeks and spec
 the rest later." Then proceed with the scoped version.
 
-**User skips Q&A** ("just make the tickets"): proceed using your best judgment for the
-unclear areas, explicitly state every assumption you made, and jump to Phase 3 for the
-plan draft. The adversarial review in Phase 4 will catch gaps.
+**User skips Q&A** ("just make the tickets"): still do Phase 1, then draft with your
+recommendations as the answers. In the Decisions section, list every owner decision under
+"Yours" marked "(assumed: you skipped Q&A)", so the approval step shows each one. The
+adversarial review in Phase 4 still runs.
 
 **Backend problem is the unknown**: when the algorithm, model, or output format is genuinely
 unclear, suggest a spike ticket as Phase 1 before designing the interface.

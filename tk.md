@@ -78,6 +78,25 @@ tk query '.type == "epic"'                  # List all epics
 tk query '.parent == "<epic-id>"'           # Find children of an epic
 ```
 
+## Gate tags
+
+Two tags keep a ticket away from agents until a person acts. The ticket
+runners skip both, along with everything that depends on them.
+
+- **`needs-human`**: a person must do or approve the work itself (a check
+  only a person can make, a credential, an action outside the repo).
+- **`decision`**: the work needs the owner's choice first: behavior or
+  wording a user would notice, content, a tuning number, scope, or a
+  departure from a design doc. The description states the decision needed,
+  the options, and a recommendation. `/run-tickets` asks the owner before
+  dispatch, notes the answer on the ticket, and removes the tag (or, for a
+  ticket that is only the question, closes it and passes the answer to the
+  tickets waiting on it).
+
+Tag a ticket `decision` whenever you file one whose right outcome is a
+choice rather than a fix. Without the tag, the next run implements your
+recommendation as if it had been approved.
+
 ## Rules
 
 - Priority uses integers 0-4 (0=critical, 4=backlog), not words
@@ -85,6 +104,7 @@ tk query '.parent == "<epic-id>"'           # Find children of an epic
 - Use `tk add-note <id> "text"` to append context instead of editing
 - Always use `--parent` to add tickets to an epic (membership). Use `tk dep` only for execution ordering. Never substitute `tk dep` for `--parent`.
 - `tk dep A B` means "A is blocked until B is done" — it does NOT mean "A belongs to B" or "A was found during B". When in doubt, use `--parent`.
+- Add `tk dep A B` only when A needs B's output. Never add one because two tickets touch the same file: the runners already keep those from running at once, and a dep fixes an order permanently and serializes everything chained to it.
 - Tickets are gitignored — no need to commit them
 - **Never write inline Python or jq pipelines to filter/sort tickets** — use `tk triage` instead. It handles multi-key sorting, confidence extraction from ticket bodies, and both table and JSON output in a single safe command.
 - **Never use `sed` or direct file edits to update ticket fields** — use `tk set <id> --priority N --type T ...` instead. Supports priority, type, status, assignee, parent, and tags in one call.

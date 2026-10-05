@@ -32,7 +32,27 @@ stop.
 Check for child tickets. If there are none, tell the user the epic has no
 tickets and stop.
 
-Mark all non-closed child tickets as in-progress immediately, so concurrent
+**Owner gates.** Tickets tagged `needs-human` (a person must do them) or
+`decision` (the owner has not made the call yet) never go to an implementer,
+and neither does anything that depends on them. Then read the rest: a ticket
+that asks for a choice the owner would notice in the product ("decide
+whether", "a design call", untuned numbers) and that nothing settles is a
+decision too. Ask the user about all of them in one batch, with your
+recommendation for each, and record the answers:
+- Decided: note the answer on the ticket (`tk add-note <id> "Owner decision:
+  <answer>"`) and remove its `decision` tag (`tk set <id> --tags <its other
+  tags>`; `tk set` replaces the list). If the answer changes what its
+  acceptance criteria assume, add a note starting `ACCEPTANCE CRITERIA:` that
+  restates them for the decided option.
+- Decided, and the ticket is only the question (like `/spec`'s "Decide: ..."
+  tickets): note the answer, close it, and add the answer as a note on each
+  ticket waiting on it.
+- Left open: tag it `decision`.
+List every ticket still gated in the startup summary. Gated tickets are not
+marked in-progress below, and no dispatch step picks them.
+`/run-tickets` Phase 1 "Decisions" has the full procedure.
+
+Mark every non-closed, ungated child ticket as in-progress immediately, so concurrent
 runs cannot claim the same tickets:
 
 ```bash
@@ -487,6 +507,12 @@ A wave is complete when `current_wave` is empty **and** all agents are idle (no
 in-flight reviews or verifications pending). A ticket in a findings-rework loop is
 not closed, so it holds the wave open.
 
+Every wave, the first included, leaves out gated tickets (see "Owner gates") and
+never holds two tickets that name the same file in their `**Files**:` lines.
+When two ready tickets share one, dispatch the one more tickets wait on and hold
+the other for the next wave. Specs no longer add deps for shared files, so this
+is what keeps such tickets from conflicting at merge.
+
 When a wave completes, check for newly unblocked epic tickets. If any exist, trigger
 a wave boundary restart before dispatching them (see "When the wave is complete" below).
 If none remain and all child tickets are closed, proceed to Phase 4.
@@ -703,7 +729,7 @@ and verifiers — no pending verifications or reviews). Check for new work:
 
 ```bash
 tk ready
-# filter output to tickets belonging to this epic
+# filter output to tickets belonging to this epic, minus gated ones (needs-human, decision)
 ```
 
 **If no tickets remain unblocked and all child tickets are closed:** proceed to Phase 4.

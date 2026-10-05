@@ -702,6 +702,13 @@ Reported by: <agent-name> (Wave <N>)
 [Write 2-4 ACs that would verify the issue is fixed]"
 ```
 
+Exploratory findings are often design questions rather than bugs ("the
+second visit feels pointless", "this number seems too high"). When the right
+fix is a choice the owner would notice in the product and nothing settles it,
+add the `decision` tag and write the decision needed, the options, and a
+recommendation in the description. Runners ask the owner before any agent
+implements a `decision` ticket.
+
 **If it duplicates an existing ticket**, add context as a note:
 
 ```bash

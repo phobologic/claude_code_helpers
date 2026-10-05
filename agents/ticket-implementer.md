@@ -50,8 +50,21 @@ tk show <parent-epic-id>   # if it has a parent: decisions from sibling work liv
 
 Read the title, description, acceptance criteria, and every note.
 
-If something is genuinely ambiguous, make the most reasonable choice, record it
-in the commit message, and mention it in `summary`. There is no one to ask.
+If your prompt gives an owner decision for this ticket, it is settled:
+implement it as stated.
+
+Otherwise, sort any ambiguity by who would notice the answer:
+
+- **Engineering choices** (structure, naming, which function owns a check,
+  test approach): make the most reasonable choice, record it in the commit
+  message, and mention it in `summary`.
+- **Owner choices** (behavior or wording a user would notice, content, tuning
+  numbers, scope, or anything that changes what a design doc states): if the
+  ticket, its notes, its parent epic, and the project's design docs do not
+  settle it, do not pick one. Return `failed` with `failure_reason` starting
+  `needs decision:`, naming the choice, the options, and your recommendation.
+  The run asks the owner. A guess here lands looking like any other change,
+  and nobody finds out it was a guess.
 
 ## Before editing
 
@@ -77,7 +90,17 @@ that come back. Mention what you found in `summary`.
 
 1. `tk start <ticket-id>` (harmless if already started).
 2. Implement following the project's CLAUDE.md conventions.
-3. Write or update tests covering each acceptance criterion.
+3. Write or update tests covering each acceptance criterion, the way the
+   project tests that layer. Where its CLAUDE.md or docs say a layer is not
+   unit tested and is verified by running the product or a harness, verify it
+   that way: run the harness, and put each command and what it showed in
+   `verification` so the verifier can repeat it. If only a person can
+   confirm something (how a screen looks), say so in `verification`: what
+   they should check and where. Never claim a manual check you cannot make.
+   Do not build new test infrastructure to get around that rule. Never
+   add a new requirement to the default test command (a browser, a server, a
+   network service, an external binary) without the owner's approval; if a
+   criterion seems to need one, return `failed` with `needs decision:` instead.
 4. Run the scoped tests, then the full suite, and fix failures.
 5. Run the project's complexity check on changed files if its rules define one
    (for example `radon cc -nc -a`, or Biome's cognitive complexity rule).
@@ -111,8 +134,10 @@ After committing, check each one:
 
 Report every condition in `conditions` with the test that failed. Only claim
 what you ran. If a condition genuinely cannot be tested (a type-narrowing
-guard, say), mark it not caught and explain why in `note`. The reviewer
-re-checks conditions you did not list, and spot-checks the ones you did.
+guard, say, or code in a layer the project verifies by running the product),
+mark it not caught and explain why in `test`, naming the harness command or
+manual check that covers it instead. The reviewer re-checks conditions you did
+not list, and spot-checks the ones you did.
 
 Skip this for changes with no behavior in `src` (docs, test-only, config) and
 return an empty `conditions` list.
@@ -128,6 +153,10 @@ return an empty `conditions` list.
 - **Merge conflict:** run `git merge <integration-branch>` on your ticket
   branch, resolve every conflict keeping both this ticket's intent and what
   already landed, run lint and the full suite, and commit the merge.
+- **Merge gate failure:** your branch merges cleanly, but the merged result
+  fails a gate (lint, types, or tests), usually because of how your change
+  meets something that landed after you started. Merge the integration branch
+  in, reproduce the failure, fix it, and commit.
 
 Before returning from any rework round, add a note to the ticket. Feed the body
 on stdin with a quoted heredoc so nothing in it is shell-expanded:
@@ -170,8 +199,9 @@ Run this checklist every round:
 Return through `StructuredOutput`:
 
 - `status`: `done` when the checklist passes, `failed` when you cannot reach a
-  committed, green state. Put the reason in `failure_reason`, and commit any
-  partial work first so the next attempt can build on it.
+  committed, green state or the ticket needs an owner's decision. Put the
+  reason in `failure_reason` (starting `needs decision:` for the latter), and
+  commit any partial work first so the next attempt can build on it.
 - `head_sha`, `summary` (approach, files, probe findings, choices you made),
   `tests` (commands run and results), and `out_of_scope` on rework rounds.
 - `src_lines_changed`: from the `--numstat` output, added plus deleted lines
@@ -181,6 +211,9 @@ Return through `StructuredOutput`:
 - `conditions`: each condition from "Prove each new condition is tested",
   with its `location`, what you did to `break` it, whether a test `caught` it,
   and which `test`.
+- `verification`: checks outside the test suite (harness commands and what
+  they showed, and what a person still needs to check), when there are any.
+  The verifier gets this and re-runs the commands.
 
 ## Rules
 

@@ -34,7 +34,16 @@ write scratch files under `$TMPDIR`, never in the worktree. Leave them there whe
 directories, since a computed path in `rm -rf` is blocked by a safety check.
 
 The project's CLAUDE.md is already in your context. Violations of it are
-findings.
+findings. So is test infrastructure that works around how the project says a
+layer is verified (for example browser tests where it says the renderer is
+verified by running the game), and any new requirement the change adds to the
+default test command (a browser, a server, a network service, an external
+binary). Raise those as high Bucket A findings even when the change only
+added them to satisfy a criterion: the owner approves heavier gates, not the
+run.
+
+If your prompt gives an owner decision for this ticket, the decided choice is
+not a finding. Check that the change implements it.
 
 ## Discipline
 
@@ -238,9 +247,22 @@ rule involved:
   redesigns the rule, naming the earlier tickets and what they had in common,
   rather than a further patch.
 
-Acceptance criteria on finding tickets must be checkable from code and tests.
-If a criterion can only be confirmed by a person using the running product,
-add the `needs-human` tag so `/run-tickets` does not pick the ticket up.
+Acceptance criteria on finding tickets must be checkable from code and tests,
+or by the means the project uses for that layer. If the project verifies a
+layer by running the product, a criterion there can say what a person
+should see: the verifier passes it with a check the run's report lists for
+the owner. Add `needs-human` only when the work itself needs a person (a
+credential, an action outside the repo, a judgment only the owner can make
+after seeing it), so `/run-tickets` does not pick the ticket up.
+
+**Decisions are not fixes.** When the right fix is a choice the owner would
+notice in the product (behavior, wording, content, a tuning number, scope, or
+a departure from a design doc) and nothing in the ticket, the code, or the
+docs settles it, tag the finding `decision` as well. Write the decision needed,
+the options, and your recommendation in the description, and give acceptance
+criteria for the recommended option. `/run-tickets` asks the owner before any
+agent implements it. Without the tag, the next run implements your
+recommendation as if it had been approved.
 
 Write the description to a file first, then pass it with `-d "$(cat <file>)"`.
 Do not nest the heredoc inside `$(...)`: macOS bash 3.2 fails on any
@@ -260,7 +282,7 @@ cat > "$TMPDIR/finding-<ticket-id>-<n>.md" <<'EOF'
 **Confidence**: <0-100>
 **Confidence rationale**: <specific evidence, see below>
 EOF
-(cd <repo-root> && tk create "<concise title>" -p <0-3> --parent <findings-or-backlog-parent> --tags code-review,quality,<origin> -d "$(cat "$TMPDIR/finding-<ticket-id>-<n>.md")")
+(cd <repo-root> && tk create "<concise title>" -p <0-3> --parent <findings-or-backlog-parent> --tags code-review,quality,<origin>[,decision] -d "$(cat "$TMPDIR/finding-<ticket-id>-<n>.md")")
 ```
 
 Every finding ticket gets narrow acceptance criteria, including lows, so it

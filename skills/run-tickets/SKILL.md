@@ -2,13 +2,13 @@
 name: run-tickets
 description: >
   Implement a set of tk tickets (an epic's children or an explicit list) in parallel
-  using the run-tickets workflow: pooled worktrees, one fresh implementer per ticket,
-  AC verification when the ticket has acceptance criteria, adversarial quality review,
-  and one-at-a-time merges into an integration branch. Use only when the user types
-  /run-tickets.
-argument-hint: "<epic-id> | <ticket-id> [ticket-id ...] [--resume]"
+  using the run-tickets workflow: decisions put to the owner before dispatch, pooled
+  worktrees, one fresh implementer per ticket, AC verification when the ticket has
+  acceptance criteria, adversarial quality review, and gated one-at-a-time merges into
+  an integration branch. Use only when the user types /run-tickets.
+argument-hint: "<epic-id> | <ticket-id> [ticket-id ...] [--slots N] [--resume]"
 disable-model-invocation: true
-model: sonnet
+model: opus
 ---
 
 # Run Tickets
@@ -23,7 +23,14 @@ or after it returns.
 
 `$ARGUMENTS` is either a single epic ID (its open children are the run) or one
 or more ticket IDs. `--resume` means a previous run was interrupted: include
-tickets already marked `in_progress` and reuse existing branches.
+tickets already marked `in_progress` and reuse existing branches. `--slots N`
+overrides the pool size (see "Pool size"). Remove both flags from the
+arguments before passing them to `run-tickets-plan`, except `--resume`, which
+becomes `--include-in-progress`.
+
+The user's request wins over this skill's defaults. If they name an
+integration branch, a slot count, gates, or anything else this skill would
+otherwise choose, use theirs and say so in the plan.
 
 No arguments: print the usage line from `argument-hint` and stop.
 
@@ -37,9 +44,9 @@ run-tickets-plan [--include-in-progress] <args>
 ```
 
 Pass `--include-in-progress` only for `--resume`. The output has `tickets`
-(topologically ordered, each with in-set `deps`, `has_ac`, `files`),
-`excluded` (with reasons), `cycles`, `overlaps`, `unannotated`, `large`,
-`setup_warnings`, and `stats`.
+(topologically ordered, each with in-set `deps`, `tags`, `has_ac`, `files`),
+`excluded` (with reasons), `decisions`, `decision_candidates`, `cycles`,
+`overlaps`, `unannotated`, `large`, `setup_warnings`, and `stats`.
 
 If `tickets` is empty, show the `excluded` list and stop.
 
@@ -49,6 +56,63 @@ downstream of them. If a ticket's text says a person must do or approve it
 out and offer `tk set <id> --tags <existing>,needs-human`, then re-run the
 planner, rather than excluding it by hand.
 
+**Decisions.** A ticket whose outcome is a choice rather than a fix must not
+reach an implementer until the owner has made that choice. An implementer that
+meets one alone picks something, and the pick lands looking like any other
+change. Do this before anything else in the plan, because answers change what
+runs.
+
+1. **Find them.** `decisions` lists tickets tagged `decision`, including
+   ones outside the input (`outside_run`) that input tickets wait on.
+   `decision_candidates` lists runnable tickets whose wording suggests one
+   ("decide", "design call", "untuned"), with the matching sentence. The
+   wording check is a hint and misses tickets whose ask is in a note, so read
+   every runnable ticket's title and description yourself (`tk show-multi`).
+   A ticket is a decision when the right outcome is something the owner would
+   notice using the product and the ticket does not settle it: behavior, UX or
+   wording, content, tuning numbers and thresholds, scope, or a change to what
+   a design doc states (including its explicit non-goals). A ticket that
+   offers options but whose answer follows from the code, a design doc, or a
+   stated convention is not a decision: note which source settles it and let
+   it run.
+2. **Prepare each one.** Read the ticket and the docs or code it names. Write
+   one line for the decision needed, the realistic options, and your
+   recommendation with the reason (the doc, code, or evidence behind it). A
+   ticket that says to decide "after a playthrough" or "against real play"
+   needs that evidence first: recommend leaving it open unless the evidence is
+   already in its notes.
+3. **Ask once.** Show the list, numbered, then `AskUserQuestion` (header
+   "Decisions"): **Take every recommendation**, **Leave them all open**, or
+   **Answer one by one**. One by one: up to 4 questions per call, one per
+   decision, with options for the recommendation (first, marked
+   "(Recommended)"), the main alternative, and "Leave open"; the automatic
+   "Other" takes a custom answer.
+4. **Record the answers.**
+   - Decided: `tk add-note <id> "Owner decision (/run-tickets, <date>): <answer>"`.
+     If it carries the `decision` tag, remove just that tag:
+     `tk set <id> --tags <its other tags>` (`tk set` replaces the tag list).
+     The ticket runs, and its `decision` field in the workflow args carries
+     the answer to its implementer, verifier, and reviewer. If the answer
+     differs from what the ticket's acceptance criteria assume (they are
+     often written for the recommendation), also add a note that starts
+     `ACCEPTANCE CRITERIA:` and restates every criterion for the decided
+     option; the verifier reads the latest one. An `outside_run` ticket with
+     work to do joins this run: add its id to the arguments.
+   - Decided, and the ticket is only the question (nothing to build, like the
+     "Decide: ..." tickets `/spec` creates): note the answer and close it
+     instead. Add the same note to each ticket that waits on it, and give
+     each of those the answer as its `decision` (join several with "; ").
+     Restate their criteria as above where the answer changes them.
+   - Left open: tag it `decision` if it is not already, and add a note with
+     the decision needed and your recommendation, so the next run (or person)
+     starts from it.
+
+   Then re-run the planner once all answers are recorded: decided tickets
+   and what they unblock join `tickets`, and open ones stay excluded with
+   everything downstream of them.
+
+Never let an untagged decision ticket run because nobody asked.
+
 **Setup warnings.** These are repo problems that break agents in fresh
 worktrees. Show each one and offer to fix it before proceeding. The common one
 is a JS repo with no `node_modules/` line in `.worktreelinks`: offer to append
@@ -56,10 +120,26 @@ it (commit that on the main branch only if the user agrees). Do not proceed
 past an unfixed setup warning without the user's explicit choice.
 
 **File overlaps.** Each entry in `overlaps` names a file touched by two or more
-tickets with no dependency path between them. Those will likely conflict at
-merge. Propose `tk dep <later> <earlier>` edges (earlier = the ticket that
-defines the shared surface, else the lower ID) and ask once whether to add them.
-If yes, run the `tk dep` calls and re-run `run-tickets-plan`.
+tickets with no dependency path between them. The workflow handles these
+itself: it never runs two tickets that name the same file at once, and holds
+the file until the ticket that has it merges or blocks, so the next one starts
+from the merged result. Do not add `tk dep` edges for overlaps. A dependency is
+permanent, forces one order, and makes the earlier ticket look like it has
+dependents, which raises its effort to max. Mention overlaps in Warnings only
+when one file is named by four or more tickets, since those will take turns.
+Tickets in `unannotated` have no `**Files**:` line, so nothing holds them
+apart from others; list them.
+
+**Gates.** Find the project's lint, type check, and test commands (CLAUDE.md,
+`package.json` scripts, Makefile or justfile, `pyproject.toml`, CI config).
+The merge step runs them on every merged result before it commits, so the
+integration branch stays green ticket by ticket and a bad interaction between
+two tickets is caught at the merge that caused it. Use check-only forms: a
+command that rewrites files (`--fix`, `--write`, `format` without `--check`,
+snapshot updates) would leave the integration worktree dirty. Show them in the
+plan. If CLAUDE.md or CI config says the full suite is slow, say so: the user
+may drop it from the gates, and the final integration check still runs
+everything.
 
 **Large tickets.** Each entry in `large` has more than 6 acceptance criteria.
 Big tickets take the most review rounds to settle, and one that hits the
@@ -88,10 +168,11 @@ refilling the epic with problems it did not cause, so the epic can finish. If
 `tk backlog` finds none, it is created in Phase 2. When the run is over the
 backlog epic itself, it is both the findings parent and the backlog.
 
-**Pool size.** `SLOTS = min(4, stats.max_width)`: never more slots than the
-dependency graph can use at once, so a strict chain gets one. Slots are only
-a concurrency cap, so being one short on an unusual graph costs a little
-time, not correctness.
+**Pool size.** `SLOTS = min(6, stats.max_width)`, or `--slots N` when given:
+never more slots than the dependency graph can use at once, so a strict chain
+gets one. Slots are only a concurrency cap, and the workflow fills them with
+the tickets the most other tickets wait on first, so being one short on an
+unusual graph costs a little time, not correctness.
 
 Present the plan:
 
@@ -99,19 +180,22 @@ Present the plan:
 Run: <epic <id>: <title> | <N> tickets>
 Tickets: <N> runnable (<K> with AC), <R> ready now · longest chain <L> · max width <W>
 
-  [<id>] <title>  deps: <ids or ->  AC: <yes|no>
+  [<id>] <title>  deps: <ids or ->  AC: <yes|no>  <"decided: <answer>" when the owner decided it>
   ...
 
 Excluded:
   [<id>] <title>: <reason>
-Warnings: <setup warnings, overlaps not sequenced, unannotated tickets, large tickets, or "none">
+Left open for you: <decision tickets and what each holds back, or "none">
+Warnings: <setup warnings, files shared by 4+ tickets, unannotated tickets, large tickets, or "none">
 
 Integration branch: <branch> (<integration.reason>; <N> ahead of main, <M> behind)   Slots: <SLOTS>
+Gates on every merge: <commands, or "none: integration check only">
 Findings parent: <id | new session epic>   Backlog: <id | new, created at setup>
 ```
 
 Confirm with `AskUserQuestion` (header "Run tickets"): **Proceed
-(Recommended)** or **Cancel**. Stop on Cancel. Nothing has been changed yet.
+(Recommended)** or **Cancel**. Stop on Cancel. Apart from the decision notes
+and tags from "Decisions", nothing has been changed yet.
 
 ## Phase 2: Set up
 
@@ -120,8 +204,8 @@ REPO_ROOT=$(git rev-parse --show-toplevel)
 STAMP=$(date +%Y%m%d-%H%M%S)
 ```
 
-**Integration branch: take it from the planner's `integration` field.** Never
-choose one yourself. When the tickets belong to an epic, `integration.branch`
+**Integration branch: take it from the planner's `integration` field**, unless
+the user named one. Never choose one yourself. When the tickets belong to an epic, `integration.branch`
 is `epic/<id>`, even in ID mode: an epic branch that has not reached `main`
 yet is where the code these tickets touch lives, so a branch cut from `main`
 would not contain it. Only when `integration.branch` is null do you create
@@ -155,10 +239,21 @@ existing `run/*` branch to reuse (`git branch --list 'run/*'`).
    # ... through run-$STAMP-slot-<SLOTS>
    ```
    Each call prints the absolute worktree path on stdout. Record them.
-4. **Session epic** (ID mode with no shared parent only):
+4. **Gate baseline.** Run each gate once in the integration worktree, timing
+   it, with a Bash timeout of 600000 ms. Drop a gate from `gates`, and tell
+   the user which one and why, when:
+   - it already fails there, since it would fail every merge;
+   - it takes more than about 8 minutes, since the merge step's 10-minute
+     command limit would cut it off;
+   - `git status --porcelain --untracked-files=no` is not empty afterwards,
+     since it rewrites files. Restore them with `git checkout -- .` and look
+     for its check-only form before dropping it.
+   The integration check at the end still runs everything and separates old
+   failures from new ones.
+5. **Session epic** (ID mode with no shared parent only):
    `tk create "run-tickets $STAMP" -t epic -p 2 -d "Findings from /run-tickets over <ids>"`.
    **Backlog epic:** `BACKLOG=$(tk backlog ensure)`, from the repo root.
-5. **Claim.** `tk start <id>` for every runnable ticket, so a concurrent run
+6. **Claim.** `tk start <id>` for every runnable ticket, so a concurrent run
    cannot pick them up.
 
 ## Phase 3: Launch the workflow
@@ -184,10 +279,16 @@ Workflow({
     findingsParent: "<id>",
     backlogParent: "<BACKLOG>",
     baseBranch: "<BASE>",                         // integration branch's starting commit (Phase 2)
-    tickets: [{ id, title, deps, has_ac }, ...]   // from the plan, same order
+    gates: ["<command>", ...],                    // passed the baseline in Phase 2; [] for none
+    tickets: [{ id, title, deps, has_ac, files, decision }, ...]   // from the plan, same order
   }
 })
 ```
+
+`decision` is the owner's answer from Phase 1, verbatim; omit it for tickets
+that had no open question. A ticket that depends on a closed decision ticket
+(answered by hand or in an earlier run) gets that ticket's answer note too.
+On `--resume`, rebuild it from the ticket's `Owner decision` note.
 
 If the name is not found, launch the same thing with
 `scriptPath: "~/.claude/workflows/run-tickets.js"` expanded to an absolute path.
@@ -225,8 +326,25 @@ is a transcript, not the result. It is
   tk status <id> open
   tk add-note <id> "/run-tickets: blocked: <reason>. Work so far is on branch ticket/<id>."
   ```
+  When the reason contains `needs decision:`, the implementer says it found a
+  choice the ticket does not settle. Check that claim the way Phase 1
+  "Decisions" step 1 does, against the ticket, its notes, and the docs. If
+  it holds, tag the ticket `decision` as well, so the next run asks instead
+  of retrying, and list it under "Left open for you". If something does
+  settle it, add a note saying what, leave the tag off, and suggest
+  `--resume`.
 - `stalled`: never started because a dependency did not merge. Reopen it with
   a note naming the dependency.
+
+A merged ticket's `humanChecks` lists criteria the verifier could not settle
+from code and tests: the project verifies that layer by running the product,
+or the evidence showed the criterion itself was wrong. They go in the report
+for the user to check by hand. A check starting `DISPUTED:` means the ticket
+merged without meeting a criterion as written, because the verifier agreed
+its premise was false. The owner has to confirm that, so file a ticket for
+each one under the findings parent (tagged `needs-human`, with the check, the
+source ticket, and the merge sha in the description). It then appears in
+"Blocking wrap" until the owner closes it.
 
 If `mergeHalted` is set, the integration worktree was in an unexpected state.
 Leave that worktree in place and show the user its `git status`.
@@ -283,10 +401,13 @@ but say what was already broken.
 ```
 /run-tickets finished on <branch>: <M> merged, <B> blocked, <S> stalled
 
-  [<id>] <title>  merged <sha>   (AC fails <n>, review rounds <n>, conflicts <n>)
+  [<id>] <title>  merged <sha>   (AC fails <n>, review rounds <n>, conflicts <n>, gate fails <n>)
   [<id>] <title>  BLOCKED: <reason>
   [<id>] <title>  stalled: <reason>
 
+Decided by you this run: <id: answer, one per line, or "none">
+Left open for you: <id: decision needed; recommendation; what it holds back, one per line, or "none">
+Needs your check: <id: what to check by hand, from humanChecks, one per line, or "none">
 Integration check: <pass | fail | preexisting_only | no_checks | skipped>
   new: <failures this run introduced, or "none">
   pre-existing (already failing before this run): <failures, or "none">

@@ -49,10 +49,37 @@ branches.
    If the only test for a criterion cannot fail, the criterion is not met.
 
    **UI criteria need UI evidence.** A criterion about what is rendered, shown,
-   or displayed ("shall render unsellable", "shall show an error") is met only
-   by rendering code plus a test at the rendering layer. A simulation-side or
-   model-side guard is not evidence that something renders; if the UI part is
-   untested, the criterion is not met and the failure says what is missing.
+   or displayed ("shall render unsellable", "shall show an error") needs
+   evidence at the layer that renders it. A simulation-side or model-side
+   guard is not evidence that something renders.
+
+   **The project decides how a layer is verified, not you.** Read what its
+   CLAUDE.md and docs say about testing before you ask for a test. Where the
+   project tests the rendering layer, the evidence is a test there; an
+   untested UI part is not met. Where it says a layer is not unit tested and is
+   verified by running the product ("verify it by running the game"), do not
+   fail the criterion for lacking a test there. That failure would push the
+   implementer to build test infrastructure the project chose not to have.
+   Instead:
+   - If the project has a harness for it (a play or scenario runner, a
+     recorded route), run the implementer's harness command yourself and quote
+     the output. Output that shows the behavior is evidence.
+   - If only a person can confirm it, check that the code implements it, mark
+     it met, and set `human_check` to what the person should look at: the
+     screen, the state to reach, what they should see.
+
+   **A wrong criterion goes to a person, not back to rework.** Sometimes the
+   implementer finds that a criterion's premise is false: the bug it describes
+   is somewhere else, or the behavior it forbids never happened. Do not take
+   that on trust. If you confirm it yourself from the code or by running it,
+   mark the criterion met with a `human_check` that starts `DISPUTED:` and
+   says what the evidence shows and what the owner should confirm. The run
+   files a ticket for each one, so the owner signs off before the work ships.
+   If you cannot confirm it, it is a `FAIL` as usual.
+
+   Your prompt may list checks the implementer ran outside the test suite.
+   They are claims: re-run a command before counting its output, and never
+   count "checked by hand" as evidence.
 
    A criterion you cannot evaluate because it is ambiguous is a `FAIL`, with a
    failure explaining the ambiguity. Do not hedge.
@@ -63,6 +90,7 @@ branches.
 
    1. <criterion summary>: met. Code: <file:line>. Test: <file:line> asserts <assertion>
    2. <criterion summary>: NOT MET: <what is missing or wrong>
+   3. <criterion summary>: met, NEEDS A PERSON: <what to check>. Code: <file:line>. Evidence: <harness output or why none>
    ...
 
    To pass: <what needs to change, if FAIL>
@@ -73,7 +101,8 @@ branches.
 
 Return through `StructuredOutput`:
 
-- `verdict`: `PASS` only if every criterion is met. `ERROR` if you could not
+- `verdict`: `PASS` only if every criterion is met (including those met with
+  a `human_check`). `ERROR` if you could not
   verify at all because of the environment: the ticket is not found, a branch
   does not exist, or the worktree check failed. Put what you saw in `error`.
   Never report an environment problem as `FAIL`: that sends the implementer
@@ -83,6 +112,8 @@ Return through `StructuredOutput`:
   but `retry()` in `client.py` loops indefinitely" is useful. Empty on `PASS`.
 - `criteria`: one entry per criterion, met or not, with the implementing code
   location and the quoted assertion that tests it (or why none qualifies).
+  Set `human_check` only on the criteria described above; leave it out
+  everywhere else. The run's report lists each one for the owner.
 
 ## Rules
 

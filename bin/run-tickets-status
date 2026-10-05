@@ -136,11 +136,13 @@ def read_journal(run_id):
 # ---------- ticket state ----------
 
 def ticket_states(args, result, events):
-    caps = {"acFails": 3, "qrReworks": 3, "conflicts": 2, **(args.get("caps") or {})}
+    caps = {"acFails": 3, "qrReworks": 3, "conflicts": 2, "gateFails": 2, **(args.get("caps") or {})}
 
     def fresh(t):
         return {"id": t["id"], "title": t["title"], "deps": t["deps"], "has_ac": t["has_ac"],
+                "files": t.get("files") or [], "decision": t.get("decision"),
                 "impl_rounds": 0, "ac_fails": 0, "review_rounds": 0, "reworks": 0, "conflicts": 0,
+                "gate_fails": 0, "human_checks": [],
                 "active": None, "last": None, "outcome": None, "sha": "", "findings": [], "agents": [],
                 "results": {}, "src_lines_changed": None, "prior_fixed": 0, "prior_total": 0}
 
@@ -188,6 +190,9 @@ def ticket_states(args, result, events):
         elif kind == "ac":
             if res.get("verdict") == "FAIL":
                 t["ac_fails"] += 1
+            elif res.get("verdict") == "PASS":
+                t["human_checks"] = [f"{c.get('criterion')}: {c['human_check']}"
+                                     for c in res.get("criteria") or [] if c.get("human_check")]
             if res.get("verdict") == "ERROR" or t["ac_fails"] >= caps["acFails"]:
                 t["outcome"] = "blocked"
         elif kind == "review":
@@ -208,6 +213,10 @@ def ticket_states(args, result, events):
             elif res.get("result") == "conflict":
                 t["conflicts"] += 1
                 if t["conflicts"] >= caps["conflicts"]:
+                    t["outcome"] = "blocked"
+            elif res.get("result") == "gate_fail":
+                t["gate_fails"] += 1
+                if t["gate_fails"] >= caps["gateFails"]:
                     t["outcome"] = "blocked"
             else:
                 t["outcome"] = "blocked"
@@ -236,12 +245,21 @@ def describe(t, tickets_by_id, finished):
         if kind == "review" and verdict in ("CLEAN", "FINDINGS"):
             return f"waiting to merge (review {verdict}; merges run one at a time)"
         nxt = {"impl": "AC verification" if t["has_ac"] else "review", "ac": "review" if verdict == "PASS" else "rework",
-               "review": "rework", "merge": "conflict resolution"}[kind]
+               "review": "rework",
+               "merge": "gate failure fix" if verdict == "gate_fail" else "conflict resolution"}[kind]
         return f"starting {nxt} (last: {kind} {verdict})"
     waiting = [d for d in t["deps"] if tickets_by_id.get(d, {}).get("outcome") != "merged"]
     if finished:
         return "never started"
-    return f"waiting on {', '.join(waiting)}" if waiting else "queued for a worktree slot"
+    if waiting:
+        return f"waiting on {', '.join(waiting)}"
+    # The workflow never runs two tickets that name the same file at once.
+    for other in tickets_by_id.values():
+        if other["id"] != t["id"] and other["agents"] and not other["outcome"]:
+            shared = sorted(set(t["files"]) & set(other["files"]))
+            if shared:
+                return f"waiting for {shared[0]} (held by {other['id']})"
+    return "queued for a worktree slot"
 
 
 # ---------- timing ----------
@@ -503,7 +521,8 @@ def main(argv):
         "policy": (result or {}).get("policy"),
         "tickets": [{k: t[k] for k in ("id", "title", "status", "outcome", "deps", "has_ac", "dependents",
                                        "src_lines_changed", "impl_rounds", "ac_fails", "review_rounds",
-                                       "reworks", "conflicts", "prior_findings", "findings", "timing", "steps")}
+                                       "reworks", "conflicts", "gate_fails", "human_checks", "decision",
+                                       "prior_findings", "findings", "timing", "steps")}
                     for t in tickets],
     }
     if "--archive" in argv:
@@ -529,9 +548,14 @@ def main(argv):
     width = max(len(t["id"]) for t in tickets) if tickets else 4
     for t in tickets:
         counts = (f"agent runs: impl {t['impl_rounds']}, AC {t['ac_fails']} failed, "
-                  f"review {t['review_rounds']}, merge conflicts {t['conflicts']}")
+                  f"review {t['review_rounds']}, merge conflicts {t['conflicts']}"
+                  + (f", gate fails {t['gate_fails']}" if t["gate_fails"] else ""))
         print(f"  {t['id']:<{width}}  {t['status']}")
         print(f"  {'':<{width}}  {t['title']}  ({counts})")
+        if t["decision"]:
+            print(f"  {'':<{width}}  owner decision: {t['decision']}")
+        for check in t["human_checks"]:
+            print(f"  {'':<{width}}  needs a person to check: {check}")
         if t["timing"]:
             print(f"  {'':<{width}}  {timing_line(t['timing'], t['outcome'])}")
         if t["steps"]:

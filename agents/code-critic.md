@@ -161,6 +161,13 @@ tk create "<concise one-sentence title>" \
 
 Priority mapping: Critical → `-p 0`, High → `-p 1`, Medium → `-p 2`. Do **not** create tickets for Low findings.
 
+**Decisions are not fixes.** If the right fix is a choice the owner would
+notice in the product (behavior, wording, content, a tuning number, scope, or
+a departure from a design doc) and nothing in the code or docs settles it, add
+the `decision` tag and put the decision needed, the options, and your
+recommendation in the description. Runners ask the owner before any agent
+implements a `decision` ticket.
+
 For findings with code examples or multi-line descriptions, create first then add a note:
 
 Write the note body to `.tmp/tk-note.txt` with the `Write` tool, then feed it in

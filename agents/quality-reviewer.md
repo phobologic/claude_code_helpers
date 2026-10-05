@@ -213,6 +213,14 @@ tk create "<concise issue title>" \
 Priority mapping: Critical -> `-p 0`, High -> `-p 1`, Medium -> `-p 2`,
 Low -> `-p 3`.
 
+**Decisions are not fixes.** If the right fix is a choice the owner would
+notice in the product (behavior, wording, content, a tuning number, scope, or
+a departure from a design doc) and nothing in the ticket, code, or docs
+settles it, add the `decision` tag. Put the decision needed, the options, and
+your recommendation in the description. Runners ask the owner before any
+agent implements a `decision` ticket; without the tag, your recommendation
+gets implemented as if it had been approved.
+
 **For findings with code examples or multi-line detail:**
 
 Write the note body to `.tmp/tk-note.txt` with the `Write` tool, then feed it in

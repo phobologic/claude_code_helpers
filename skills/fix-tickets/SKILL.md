@@ -36,7 +36,27 @@ tk query '.parent == "<epic-id>"'
 Filter out any tickets with status `closed` or `in-progress`. If nothing remains,
 tell the user and stop.
 
-Mark all remaining tickets as in-progress immediately, before planning or confirmation,
+**Owner gates.** Tickets tagged `needs-human` (a person must do them) or
+`decision` (the owner has not made the call yet) never go to an implementer,
+and neither does anything that depends on them. Then read the rest: a ticket
+that asks for a choice the owner would notice in the product ("decide
+whether", "a design call", untuned numbers) and that nothing settles is a
+decision too. Ask the user about all of them in one batch, with your
+recommendation for each, and record the answers:
+- Decided: note the answer on the ticket (`tk add-note <id> "Owner decision:
+  <answer>"`) and remove its `decision` tag (`tk set <id> --tags <its other
+  tags>`; `tk set` replaces the list). If the answer changes what its
+  acceptance criteria assume, add a note starting `ACCEPTANCE CRITERIA:` that
+  restates them for the decided option.
+- Decided, and the ticket is only the question (like `/spec`'s "Decide: ..."
+  tickets): note the answer, close it, and add the answer as a note on each
+  ticket waiting on it.
+- Left open: tag it `decision`.
+List every ticket still gated in the startup summary. Gated tickets are not
+marked in-progress below, and no dispatch step picks them.
+`/run-tickets` Phase 1 "Decisions" has the full procedure.
+
+Mark all remaining ungated tickets as in-progress immediately, before planning or confirmation,
 so concurrent runs cannot claim the same tickets:
 
 ```bash

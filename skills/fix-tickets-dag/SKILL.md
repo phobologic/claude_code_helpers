@@ -61,7 +61,27 @@ remaining tickets are unblocked, report:
 
 Stop — do not spawn any agents.
 
-Mark all remaining (non-closed, non-in-progress) tickets as in-progress
+**Owner gates.** Tickets tagged `needs-human` (a person must do them) or
+`decision` (the owner has not made the call yet) never go to an implementer,
+and neither does anything that depends on them. Then read the rest: a ticket
+that asks for a choice the owner would notice in the product ("decide
+whether", "a design call", untuned numbers) and that nothing settles is a
+decision too. Ask the user about all of them in one batch, with your
+recommendation for each, and record the answers:
+- Decided: note the answer on the ticket (`tk add-note <id> "Owner decision:
+  <answer>"`) and remove its `decision` tag (`tk set <id> --tags <its other
+  tags>`; `tk set` replaces the list). If the answer changes what its
+  acceptance criteria assume, add a note starting `ACCEPTANCE CRITERIA:` that
+  restates them for the decided option.
+- Decided, and the ticket is only the question (like `/spec`'s "Decide: ..."
+  tickets): note the answer, close it, and add the answer as a note on each
+  ticket waiting on it.
+- Left open: tag it `decision`.
+List every ticket still gated in the startup summary. Gated tickets are not
+marked in-progress below, and no dispatch step picks them.
+`/run-tickets` Phase 1 "Decisions" has the full procedure.
+
+Mark all remaining (non-closed, non-in-progress, ungated) tickets as in-progress
 immediately, before planning or confirmation, so concurrent runs cannot
 claim the same tickets:
 
@@ -186,18 +206,18 @@ done
 # and report any path that appears in 2+ tickets without a dep relationship.
 ```
 
-For each file with 2+ tickets, the warning recommends one of:
-- Add a `tk dep` between them so they sequence (cheapest)
-- Bundle into one ticket and re-run (cleanest, more user effort)
-- Proceed and accept the merge-conflict rework cycle (fine if rare)
+For each file with 2+ tickets, the warning says they will take turns. If
+four or more tickets share one file, also suggest bundling the smallest of
+them into one ticket, since they will run one after another anyway.
 
-**Auto-fix file-overlap pairs.** For each unsequenced overlap, propose a
-`tk dep <later> <earlier>` edge in the warnings section and ask the user
-once: *"Inject these dep edges before dispatch? [Y/n]"*. Default Yes. On
-Yes, run the `tk dep` calls and re-print the dep graph. On No, proceed
-with the warning standing. Do **not** silently proceed without
-confirmation — file-overlap on `/multi-review` batches is the most common
-cause of rebase thrash in DAG runs.
+**Hold file-overlap pairs apart in the run; do not add deps.** File overlap
+on `/multi-review` batches is the most common cause of rebase thrash in DAG
+runs, so two tickets that name the same file must not be in flight at once.
+Enforce that at dispatch (see `dispatch_ready_tickets()`), not with `tk dep`
+edges. A dep is permanent, forces one order, and chains every ticket that
+touches a busy file into one serial queue: in one `/run-tickets` run, edges
+like these built a nine-ticket chain that took most of the run's five hours.
+No question to the user is needed.
 
 ### Startup summary
 
@@ -756,7 +776,11 @@ procedure dispatch_ready_tickets():
           in ticket_state (not DISPATCHED/in-flight/CLOSED/BLOCKED)
 
   for each idle implementer slot S (agent_pool[S].assignee == null):
-    T = next ticket from fresh_ready
+    T = next ticket from fresh_ready, skipping any ticket tagged needs-human
+        or decision, and any ticket whose **Files**:
+        paths overlap a ticket still in flight (dispatched and not yet
+        CLOSED or BLOCKED); a skipped ticket is picked up by a later call,
+        once the ticket holding the file closes
     if no such T exists: break
 
     ticket_state[T] = { state: DISPATCHED, verification_phase: null }

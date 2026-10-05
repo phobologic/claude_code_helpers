@@ -118,6 +118,12 @@ high findings stay in `<EPIC_ID>` wherever they are.
   ```
   Priority mapping: `critical` → `-p 0`, `high` → `-p 1`, `medium` → `-p 2`, `low` → `-p 3`
 
+  If the right fix is a choice the owner would notice in the product
+  (behavior, wording, content, a tuning number, scope, or a departure from a
+  design doc) and nothing settles it, add the `decision` tag and put the
+  decision needed, the options, and the reviewer's recommendation in the
+  description. Runners ask the owner before any agent implements it.
+
 - **File mode**: Append to your in-memory findings list.
 
 **If it duplicates an existing finding (same site):**

@@ -49,7 +49,27 @@ If `tk ready` returns no tickets for this epic, report:
 
 Stop — do not spawn any agents.
 
-Mark all non-closed child tickets as in-progress immediately, so concurrent
+**Owner gates.** Tickets tagged `needs-human` (a person must do them) or
+`decision` (the owner has not made the call yet) never go to an implementer,
+and neither does anything that depends on them. Then read the rest: a ticket
+that asks for a choice the owner would notice in the product ("decide
+whether", "a design call", untuned numbers) and that nothing settles is a
+decision too. Ask the user about all of them in one batch, with your
+recommendation for each, and record the answers:
+- Decided: note the answer on the ticket (`tk add-note <id> "Owner decision:
+  <answer>"`) and remove its `decision` tag (`tk set <id> --tags <its other
+  tags>`; `tk set` replaces the list). If the answer changes what its
+  acceptance criteria assume, add a note starting `ACCEPTANCE CRITERIA:` that
+  restates them for the decided option.
+- Decided, and the ticket is only the question (like `/spec`'s "Decide: ..."
+  tickets): note the answer, close it, and add the answer as a note on each
+  ticket waiting on it.
+- Left open: tag it `decision`.
+List every ticket still gated in the startup summary. Gated tickets are not
+marked in-progress below, and no dispatch step picks them.
+`/run-tickets` Phase 1 "Decisions" has the full procedure.
+
+Mark every non-closed, ungated child ticket as in-progress immediately, so concurrent
 runs cannot claim the same tickets:
 
 ```bash
@@ -162,15 +182,15 @@ tk query --epic <epic-id> '.status != "closed"' \
 
 Print warnings inline with the startup summary as a `### Warnings` section.
 
-**Auto-fix file-overlap pairs.** For each unsequenced overlap pair the
-pre-check finds, propose a `tk dep <later> <earlier>` edge in the warnings
-section (pick the order from the spec's intended sequence — usually the
-lower-numbered ticket goes first). Ask the user once: *"Inject these dep
-edges before dispatch? [Y/n]"*. Default Yes. On Yes, run the `tk dep` calls
-and re-print the dep graph. On No, proceed with the warning standing — the
-user has accepted the rework risk. Do **not** silently proceed without
-confirmation; unsequenced file-overlap is the most common cause of merge-
-conflict thrash in DAG runs (multiple rebases per ticket).
+**Hold file-overlap pairs apart in the run; do not add deps.** Unsequenced
+file overlap is the most common cause of merge-conflict thrash in DAG runs
+(multiple rebases per ticket), so two tickets that name the same file must not
+be in flight at once. Enforce that at dispatch (see `dispatch_ready_tickets()`),
+not with `tk dep` edges. A dep is permanent, forces one order for the rest of
+the epic's life, and chains every ticket that touches a busy file into one
+serial queue: in one `/run-tickets` run, edges like these built a nine-ticket
+chain that took most of the run's five hours. Report overlap pairs in the
+warnings section as "will take turns", with no question to the user.
 
 ### Startup summary
 
@@ -863,7 +883,11 @@ procedure dispatch_ready_tickets():
   → fresh_ready (ticket IDs not yet DISPATCHED/in-flight)
 
   for each idle implementer slot S (agent_pool[S].assignee == null):
-    T = next ticket from fresh_ready not yet in ticket_state
+    T = next ticket from fresh_ready not yet in ticket_state, skipping any
+        ticket tagged needs-human or decision, and any
+        ticket whose **Files**: paths overlap a ticket still in flight
+        (dispatched and not yet CLOSED or BLOCKED); a skipped ticket is
+        picked up by a later call, once the ticket holding the file closes
     if no such T exists: break
 
     ticket_state[T] = { state: DISPATCHED, verification_phase: null }

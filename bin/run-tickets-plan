@@ -13,12 +13,21 @@ Resolves the input to a set of runnable tickets and prints one JSON object:
                     an epic that has (or, in epic mode, will get) a branch; null
                     means cut a fresh run/<stamp> from main
   tickets           runnable tickets, topologically ordered:
-                      {id, title, priority, parent, deps, has_ac, files}
+                      {id, title, priority, parent, tags, deps, has_ac, files}
                     deps lists only in-set tickets this one waits on
   excluded          [{id, title, reason}] for tickets that will not run
+  decisions         [{id, title, tags, outside_run, downstream}] for tickets tagged
+                    decision: they wait on the owner's call, and so does everything
+                    downstream. outside_run marks an open decision ticket that is not
+                    in the input set but that input tickets wait on
+  decision_candidates
+                    [{id, title, phrase}] for runnable tickets whose description reads
+                    like a decision (decide, design call, untuned, ...). A hint for the
+                    lead to judge, not a verdict
   cycles            dependency cycles among the input tickets (each a list of ids)
   overlaps          [{file, tickets}] for files named by 2+ tickets that have no
-                    dependency path between them (likely merge conflicts)
+                    dependency path between them. The workflow never runs two tickets
+                    that name the same file at once, so these take turns
   unannotated       ids of runnable tickets with no **Files**: line
   large             [{id, title, ac_count, dependents}] for tickets with more than 6
                     acceptance criteria: likely too big to settle within the rework
@@ -27,8 +36,9 @@ Resolves the input to a set of runnable tickets and prints one JSON object:
 
 Tickets are excluded when closed, when they are epics, when in_progress (unless
 --include-in-progress, used to resume a stopped run), when tagged needs-human
-(a gate a person must clear), when they wait on an open ticket outside the set,
-or when they sit downstream of an excluded ticket.
+(a gate a person must clear) or decision (a choice the owner has not made yet),
+when they wait on an open ticket outside the set, or when they sit downstream
+of an excluded ticket.
 
 Also reports `setup_warnings` about the repo itself, such as a package.json with
 no node_modules/ entry in .worktreelinks (worktrees would lack dependencies).
@@ -46,6 +56,24 @@ AC_RE = re.compile(
 )
 FILES_RE = re.compile(r"\*\*Files\*\*\s*:?\s*(.+)")
 
+# Wording that marks a ticket whose outcome is a choice rather than a fix. Only a
+# hint: the lead reads each match and every other ticket, and decides whether the
+# owner must be asked. Phrases, not bare stems, so code that "decides whether" or a
+# settled "decision D1" does not match.
+DECISION_RE = re.compile(
+    r"\bdecid(?:e|ing) (?:whether|which|how|what|if|between|on|during|after|later|the)\b"
+    r"|\bworth (?:a decision|deciding)\b|\bneeds? (?:a|an|the owner'?s?) (?:decision|call)\b"
+    r"|\bdesign (?:call|question|decision)\b|\buntuned\b|\bto be decided\b"
+    r"|\bjudge?ment call\b|\bopen question\b|\b(?:owner|human)'?s? (?:call|decision|approval|sign-off)\b",
+    re.IGNORECASE,
+)
+
+# tk show appends these after the description; their text is other tickets' or earlier runs'.
+TRAILING_SECTIONS_RE = re.compile(r"^## (?:Notes|Blockers|Blocking|Children|Linked)\b.*$", re.MULTILINE)
+
+# Words people put in a **Files** line that are not paths. Paths become in-run locks,
+# so prose must not.
+NOT_PATHS = {"n/a", "na", "tbd", "none", "etc", "e.g", "i.e", "various", "see"}
 
 def tk(*args):
     out = subprocess.run(["tk", *args], capture_output=True, text=True)
@@ -73,15 +101,44 @@ def title_and_body(ticket_id):
     return (m.group(1).strip() if m else ticket_id), body
 
 
+def path_like(part):
+    """A token that names a file or directory: has a slash or an extension, and is not prose."""
+    if part.lower().rstrip(".") in NOT_PATHS or part.endswith("."):
+        return False
+    if not re.fullmatch(r"[\w.\-/@+]+", part):
+        return False
+    return "/" in part or bool(re.search(r"\w\.[A-Za-z0-9]{1,8}$", part))
+
+
 def parse_files(body):
     files = []
     for line in FILES_RE.findall(body):
         for part in re.split(r"[,\s]+", line):
             part = part.strip("`*()[];")
             part = re.sub(r":\d[\d\-,]*$", "", part)  # strip :42 or :42-47
-            if "/" in part or "." in part:
+            part = re.sub(r"^\./", "", part)
+            if path_like(part):
                 files.append(part)
     return sorted(set(files))
+
+
+def description(body):
+    """The ticket's own text: above notes and linked tickets, without its **Files** lines."""
+    text = TRAILING_SECTIONS_RE.split(body, maxsplit=1)[0]
+    return "\n".join(line for line in text.splitlines() if not FILES_RE.search(line))
+
+
+def decision_phrase(body):
+    """The sentence around the first decision-like wording in the description, or None."""
+    text = description(body)
+    m = DECISION_RE.search(text)
+    if not m:
+        return None
+    start = max(text.rfind(".", 0, m.start()), text.rfind("\n", 0, m.start())) + 1
+    ends = [i for i in (text.find(".", m.end()), text.find("\n", m.end())) if i != -1]
+    end = min(ends) if ends else len(text)
+    phrase = " ".join(text[start:end + 1].split()).lstrip("# ")
+    return phrase if len(phrase) <= 200 else phrase[:197] + "..."
 
 
 LARGE_AC_COUNT = 6
@@ -174,6 +231,23 @@ def find_cycles(ids, deps):
     return cycles
 
 
+def tag_list(m):
+    tags = m.get("tags") or []
+    if isinstance(tags, str):
+        tags = [t.strip() for t in tags.strip("[]").split(",") if t.strip()]
+    return tags
+
+
+def all_ancestors(n, deps):
+    seen, stack = set(), list(deps.get(n, []))
+    while stack:
+        d = stack.pop()
+        if d not in seen:
+            seen.add(d)
+            stack.extend(deps.get(d, []))
+    return seen
+
+
 def main(argv):
     include_in_progress = "--include-in-progress" in argv
     args = [a for a in argv if a != "--include-in-progress"]
@@ -202,13 +276,14 @@ def main(argv):
         if reason:
             excluded.append({"id": tid, "title": title, "reason": reason})
             continue
-        tags = m.get("tags") or []
-        if isinstance(tags, str):
-            tags = [t.strip() for t in tags.strip("[]").split(",")]
+        tags = tag_list(m)
         info[tid] = {
             "id": tid,
             "title": title,
+            "tags": tags,
             "needs_human": "needs-human" in tags,
+            "decision": "decision" in tags,
+            "decision_phrase": decision_phrase(body),
             "priority": int(m.get("priority", 2)),
             "parent": m.get("parent") or None,
             "raw_deps": m.get("deps", []),
@@ -217,15 +292,20 @@ def main(argv):
             "files": parse_files(body),
         }
 
-    # Split deps into in-set edges and external blockers.
-    blocked_by = {}
+    # Split deps into in-set edges and external blockers. An external blocker tagged
+    # decision is still a question for the owner, so it is reported like one.
+    blocked_by, outside_decisions = {}, {}
     for t in info.values():
         t["deps"] = []
         for d in t["raw_deps"]:
             if d in info:
                 t["deps"].append(d)
-            elif meta(d).get("status") != "closed":
+                continue
+            dm = meta(d)
+            if dm.get("status") != "closed":
                 blocked_by.setdefault(t["id"], []).append(d)
+                if "decision" in tag_list(dm):
+                    outside_decisions.setdefault(d, []).append(t["id"])
 
     deps = {tid: t["deps"] for tid, t in info.items()}
     cycles = find_cycles(list(info), deps)
@@ -237,6 +317,9 @@ def main(argv):
     dropped.update({tid: "part of a dependency cycle" for tid in in_cycle})
     dropped.update({tid: "tagged needs-human: a person must do this one; run its dependents after it closes"
                     for tid, t in info.items() if t["needs_human"]})
+    dropped.update({tid: "tagged decision: waits on the owner's call"
+                    for tid, t in info.items() if t["decision"] and tid not in dropped})
+    decision_ids = [tid for tid, t in info.items() if t["decision"]]
     changed = True
     while changed:
         changed = False
@@ -246,6 +329,17 @@ def main(argv):
                 if bad:
                     dropped[tid] = f"downstream of excluded ticket(s): {', '.join(bad)}"
                     changed = True
+    # Everything a decision ticket holds back, so the lead can say what an answer unblocks.
+    def held_back(waiting):
+        return sorted({*waiting} | {tid for tid in dropped
+                                    if any(w in all_ancestors(tid, deps) for w in waiting)})
+
+    decisions = [{"id": d, "title": info[d]["title"], "tags": info[d]["tags"], "outside_run": False,
+                  "downstream": [tid for tid in held_back([d]) if tid != d]}
+                 for d in decision_ids]
+    for d, waiting in outside_decisions.items():
+        decisions.append({"id": d, "title": title_and_body(d)[0], "tags": tag_list(meta(d)), "outside_run": True,
+                          "downstream": held_back(waiting)})
     for tid, reason in dropped.items():
         excluded.append({"id": tid, "title": info[tid]["title"], "reason": reason})
         del info[tid]
@@ -288,7 +382,7 @@ def main(argv):
 
     parents = {t["parent"] for t in info.values()}
     shared_parent = next(iter(parents)) if len(parents) == 1 else None
-    tickets = [{k: info[t][k] for k in ("id", "title", "priority", "parent", "deps", "has_ac", "ac_count", "files")}
+    tickets = [{k: info[t][k] for k in ("id", "title", "priority", "parent", "tags", "deps", "has_ac", "ac_count", "files")}
                for t in order]
     dependents = {t["id"]: sum(1 for o in tickets if t["id"] in anc(o["id"])) for t in tickets}
     print(json.dumps({
@@ -298,6 +392,9 @@ def main(argv):
         "integration": integration_branch(mode, epic_id, shared_parent),
         "tickets": tickets,
         "excluded": excluded,
+        "decisions": decisions,
+        "decision_candidates": [{"id": t, "title": info[t]["title"], "phrase": info[t]["decision_phrase"]}
+                                for t in order if info[t]["decision_phrase"]],
         "cycles": cycles,
         "overlaps": overlaps,
         "unannotated": [t["id"] for t in tickets if not t["files"]],

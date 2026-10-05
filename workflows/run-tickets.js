@@ -21,11 +21,27 @@ export const meta = {
 //                        pre-existing findings; without it, everything goes to findingsParent
 //   baseBranch           optional, default "main": commit or branch the integration check compares failures
 //                        against; the skill passes the integration branch's starting commit
-//   tickets              [{id, title, deps, has_ac}] in topological order
-//   caps                 optional {acFails, qrReworks, conflicts}
+//   gates                optional: commands that must pass on every merged result before the merge commits
+//                        (lint, type check, tests), already known to pass on the integration branch
+//   tickets              [{id, title, deps, has_ac, files, decision?}] in topological order. files are the
+//                        ticket's **Files** paths (tickets that share one never run at once); decision is the
+//                        owner's answer to the ticket's open question, when it had one
+//   caps                 optional {acFails, qrReworks, conflicts, gateFails}
 
 const A = args
-const CAPS = Object.assign({ acFails: 3, qrReworks: 3, conflicts: 2 }, A.caps || {})
+const CAPS = Object.assign({ acFails: 3, qrReworks: 3, conflicts: 2, gateFails: 2 }, A.caps || {})
+const GATES = A.gates || []
+
+// Dispatch below relies on these: a dependency missing from the run or listed after
+// its dependent, a malformed files list, or no slots would leave tickets waiting forever.
+if (!A.slots || !A.slots.length) throw new Error('no worktree slots given')
+A.tickets.forEach((t, i) => {
+  const late = t.deps.filter(d => !A.tickets.slice(0, i).some(o => o.id === d))
+  if (late.length) throw new Error(`${t.id} depends on ${late.join(', ')}, which is not earlier in the run's ticket list`)
+  if (t.files !== undefined && !(Array.isArray(t.files) && t.files.every(f => typeof f === 'string'))) {
+    throw new Error(`${t.id}: files must be an array of paths, got ${JSON.stringify(t.files)}`)
+  }
+})
 
 // ---------- effort ----------
 // Effort follows objective signals, never a guess at how hard a ticket looks.
@@ -82,6 +98,10 @@ const IMPL_SCHEMA = {
       type: 'integer',
       description: 'lines added plus deleted against the integration branch, excluding test and doc files; sizes the review',
     },
+    verification: {
+      type: 'string',
+      description: 'checks outside the test suite: harness or app commands the verifier can re-run and what each showed, and what a person still needs to check by hand',
+    },
     conditions: {
       type: 'array',
       description: 'each condition this round added or changed in src, broken once to see whether a test catches it',
@@ -117,6 +137,10 @@ const AC_SCHEMA = {
           met: { type: 'boolean' },
           code: { type: 'string', description: 'file:line implementing it' },
           assertion: { type: 'string', description: 'file:line and the quoted assertion testing it, or why none qualifies' },
+          human_check: {
+            type: 'string',
+            description: 'only when a person must confirm it (the project verifies this layer by running the product, or the evidence shows the criterion itself is wrong): what they should check',
+          },
         },
         required: ['criterion', 'met', 'code', 'assertion'],
       },
@@ -220,9 +244,10 @@ const QR_SCHEMA = {
 const MERGE_SCHEMA = {
   type: 'object',
   properties: {
-    result: { type: 'string', enum: ['merged', 'conflict', 'error'] },
+    result: { type: 'string', enum: ['merged', 'conflict', 'gate_fail', 'error'] },
     sha: { type: 'string' },
     conflicted_files: { type: 'array', items: { type: 'string' } },
+    failed_gate: { type: 'string', description: 'with gate_fail: the command that failed' },
     detail: { type: 'string' },
   },
   required: ['result', 'detail'],
@@ -290,6 +315,15 @@ First check it is not already filed: \`(cd ${A.repoRoot} && tk backlog find <pat
 add a note there (\`tk add-note <id> "..."\`) and use that id. Otherwise file it:
 \`tk create "<title>" -p <0-2 by priority> --parent ${A.findingsParent} --tags code-review,quality -d "<file:line, description, suggested fix, source ticket ${t.id}>"\`
 Either way, list it in out_of_scope with the finding number and ticket id. Fix every finding you do not push back on.`
+  } else if (work.kind === 'gate_fail') {
+    task = `Merge gate failure: ${branchOf(t)} merges cleanly into ${A.integrationBranch}, but the merged result fails \`${work.gate}\`:
+${work.detail}
+
+Bring the integration branch into your ticket branch and reproduce the failure:
+  git merge ${A.integrationBranch}
+Fix it in keeping with this ticket's intent and what already landed on ${A.integrationBranch}, run lint and the full test
+suite, and commit. If it does not reproduce on the merged branch in two clean runs of that command, say so in summary
+and return done: the next merge attempt runs the gate again.`
   } else {
     task = `Merge conflict: ${branchOf(t)} no longer merges cleanly into ${A.integrationBranch}${work.files.length ? ` (conflicts in: ${work.files.join(', ')})` : ''}.
 Bring the integration branch into your ticket branch and resolve:
@@ -300,18 +334,37 @@ Resolve every conflict preserving both this ticket's intent and what landed on $
   return `${header(slot)}
 ${setup}
 
-${task}
+${task}${decisionNote(t)}
 
 Follow your agent instructions for everything else (probes before editing, tests, lint, commit with -F, rework notes on the ticket).
 When finished, return status "done" with the HEAD sha, or status "failed" with failure_reason if you could not get to a committed, green state.`
 }
 
-function acPrompt(t, slot) {
+function decisionNote(t) {
+  if (!t.decision) return ''
+  return `
+
+The owner has decided this ticket's open question: ${t.decision}
+Implement that decision. Do not reopen it or choose a different option; if it cannot work, return failed and say why.`
+}
+
+function acPrompt(t, slot, verification) {
+  const decided = t.decision ? `
+The owner decided this ticket's open question: ${t.decision}
+Where a criterion assumes a different answer, judge it against the decision, and say so in that criterion's entry.
+` : ''
+  const checks = verification ? `
+The implementer lists these checks outside the test suite. They are claims, not evidence: re-run any command
+yourself before counting it, and treat anything it says it checked by hand as a human_check at most.
+---
+${verification}
+---
+` : ''
   return `${header(slot)}
 Verify ticket ${t.id} (${t.title}) against its acceptance criteria.
 The implementation is on branch ${branchOf(t)}. Diff it against the integration branch, not main:
   git diff ${A.integrationBranch}...${branchOf(t)}
-Read-only: do not edit files or commit. Record the result as a note on the ticket per your instructions, then return the verdict.`
+${decided}${checks}Read-only: do not edit files or commit. Record the result as a note on the ticket per your instructions, then return the verdict.`
 }
 
 function conditionLines(conditions) {
@@ -340,8 +393,12 @@ that depends on it stalls. Return REWORK only for critical or high findings. Fil
 would have sent back as a ticket under the findings parent instead (tag it deferred-rework; the epic cannot be wrapped until it is fixed), list it
 in \`filed\`, and return FINDINGS so this ticket merges. See "Final round" in your instructions.
 ` : ''
+  const decided = t.decision ? `
+The owner decided this ticket's open question: ${t.decision}
+That choice is binding. Do not raise it as a finding; do check that the change implements it.
+` : ''
   return `${header(slot)}
-Review ticket ${t.id} (${t.title}) on branch ${branchOf(t)} (round ${round}).${finalNote}
+Review ticket ${t.id} (${t.title}) on branch ${branchOf(t)} (round ${round}).${finalNote}${decided}
 Diff the ticket's own changes only:
   git diff ${A.integrationBranch}...${branchOf(t)}
 ${priorReviewNote(t, prior)}Repo root (run tk create and tk backlog from here): ${A.repoRoot}
@@ -366,20 +423,51 @@ verdict note on the ticket, then return the verdict with every field your instru
 }
 
 function mergePrompt(t) {
-  return `${header(A.integrationWorktree)}
+  // The title goes inside a double-quoted shell argument, where these would be expanded or end it.
+  const message = `Merge ${t.id}: ${t.title.replace(/["`$\\]/g, "'")}`
+  const opening = `${header(A.integrationWorktree)}
 You are the merge step for ticket ${t.id}. Run exactly these steps and nothing else. Do not edit any file.
 
 1. \`git status --porcelain --untracked-files=no\` must print nothing (untracked files cannot affect a merge and are ignored).
    If it prints anything, return result "error" with the output and stop.
-2. \`git checkout ${A.integrationBranch}\` (it should already be checked out here).
-3. \`git merge --no-ff ${branchOf(t)} -m "Merge ${t.id}: ${t.title.replace(/"/g, "'")}"\`
-4. If the merge reports conflicts: run \`git diff --name-only --diff-filter=U\` to list them, then \`git merge --abort\`,
-   confirm \`git status --porcelain --untracked-files=no\` is empty, and return result "conflict" with the conflicted files.
-5. If the merge succeeded: capture \`git rev-parse --short HEAD\`, then run
+2. \`git checkout ${A.integrationBranch}\` (it should already be checked out here).`
+  const conflict = `If the merge reports conflicts: run \`git diff --name-only --diff-filter=U\` to list them, then \`git merge --abort\`,
+   confirm \`git status --porcelain --untracked-files=no\` is empty, and return result "conflict" with the conflicted files.`
+  const close = `capture \`git rev-parse --short HEAD\`, then run
      tk add-note ${t.id} "Merged into ${A.integrationBranch} by /run-tickets at <sha>."
      tk close ${t.id}
    and return result "merged" with the sha.
 Any other failure: return result "error" with the command output.`
+
+  if (!GATES.length) {
+    return `${opening}
+3. \`git merge --no-ff ${branchOf(t)} -m "${message}"\`
+4. ${conflict}
+5. If the merge succeeded: ${close}`
+  }
+  return `${opening}
+3. \`git merge --no-ff --no-commit ${branchOf(t)}\`. If it says "Already up to date", skip to step 8.
+4. ${conflict}
+5. Run each gate on the merged tree, in this order, and stop at the first one that fails. Give every gate's Bash call
+   a timeout of 600000 ms:
+${GATES.map(g => `     ${g}`).join('\n')}
+   - A gate fails: do not try to fix anything. Keep the failing test names or error lines and the last 40 lines of its
+     output, put the tree back (step 7), and return result "gate_fail" with failed_gate set to the command and that
+     output in detail.
+   - A gate times out or cannot run at all (command not found, missing dependencies): put the tree back (step 7) and
+     return result "error" with what happened. That is a problem with the gate, not with this ticket.
+6. Every gate passed. \`git diff --name-only\` must print nothing. If it lists files, a gate rewrote them (a formatter,
+   a lockfile, snapshots), so the merged result needs changes the ticket did not make: put the tree back (step 7) and
+   return "gate_fail" with failed_gate set to the gate that wrote them and the file list in detail.
+   Otherwise commit the merge the same way merges are always committed here, by repeating it:
+     git merge --abort
+     git merge --no-ff ${branchOf(t)} -m "${message}"
+   That is the identical merge, now committed. If it reports anything other than a clean merge, return "error" with
+   its output. Then go to step 8.
+7. Putting the tree back: \`git merge --abort\`. If that fails, \`git reset --hard HEAD\` (safe here: step 1 proved the
+   tree clean, and this worktree only does merges). Then \`git status --porcelain --untracked-files=no\` must print
+   nothing; if it prints anything, return "error" with that output instead of the result you were about to return.
+8. ${close.charAt(0).toUpperCase()}${close.slice(1)}`
 }
 
 function checkPrompt() {
@@ -402,18 +490,6 @@ ${base}), or "no_checks", with each failure listed as new or pre-existing.`
 
 // ---------- concurrency helpers ----------
 
-const freeSlots = [...A.slots]
-const slotWaiters = []
-function acquireSlot() {
-  if (freeSlots.length) return Promise.resolve(freeSlots.shift())
-  return new Promise(resolve => slotWaiters.push(resolve))
-}
-function releaseSlot(slot) {
-  const next = slotWaiters.shift()
-  if (next) next(slot)
-  else freeSlots.push(slot)
-}
-
 // One merge at a time: each merge chains onto the previous one.
 let mergeTail = Promise.resolve()
 function withMergeLock(fn) {
@@ -426,12 +502,13 @@ function withMergeLock(fn) {
 
 async function runTicket(t, slot) {
   const rec = { id: t.id, title: t.title, outcome: null, reason: '', sha: '', acFails: 0, qrRounds: 0, qrReworks: 0,
-    conflicts: 0, findings: [], backlog: [], noted: [], outOfScope: [], summary: '' }
+    conflicts: 0, gateFails: 0, findings: [], backlog: [], noted: [], outOfScope: [], humanChecks: [], summary: '' }
   const block = reason => { rec.outcome = 'blocked'; rec.reason = reason; log(`${t.id}: BLOCKED (${reason})`); return rec }
 
   let work = { kind: 'new' }
   let implRound = 0
   let priorReview = null
+  let passedSha = null   // branch tip the last passing review saw
   while (true) {
     implRound += 1
     const impl = await agent(implementPrompt(t, slot, { ...work, round: implRound }), {
@@ -444,8 +521,13 @@ async function runTicket(t, slot) {
     rec.outOfScope.push(...(impl.out_of_scope || []).map(o => o.ticket_id))
     log(`${t.id}: implemented (round ${implRound})`)
 
-    if (t.has_ac) {
-      const ac = await agent(acPrompt(t, slot), { label: `ac ${t.id}`, phase: 'Verify', agentType: 'ticket-verifier', schema: AC_SCHEMA })
+    // A gate-failure round that could not reproduce the failure commits nothing.
+    // Code that already passed verification and review goes straight back to merge.
+    const unchanged = Boolean(passedSha && impl.head_sha && impl.head_sha === passedSha)
+    if (unchanged) log(`${t.id}: no new commits since review passed; merging again`)
+
+    if (!unchanged && t.has_ac) {
+      const ac = await agent(acPrompt(t, slot, impl.verification), { label: `ac ${t.id}`, phase: 'Verify', agentType: 'ticket-verifier', schema: AC_SCHEMA })
       if (!ac) return block('AC verifier died or was stopped')
       if (ac.verdict === 'ERROR') return block(`AC verifier could not run: ${ac.error || ac.failures.join('; ')}`)
       if (ac.verdict === 'FAIL') {
@@ -455,43 +537,53 @@ async function runTicket(t, slot) {
         work = { kind: 'ac_fail', failures: ac.failures }
         continue
       }
-      log(`${t.id}: AC PASS`)
+      // The latest passing round is the one that describes the code being merged.
+      rec.humanChecks = (ac.criteria || []).filter(c => c.human_check).map(c => `${c.criterion}: ${c.human_check}`)
+      log(`${t.id}: AC PASS${rec.humanChecks.length ? `, ${rec.humanChecks.length} criterion(s) need a person to check` : ''}`)
     }
 
-    rec.qrRounds += 1
-    // One more REWORK would reach the cap, so this review may only send back critical or high findings.
-    const finalRound = rec.qrReworks + 1 >= CAPS.qrReworks
-    const qr = await agent(qrPrompt(t, slot, rec.qrRounds, impl.summary, impl.conditions, finalRound, priorReview), {
-      label: `review ${t.id}${rec.qrRounds > 1 ? ` r${rec.qrRounds}` : ''}`, phase: 'Review', agentType: 'ticket-reviewer', schema: QR_SCHEMA,
-      ...reviewEffort(t, impl),
-    })
-    if (!qr) return block('quality reviewer died or was stopped')
-    if (qr.verdict === 'ERROR') return block(`reviewer could not run: ${qr.error || 'no detail'}`)
-    // Only a REWORK carries into the next review; after a conflict round the review starts fresh.
-    priorReview = qr.verdict === 'REWORK' && qr.findings.length && qr.reviewed_sha
-      ? { sha: qr.reviewed_sha, findings: qr.findings } : null
-    for (const f of qr.filed || []) {
-      if (f.action === 'noted') rec.noted.push(f.id)
-      else if (f.parent === 'backlog' && A.backlogParent) rec.backlog.push(f.id)
-      else rec.findings.push(f.id)
-    }
-    if (qr.verdict === 'REWORK' && qr.findings.length) {
-      rec.qrReworks += 1
-      log(`${t.id}: REWORK, ${qr.findings.length} finding(s) (${rec.qrReworks}/${CAPS.qrReworks})`)
-      if (rec.qrReworks >= CAPS.qrReworks) {
-        return block(`quality review asked for rework ${rec.qrReworks} times; last: ${qr.findings.map(f => `${f.location} ${f.description}`).join('; ')}`)
+    if (!unchanged) {
+      rec.qrRounds += 1
+      // One more REWORK would reach the cap, so this review may only send back critical or high findings.
+      const finalRound = rec.qrReworks + 1 >= CAPS.qrReworks
+      const qr = await agent(qrPrompt(t, slot, rec.qrRounds, impl.summary, impl.conditions, finalRound, priorReview), {
+        label: `review ${t.id}${rec.qrRounds > 1 ? ` r${rec.qrRounds}` : ''}`, phase: 'Review', agentType: 'ticket-reviewer', schema: QR_SCHEMA,
+        ...reviewEffort(t, impl),
+      })
+      if (!qr) return block('quality reviewer died or was stopped')
+      if (qr.verdict === 'ERROR') return block(`reviewer could not run: ${qr.error || 'no detail'}`)
+      // Only a REWORK carries into the next review; after a conflict round the review starts fresh.
+      priorReview = qr.verdict === 'REWORK' && qr.findings.length && qr.reviewed_sha
+        ? { sha: qr.reviewed_sha, findings: qr.findings } : null
+      for (const f of qr.filed || []) {
+        if (f.action === 'noted') rec.noted.push(f.id)
+        else if (f.parent === 'backlog' && A.backlogParent) rec.backlog.push(f.id)
+        else rec.findings.push(f.id)
       }
-      work = { kind: 'qr_rework', findings: qr.findings }
-      continue
+      if (qr.verdict === 'REWORK' && qr.findings.length) {
+        rec.qrReworks += 1
+        log(`${t.id}: REWORK, ${qr.findings.length} finding(s) (${rec.qrReworks}/${CAPS.qrReworks})`)
+        if (rec.qrReworks >= CAPS.qrReworks) {
+          return block(`quality review asked for rework ${rec.qrReworks} times; last: ${qr.findings.map(f => `${f.location} ${f.description}`).join('; ')}`)
+        }
+        work = { kind: 'qr_rework', findings: qr.findings }
+        continue
+      }
+      passedSha = impl.head_sha || null
+      const filed = (qr.filed || []).map(f => `${f.id} (${f.action === 'noted' ? 'noted' : f.parent})`)
+      log(`${t.id}: review ${qr.verdict}${filed.length ? `, filed ${filed.join(', ')}` : ''}`)
     }
-    const filed = (qr.filed || []).map(f => `${f.id} (${f.action === 'noted' ? 'noted' : f.parent})`)
-    log(`${t.id}: review ${qr.verdict}${filed.length ? `, filed ${filed.join(', ')}` : ''}`)
 
     const merge = await withMergeLock(() => mergeHalted ? null : agent(mergePrompt(t), {
       label: `merge ${t.id}`, phase: 'Merge', schema: MERGE_SCHEMA, model: 'haiku', effort: 'low',
     }))
     if (mergeHalted && !merge) return block(`not merged: run halted after merge error: ${mergeHalted}`)
-    if (!merge) return block('merge agent died or was stopped')
+    if (!merge) {
+      // It may have stopped between merging and committing or aborting, so the
+      // integration worktree's state is unknown, as after a merge "error".
+      mergeHalted = `merge agent for ${t.id} died or was stopped; check the integration worktree for a half-done merge`
+      return block('merge agent died or was stopped')
+    }
     if (merge.result === 'merged') {
       rec.outcome = 'merged'
       rec.sha = merge.sha || ''
@@ -501,6 +593,14 @@ async function runTicket(t, slot) {
     if (merge.result === 'error') {
       mergeHalted = merge.detail
       return block(`merge step errored: ${merge.detail}`)
+    }
+    if (merge.result === 'gate_fail') {
+      rec.gateFails += 1
+      const gate = merge.failed_gate || 'a gate'
+      log(`${t.id}: merged result fails ${gate} (${rec.gateFails}/${CAPS.gateFails})`)
+      if (rec.gateFails >= CAPS.gateFails) return block(`merged result failed ${gate} ${rec.gateFails} times: ${merge.detail}`)
+      work = { kind: 'gate_fail', gate, detail: merge.detail || '(no output captured)' }
+      continue
     }
     rec.conflicts += 1
     log(`${t.id}: merge conflict (${rec.conflicts}/${CAPS.conflicts}) in ${(merge.conflicted_files || []).join(', ')}`)
@@ -514,27 +614,109 @@ async function runTicket(t, slot) {
 // their current agent and then stop at the merge step.
 let mergeHalted = null
 
-phase('Implement')
+// ---------- scheduling ----------
+// A ticket is ready once every dependency has finished. A ready ticket waits for
+// a worktree slot and for its files: two tickets that name the same file never
+// run at once, so the second starts from the first one's merged result instead
+// of conflicting with it, and a file stays held until its ticket merges or
+// blocks. Among ready tickets that fit, the one the most other tickets wait on
+// starts first, so a long chain is never queued behind leaves.
+//
+// All of this is in-run state. A shared file never becomes a tk dependency, so it
+// does not fix an order, outlive the run, or count toward a ticket's dependents
+// (and with them its effort).
+//
+// Everything below runs synchronously between agent calls: a ticket that finishes
+// marks its dependents ready before its slot is handed out again, so they compete
+// for it on priority instead of losing it to whatever was already queued.
+
+const position = Object.fromEntries(A.tickets.map((t, i) => [t.id, i]))
+const byId = Object.fromEntries(A.tickets.map(t => [t.id, t]))
+const children = Object.fromEntries(A.tickets.map(t => [t.id, []]))
+for (const t of A.tickets) for (const d of t.deps) children[d].push(t.id)
+const pendingDeps = Object.fromEntries(A.tickets.map(t => [t.id, t.deps.length]))
+const filesOf = t => t.files || []
+
+const freeSlots = [...A.slots]
+const ready = []        // dependencies all finished, not started yet
+const heldBy = {}       // file -> id of the running ticket that named it
+const waitLogged = new Set()
 const outcomes = {}
-for (const t of A.tickets) {
-  outcomes[t.id] = (async () => {
-    const depResults = await Promise.all(t.deps.map(d => outcomes[d]))
-    const failedDeps = depResults.filter(r => r.outcome !== 'merged').map(r => r.id)
-    if (failedDeps.length) {
-      log(`${t.id}: stalled, waits on ${failedDeps.join(', ')}`)
-      return { id: t.id, title: t.title, outcome: 'stalled', reason: `depends on unmerged ${failedDeps.join(', ')}` }
-    }
-    if (mergeHalted) return { id: t.id, title: t.title, outcome: 'stalled', reason: `run halted after merge error: ${mergeHalted}` }
-    const slot = await acquireSlot()
-    try {
-      return await runTicket(t, slot)
-    } finally {
-      releaseSlot(slot)
-    }
-  })()
+let finishedCount = 0
+let allFinished
+const everythingFinished = new Promise(resolve => { allFinished = resolve })
+
+function finish(t, rec) {
+  outcomes[t.id] = rec
+  finishedCount += 1
+  for (const c of children[t.id]) {
+    pendingDeps[c] -= 1
+    if (pendingDeps[c] === 0) becomeReady(byId[c])
+  }
+  if (finishedCount === A.tickets.length) allFinished()
 }
 
-const results = await Promise.all(A.tickets.map(t => outcomes[t.id]))
+function becomeReady(t) {
+  const failedDeps = t.deps.filter(d => outcomes[d].outcome !== 'merged')
+  if (failedDeps.length) {
+    log(`${t.id}: stalled, waits on ${failedDeps.join(', ')}`)
+    finish(t, { id: t.id, title: t.title, outcome: 'stalled', reason: `depends on unmerged ${failedDeps.join(', ')}` })
+    return
+  }
+  ready.push(t)
+}
+
+// A path ending in "/" names a directory and covers everything under it.
+const covers = (a, b) => a === b || (a.endsWith('/') && b.startsWith(a)) || (b.endsWith('/') && a.startsWith(b))
+// The held path that blocks t, if any.
+const heldFile = t => Object.keys(heldBy).find(held => filesOf(t).some(f => covers(f, held)))
+
+function dispatch() {
+  if (mergeHalted) {
+    while (ready.length) {
+      const t = ready.shift()
+      finish(t, { id: t.id, title: t.title, outcome: 'stalled', reason: `run halted after merge error: ${mergeHalted}` })
+    }
+    return
+  }
+  while (freeSlots.length) {
+    const fits = ready.filter(t => !heldFile(t))
+    if (!fits.length) break
+    fits.sort((a, b) => dependents[b.id] - dependents[a.id] || position[a.id] - position[b.id])
+    ready.splice(ready.indexOf(fits[0]), 1)
+    start(fits[0], freeSlots.shift())
+  }
+  for (const t of ready) {
+    const f = heldFile(t)
+    if (f && !waitLogged.has(t.id)) {
+      waitLogged.add(t.id)
+      log(`${t.id}: waiting for ${f} (held by ${heldBy[f]})`)
+    }
+  }
+}
+
+async function start(t, slot) {
+  for (const f of filesOf(t)) heldBy[f] = t.id
+  let rec
+  try {
+    rec = await runTicket(t, slot)
+  } catch (e) {
+    rec = { id: t.id, title: t.title, outcome: 'blocked', reason: `workflow error: ${(e && e.message) || e}` }
+    log(`${t.id}: BLOCKED (${rec.reason})`)
+  }
+  for (const f of filesOf(t)) if (heldBy[f] === t.id) delete heldBy[f]
+  freeSlots.push(slot)
+  finish(t, rec)
+  dispatch()
+}
+
+phase('Implement')
+for (const t of A.tickets) if (!t.deps.length) ready.push(t)
+if (!A.tickets.length) allFinished()
+dispatch()
+await everythingFinished
+
+const results = A.tickets.map(t => outcomes[t.id])
 
 let integration = null
 if (results.some(r => r.outcome === 'merged') && !mergeHalted) {
@@ -547,7 +729,7 @@ return {
   integrationBranch: A.integrationBranch,
   mergeHalted,
   integration,
-  // Recorded so run-tickets-status archives which thresholds each run used.
-  policy: { highFanout: HIGH_FANOUT, smallDiff: SMALL_DIFF },
+  // Recorded so run-tickets-status archives which thresholds and rules each run used.
+  policy: { highFanout: HIGH_FANOUT, smallDiff: SMALL_DIFF, fileLocks: true, mergeGates: GATES.length > 0 },
   tickets: results,
 }
