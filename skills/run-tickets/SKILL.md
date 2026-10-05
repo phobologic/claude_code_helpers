@@ -192,9 +192,11 @@ setup creates it if missing), so each run's reviews do not refill the epic
 with problems it did not cause. When the run is over the backlog epic itself,
 it is both.
 
-**Pool size.** `SLOTS = min(6, stats.max_width)`, or `--slots N` when given:
-never more slots than the dependency graph can use at once. The workflow
-fills slots with the tickets the most others wait on first.
+**Pool size.** `SLOTS = min(8, stats.max_width)`, or `--slots N` when given:
+never more slots than the dependency graph can use at once. 8 is how many
+concurrent workers (each running its own builds and tests in its worktree) the
+owner's machine handles; it is a machine limit, not a property of the run.
+The workflow fills slots with the tickets the most others wait on first.
 
 Present the plan:
 
