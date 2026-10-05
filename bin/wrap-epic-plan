@@ -1,0 +1,431 @@
+#!/usr/bin/env python3
+# Planning helper for /wrap-epic and /run-tickets: what wrapping an epic would do, and what blocks it.
+"""
+Usage: wrap-epic-plan [<epic-id>] [--branch <name>]
+
+Read-only: never changes git or tickets. Prints one JSON object describing
+what wrapping the epic would involve. This is the one definition of what
+blocks a wrap; /wrap-epic builds its plan from it and /run-tickets builds its
+"Blocking wrap" line from it.
+
+With no epic id, the current branch decides: epic/<id> names the epic, and a
+run/* or fix/batch-* branch names it through the most common parent of the
+tickets it merged.
+
+  epic          {id, title, status, parent, is_backlog}: the epic to wrap
+  resolved_from {id, title} when the epic id given was a planning epic with no
+                branch of its own (such as /spec's top-level epic) and exactly
+                one of its open sub-epics has a branch: epic is then that
+                sub-epic. Several such sub-epics: no redirect, and branch_note
+                names them. null otherwise
+  parent        the epic's open parent epic, or null:
+                  {id, title, other_open, close_with_epic}
+                other_open lists the parent's other open children.
+                close_with_epic is true when none are left and the parent is
+                not the backlog epic: closing the epic empties the parent
+  branch        the integration branch, or null:
+                  {name, source, exists, ahead_of_main, behind_main,
+                   files_changed, checked_out_at}
+                source is "argument" (--branch), "epic branch" (epic/<id>),
+                "merged tickets" (a run/* or fix/batch-* branch whose
+                "Merge <id>:" or "Fix <id>:" commits merged this epic's
+                tickets), or "current branch". checked_out_at is the main
+                repo or worktree path that has it checked out, or null
+  branch_candidates
+                branch names when more than one run/* or fix/batch-* branch
+                matches; branch is then null and the user must pick
+  branch_note   why branch is null, or null
+  main_repo     {current_branch, dirty}; dirty means tracked changes
+  worktrees     [{path, branch, dirty, other_run}] for registered worktrees
+                under <root>/.worktrees/ named implementer-*, fix-batch-*,
+                epic-dag-*, fix-dag-* or run-*. other_run is true when a
+                /run-tickets run record (.worktrees/run-<stamp>.json) lists
+                the path and integrates into a different branch: that
+                worktree belongs to another run, which may still be going
+  backlog       id of the repo's open epic tagged backlog, or null
+  blocking      [{id, title, priority, status, tags, why, source_ticket}]
+                open children that hold the wrap: tagged regression,
+                worsened, deferred-rework or needs-human (any priority), or a
+                finding at P0-1. why lists the reasons ("regression", "P1")
+  movable       [{id, title, priority, origin, files, backlog_matches}]
+                open findings that are not blocking: they go to the backlog
+                at wrap. backlog_matches are open backlog tickets whose text
+                names one of the finding's files: duplicate candidates to
+                judge, not a verdict
+  unfinished    [{id, title, type, priority, status, tags}] every other open
+                child: ordinary tickets, sub-epics, decision tickets that are
+                not findings. They keep the epic open
+  closeable     true when blocking and unfinished are both empty and the
+                epic is not the backlog epic
+
+A finding is a child tagged code-review or carrying an origin tag (regression,
+worsened, preexisting, deferred-rework). Priority never makes a regression
+movable: a P3 regression blocks exactly as a P1 does.
+"""
+
+import glob
+import json
+import os
+import re
+import subprocess
+import sys
+from collections import Counter
+
+MAIN = "main"
+ORIGINS = ("regression", "worsened", "preexisting", "deferred-rework")
+ALWAYS_BLOCK = ("regression", "worsened", "deferred-rework", "needs-human")
+WORKTREE_PREFIXES = ("implementer-", "fix-batch-", "epic-dag-", "fix-dag-", "run-")
+# Merge commit subjects the runners write: run-tickets and run-epic use "Merge <id>: <title>",
+# fix-tickets uses "Fix <id>: <title>". git's own "Merge branch 'x'" has no colon after the id.
+MERGE_SUBJECT_RE = re.compile(r"^(?:Merge|Fix) ([\w.\-]+): ")
+SOURCE_RE = re.compile(r"\*\*Source ticket:?\*\*:?\s*`?([\w.\-]+)")
+FILES_RE = re.compile(r"\*\*Files\*\*\s*:?\s*(.+)")
+NOT_PATHS = {"n/a", "na", "tbd", "none", "etc", "e.g", "i.e", "various", "see"}
+
+
+def die(msg):
+    print(f"wrap-epic-plan: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+# ---------- git ----------
+
+def git(*args, cwd):
+    out = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+    return out.stdout.strip() if out.returncode == 0 else None
+
+
+def repo_root():
+    top = git("rev-parse", "--show-toplevel", cwd=os.getcwd())
+    if top is None:
+        die("not inside a git repository")
+    # In a linked worktree, the main repo is the parent of the shared .git directory.
+    common = git("rev-parse", "--path-format=absolute", "--git-common-dir", cwd=top)
+    if common and os.path.basename(common) == ".git":
+        return os.path.dirname(common)
+    return top
+
+
+def branch_exists(name, root):
+    return git("show-ref", "--verify", "--quiet", f"refs/heads/{name}", cwd=root) is not None
+
+
+def count(rev_range, root):
+    out = git("rev-list", "--count", rev_range, cwd=root)
+    return int(out) if out else 0
+
+
+def merged_ticket_ids(branch, root):
+    out = git("log", f"{MAIN}..{branch}", "--merges", "--format=%s", cwd=root) or ""
+    return [m.group(1) for m in map(MERGE_SUBJECT_RE.match, out.splitlines()) if m]
+
+
+def run_branches(root):
+    out = git("branch", "--list", "run/*", "fix/batch-*", "--no-merged", MAIN,
+              "--format=%(refname:short)", cwd=root) or ""
+    return [b for b in out.splitlines() if b]
+
+
+def worktree_list(root):
+    """[{path, branch}] from git worktree list --porcelain; the first entry is the main repo."""
+    out = git("worktree", "list", "--porcelain", cwd=root) or ""
+    entries = []
+    for block in out.split("\n\n"):
+        entry = {"path": None, "branch": None}
+        for line in block.splitlines():
+            if line.startswith("worktree "):
+                entry["path"] = line[len("worktree "):]
+            elif line.startswith("branch refs/heads/"):
+                entry["branch"] = line[len("branch refs/heads/"):]
+        if entry["path"]:
+            entries.append(entry)
+    return entries
+
+
+def is_dirty(path):
+    if not os.path.isdir(path):
+        return None
+    out = git("status", "--porcelain", "--untracked-files=no", cwd=path)
+    return None if out is None else bool(out)
+
+
+# ---------- tickets ----------
+
+def tickets_dir():
+    env = os.environ.get("TICKETS_DIR")
+    if env:
+        if not os.path.isdir(env):
+            die(f"TICKETS_DIR {env} is not a directory")
+        return env
+    d = os.getcwd()
+    while d != "/":
+        if os.path.isdir(os.path.join(d, ".tickets")):
+            return os.path.join(d, ".tickets")
+        d = os.path.dirname(d)
+    die("no .tickets directory found (run from the repo, or set TICKETS_DIR)")
+
+
+def parse(path):
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    m = re.match(r"---\n(.*?)\n---\n", text, re.DOTALL)
+    if not m:
+        return None
+    meta = {}
+    for line in m.group(1).splitlines():
+        if ":" in line:
+            k, v = line.split(":", 1)
+            meta[k.strip()] = v.strip()
+    meta["tags"] = [t.strip() for t in meta.get("tags", "").strip("[]").split(",") if t.strip()]
+    try:
+        meta["priority"] = int(meta.get("priority", 2))
+    except ValueError:
+        meta["priority"] = 2
+    meta["parent"] = meta.get("parent") or None
+    body = text[m.end():]
+    title = re.search(r"^# (.+)$", body, re.MULTILINE)
+    meta["title"] = title.group(1).strip() if title else ""
+    meta["id"] = meta.get("id") or os.path.basename(path)[:-3]
+    meta["body"] = body
+    return meta
+
+
+def load_tickets():
+    d = tickets_dir()
+    tickets = {}
+    for name in sorted(os.listdir(d)):
+        if name.endswith(".md"):
+            t = parse(os.path.join(d, name))
+            if t:
+                tickets[t["id"]] = t
+    return tickets
+
+
+def path_like(part):
+    if part.lower().rstrip(".") in NOT_PATHS or part.endswith("."):
+        return False
+    if not re.fullmatch(r"[\w.\-/@+]+", part):
+        return False
+    return "/" in part or bool(re.search(r"\w\.[A-Za-z0-9]{1,8}$", part))
+
+
+def parse_files(body):
+    files = []
+    for line in FILES_RE.findall(body):
+        for part in re.split(r"[,\s]+", line):
+            part = part.strip("`*()[];")
+            part = re.sub(r":\d[\d\-,]*$", "", part)
+            part = re.sub(r"^\./", "", part)
+            if path_like(part):
+                files.append(part)
+    return sorted(set(files))
+
+
+def backlog_id(tickets):
+    found = [t for t in tickets.values()
+             if t.get("type") == "epic" and "backlog" in t["tags"] and t.get("status") != "closed"]
+    found.sort(key=lambda t: t.get("created", ""))
+    return found[0]["id"] if found else None
+
+
+def classify(epic_id, tickets, backlog):
+    children = sorted((t for t in tickets.values() if t["parent"] == epic_id and t.get("status") != "closed"),
+                      key=lambda t: (t["priority"], t["id"]))
+    backlog_open = [t for t in tickets.values()
+                    if backlog and t["parent"] == backlog and t.get("status") != "closed" and t.get("type") != "epic"]
+    blocking, movable, unfinished = [], [], []
+    for t in children:
+        tags = t["tags"]
+        origin = next((o for o in ORIGINS if o in tags), None)
+        finding = "code-review" in tags or origin is not None
+        why = [tag for tag in ALWAYS_BLOCK if tag in tags]
+        if finding and t["priority"] <= 1:
+            why.append(f"P{t['priority']}")
+        if why:
+            m = SOURCE_RE.search(t["body"])
+            blocking.append({"id": t["id"], "title": t["title"], "priority": t["priority"],
+                             "status": t.get("status"), "tags": tags, "why": why,
+                             "source_ticket": m.group(1) if m else None})
+        elif finding:
+            files = parse_files(t["body"])
+            matches = [{"id": b["id"], "title": b["title"]} for b in backlog_open
+                       if b["id"] != t["id"] and any(f in b["body"] for f in files)]
+            movable.append({"id": t["id"], "title": t["title"], "priority": t["priority"],
+                            "origin": origin, "files": files, "backlog_matches": matches})
+        else:
+            unfinished.append({"id": t["id"], "title": t["title"], "type": t.get("type"),
+                               "priority": t["priority"], "status": t.get("status"), "tags": tags})
+    return blocking, movable, unfinished
+
+
+# ---------- branch resolution ----------
+
+def epic_from_branch(branch, tickets, root):
+    if branch.startswith("epic/"):
+        return branch[len("epic/"):]
+    if branch.startswith(("run/", "fix/batch-")):
+        parents = Counter(tickets[i]["parent"] for i in merged_ticket_ids(branch, root)
+                          if i in tickets and tickets[i]["parent"])
+        if parents:
+            return parents.most_common(1)[0][0]
+    return None
+
+
+def branch_for(epic_id, tickets, root):
+    """(branch_name, source, candidates, note) for an epic named by id."""
+    if branch_exists(f"epic/{epic_id}", root):
+        return f"epic/{epic_id}", "epic branch", [], None
+    matches = [b for b in run_branches(root)
+               if any(tickets.get(i, {}).get("parent") == epic_id for i in merged_ticket_ids(b, root))]
+    if len(matches) == 1:
+        return matches[0], "merged tickets", [], None
+    if matches:
+        return None, None, matches, f"{len(matches)} branches merge this epic's tickets; pick one and pass --branch"
+    return None, None, [], (f"no epic/{epic_id} branch, and no unmerged run/* or fix/batch-* "
+                            f"branch merges this epic's tickets")
+
+
+def resolve(epic_arg, branch_arg, tickets, root):
+    """(epic_id, branch_name, source, candidates, note, resolved_from)"""
+    if branch_arg:
+        epic_id = epic_arg or epic_from_branch(branch_arg, tickets, root)
+        if not epic_id:
+            die(f"branch {branch_arg} names no epic: it is not epic/<id> and merges no ticket "
+                f"with a parent; pass the epic id too")
+        return epic_id, branch_arg, "argument", [], None, None
+    if not epic_arg:
+        current = git("branch", "--show-current", cwd=os.getcwd())
+        if not current:
+            die("no epic id given and HEAD is detached; pass an epic id")
+        epic_id = epic_from_branch(current, tickets, root)
+        if not epic_id:
+            die(f"no epic id given and the current branch {current} names none (tried epic/<id>, "
+                f"and the parents of tickets merged by run/* or fix/batch-* commits); pass an epic id")
+        return epic_id, current, "current branch", [], None, None
+    branch, source, candidates, note = branch_for(epic_arg, tickets, root)
+    if branch or candidates:
+        return epic_arg, branch, source, candidates, note, None
+    # A planning epic (such as /spec's top-level one) has no branch of its own: its work ran
+    # under a sub-epic. When exactly one open sub-epic has a branch, wrap that sub-epic.
+    subs = sorted(t["id"] for t in tickets.values()
+                  if t["parent"] == epic_arg and t.get("type") == "epic" and t.get("status") != "closed")
+    found = [(s, *branch_for(s, tickets, root)[:2]) for s in subs]
+    found = [(s, b, src) for s, b, src in found if b]
+    if len(found) == 1:
+        sub, branch, source = found[0]
+        return sub, branch, source, [], None, epic_arg
+    if found:
+        return epic_arg, None, None, [], (f"sub-epics {', '.join(s for s, _, _ in found)} each have a branch; "
+                                          f"wrap them one at a time by id"), None
+    return epic_arg, None, None, [], note, None
+
+
+def parent_info(epic, tickets, backlog):
+    """The epic's open parent epic, and whether closing the epic leaves it with nothing open."""
+    p = tickets.get(epic["parent"]) if epic["parent"] else None
+    if not p or p.get("type") != "epic" or p.get("status") == "closed":
+        return None
+    others = sorted(t["id"] for t in tickets.values()
+                    if t["parent"] == p["id"] and t["id"] != epic["id"] and t.get("status") != "closed")
+    return {"id": p["id"], "title": p["title"], "other_open": others,
+            "close_with_epic": not others and p["id"] != backlog and "backlog" not in p["tags"]}
+
+
+def branch_info(name, source, root, worktrees):
+    exists = branch_exists(name, root)
+    holder = next((w["path"] for w in worktrees if w["branch"] == name), None)
+    return {
+        "name": name,
+        "source": source,
+        "exists": exists,
+        "ahead_of_main": count(f"{MAIN}..{name}", root) if exists else 0,
+        "behind_main": count(f"{name}..{MAIN}", root) if exists else 0,
+        "files_changed": len((git("diff", "--name-only", f"{MAIN}...{name}", cwd=root) or "").splitlines()) if exists else 0,
+        "checked_out_at": holder,
+    }
+
+
+def run_worktrees(root, all_worktrees, branch):
+    """Runner worktrees under .worktrees/, each marked when another run's record claims it."""
+    claimed = {}  # realpath -> integration branch of the run that lists it
+    for path in glob.glob(os.path.join(root, ".worktrees", "run-*.json")):
+        try:
+            with open(path) as f:
+                args = (json.load(f) or {}).get("args") or {}
+        except (OSError, json.JSONDecodeError):
+            continue
+        for p in [args.get("integrationWorktree"), *(args.get("slots") or [])]:
+            if p:
+                claimed[os.path.realpath(p)] = args.get("integrationBranch")
+    base = os.path.realpath(os.path.join(root, ".worktrees")) + os.sep
+    out = []
+    for w in all_worktrees:
+        real = os.path.realpath(w["path"])
+        if not real.startswith(base) or not os.path.basename(real).startswith(WORKTREE_PREFIXES):
+            continue
+        owner = claimed.get(real, branch)
+        out.append({"path": w["path"], "branch": w["branch"], "dirty": is_dirty(w["path"]),
+                    # With no resolved branch, any run that claims the worktree may own it.
+                    "other_run": real in claimed and (branch is None or owner != branch)})
+    return out
+
+
+def main(argv):
+    branch_arg, rest = None, []
+    it = iter(argv)
+    for a in it:
+        if a == "--branch":
+            branch_arg = next(it, None)
+            if not branch_arg:
+                die("--branch needs a branch name")
+        elif a in ("-h", "--help"):
+            print(__doc__)
+            return 0
+        else:
+            rest.append(a)
+    if len(rest) > 1:
+        die("give at most one epic id")
+
+    root = repo_root()
+    if not branch_exists(MAIN, root):
+        die(f"no local {MAIN} branch")
+    tickets = load_tickets()
+    epic_arg = rest[0] if rest else None
+    if epic_arg and epic_arg not in tickets:
+        die(f"no ticket with id {epic_arg}")
+
+    epic_id, branch, source, candidates, note, resolved_from = resolve(epic_arg, branch_arg, tickets, root)
+    epic = tickets.get(epic_id)
+    if not epic:
+        die(f"branch {branch} points at epic {epic_id}, but there is no such ticket")
+    if epic.get("type") != "epic":
+        die(f"{epic_id} is a {epic.get('type') or 'ticket'}, not an epic")
+
+    backlog = backlog_id(tickets)
+    blocking, movable, unfinished = classify(epic_id, tickets, backlog)
+    all_worktrees = worktree_list(root)
+    is_backlog = epic_id == backlog or ("backlog" in epic["tags"] and epic.get("status") != "closed")
+
+    print(json.dumps({
+        "epic": {"id": epic_id, "title": epic["title"], "status": epic.get("status"),
+                 "parent": epic["parent"], "is_backlog": is_backlog},
+        "resolved_from": ({"id": resolved_from, "title": tickets[resolved_from]["title"]}
+                          if resolved_from else None),
+        "parent": parent_info(epic, tickets, backlog),
+        "branch": branch_info(branch, source, root, all_worktrees) if branch else None,
+        "branch_candidates": candidates,
+        "branch_note": note,
+        "main_repo": {"current_branch": git("branch", "--show-current", cwd=root) or None,
+                      "dirty": bool(is_dirty(root))},
+        "worktrees": run_worktrees(root, all_worktrees, branch),
+        "backlog": backlog,
+        "blocking": blocking,
+        "movable": movable,
+        "unfinished": unfinished,
+        "closeable": not blocking and not unfinished and not is_backlog,
+    }, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
