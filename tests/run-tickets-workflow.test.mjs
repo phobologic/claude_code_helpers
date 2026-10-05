@@ -171,6 +171,18 @@ const implDone = (sha, extra = {}) => ({ result: { status: 'done', head_sha: sha
   check('a run without gates merges and commits directly', /git merge --no-ff ticket\/N -m /.test(p) && !p.includes('--no-commit'))
 }
 
+// A ticket found already merged records its own merge commit, not whatever HEAD is now.
+for (const gates of [[], ['npm test']]) {
+  const { calls } = await run({ ...base, slots: ['s1'], gates, tickets: [T('K', [], ['k'])] })
+  const p = promptOf(calls, 'merge')
+  const label = gates.length ? 'gated' : 'ungated'
+  check(`${label}: an already-merged ticket records its own merge commit`,
+    p.includes('Already up to date') && p.includes("--grep='^Merge K:'") && p.includes('rev-parse --short ticket/K'))
+  check(`${label}: an already-merged ticket does not get a second merge note`, p.includes('unless it already'))
+  check(`${label}: every git command gets its own Bash call`, p.includes('its own Bash call'))
+  check(`${label}: an error reports whether the tree is clean`, p.includes('tree_clean true only if'))
+}
+
 // ---------- halts ----------
 
 // A merge error halts the run: queued tickets stall instead of starting.
@@ -190,6 +202,78 @@ const implDone = (sha, extra = {}) => ({ result: { status: 'done', head_sha: sha
   const { out } = await run({ ...base, slots: ['s1'], tickets }, (kind, id) => kind === 'merge' && id === 'M1' ? { result: null } : {})
   check('a dead merge agent halts the run', out.tickets[0].outcome === 'blocked' && out.tickets[1].outcome === 'stalled' && Boolean(out.mergeHalted),
     `${JSON.stringify(out.tickets.map(t => [t.id, t.outcome]))} ${out.mergeHalted}`)
+}
+
+// An error that left the tree clean (a refused command) gets one fresh attempt, and the run carries on.
+{
+  const tickets = [T('R', [], ['r']), T('O', [], ['o'])]
+  const { out, calls } = await run({ ...base, slots: ['s1'], tickets }, (kind, id, round) =>
+    kind === 'merge' && id === 'R' && round === 1 ? { result: { result: 'error', tree_clean: true, detail: 'git merge was refused' } } : {})
+  const merges = calls.filter(c => c.kind === 'merge' && c.id === 'R')
+  check('a clean-tree merge error is retried once', merges.length === 2 && out.tickets[0].outcome === 'merged', JSON.stringify(out.tickets[0]))
+  check('the retry is told what stopped the first attempt', merges[1].prompt.includes('git merge was refused') && !merges[0].prompt.includes('earlier merge attempt'))
+  check('a retried merge does not re-implement, re-verify, or re-review',
+    calls.filter(c => c.id === 'R' && c.kind !== 'merge').length === 3, calls.filter(c => c.id === 'R').map(c => c.kind).join())
+  check('the run is not halted by an error the retry got past', !out.mergeHalted && out.tickets[1].outcome === 'merged')
+}
+{
+  const { calls } = await run({ ...base, slots: ['s1'], tickets: [T('R3', [], ['r'])] }, (kind, id, round) => {
+    if (kind === 'impl') return implDone(`h${round}`)
+    if (kind !== 'merge') return {}
+    return round === 1 ? { result: { result: 'error', tree_clean: true, detail: 'refused' } }
+      : round === 2 ? { result: { result: 'conflict', conflicted_files: ['r'], detail: '' } } : {}
+  })
+  const last = calls.filter(c => c.kind === 'merge').pop()
+  check('only the attempt right after an error is told about it', last.round === 3 && !last.prompt.includes('earlier merge attempt'))
+}
+
+// A second clean-tree error halts merging; so does a first error with the tree in doubt.
+{
+  const { out, calls } = await run({ ...base, slots: ['s1'], tickets: [T('R2', [], ['r']), T('Q', [], ['q'])] }, (kind, id) =>
+    kind === 'merge' && id === 'R2' ? { result: { result: 'error', tree_clean: true, detail: 'refused again' } } : {})
+  check('a second clean-tree error halts the run', calls.filter(c => c.kind === 'merge').length === 2 && out.tickets[0].outcome === 'blocked'
+    && out.tickets[1].outcome === 'stalled' && out.mergeHalted === 'refused again', JSON.stringify(out.tickets))
+}
+{
+  const { out, calls } = await run({ ...base, slots: ['s1'], tickets: [T('D', [], ['d'])] }, kind =>
+    kind === 'merge' ? { result: { result: 'error', tree_clean: false, detail: 'abort failed' } } : {})
+  check('an error that left the tree in doubt halts at once', calls.filter(c => c.kind === 'merge').length === 1 && Boolean(out.mergeHalted))
+}
+
+// ---------- resuming ----------
+
+// A ticket whose branch already passed review in an earlier run goes straight to merge.
+{
+  const reviewed = { sha: 'abc1234', human_checks: ['menu opens: look at it on a phone'] }
+  const { out, calls, logs } = await run({ ...base, slots: ['s1'], tickets: [T('W', [], ['w'], { reviewed }), T('X', ['W'], ['x'])] })
+  check('a reviewed ticket runs only its merge', calls.filter(c => c.id === 'W').map(c => c.kind).join() === 'merge',
+    calls.filter(c => c.id === 'W').map(c => c.kind).join())
+  check('it merges and its dependent runs', out.tickets.every(t => t.outcome === 'merged'))
+  check('its earlier human checks are carried into the result', out.tickets[0].humanChecks.join() === reviewed.human_checks.join())
+  check('the log says it skipped to merge', logs.some(l => l.includes('W') && l.includes('earlier run')), logs.join(' | '))
+}
+
+// If it then conflicts, its first implementer prepares the slot, and the fix is verified and reviewed.
+{
+  const { out, calls } = await run({ ...base, slots: ['s1'], tickets: [T('Y', [], ['y'], { reviewed: { sha: 'abc1234', human_checks: [] } })] },
+    (kind, id, round) => {
+      if (kind === 'impl') return implDone('def5678')
+      return kind === 'merge' && round === 1 ? { result: { result: 'conflict', conflicted_files: ['y'], detail: '' } } : {}
+    })
+  const impl = promptOf(calls, 'impl')
+  check('the conflict round prepares the slot', impl.includes('worktree-reset') && impl.includes('Merge conflict'))
+  check('the resolved branch is verified and reviewed before merging again',
+    calls.map(c => c.kind).join() === 'merge,impl,ac,review,merge' && out.tickets[0].outcome === 'merged', calls.map(c => c.kind).join())
+}
+
+// A gate fix that commits nothing on a reviewed ticket merges again without review, even when shas differ in length.
+{
+  const { calls } = await run({ ...base, slots: ['s1'], gates: ['npm test'], tickets: [T('Z', [], ['z'], { reviewed: { sha: 'abc1234', human_checks: [] } })] },
+    (kind, id, round) => {
+      if (kind === 'impl') return implDone('abc1234def567')
+      return kind === 'merge' && round === 1 ? { result: { result: 'gate_fail', failed_gate: 'npm test', detail: 'flaky' } } : {}
+    })
+  check('a short and a full sha of one commit count as unchanged', calls.map(c => c.kind).join() === 'merge,impl,merge', calls.map(c => c.kind).join())
 }
 
 // ---------- what each agent is told ----------

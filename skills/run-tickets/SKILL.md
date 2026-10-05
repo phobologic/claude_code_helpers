@@ -31,10 +31,11 @@ Progress:
 ## Phase 0: Parse arguments
 
 `$ARGUMENTS` is either a single epic ID (its open children are the run) or one
-or more ticket IDs. `--resume` means a previous run was interrupted: include
-tickets already marked `in_progress` and reuse existing branches. `--slots N`
-overrides the pool size. Strip both flags before calling `run-tickets-plan`,
-except that `--resume` becomes `--include-in-progress`.
+or more ticket IDs. `--resume` means a previous run halted or was interrupted:
+include tickets already marked `in_progress` and reuse existing branches (see
+"If the run halts or dies" in Phase 3). `--slots N` overrides the pool size.
+Strip both flags before calling `run-tickets-plan`, except that `--resume`
+becomes `--include-in-progress`.
 
 The user's request wins over this skill's defaults. If they name an
 integration branch, a slot count, gates, or anything else this skill would
@@ -49,7 +50,7 @@ run-tickets-plan [--include-in-progress] <args>
 ```
 
 It prints JSON: `tickets` (topologically ordered, each with in-set `deps`,
-`tags`, `has_ac`, `files`), `excluded` (with reasons), `decisions`,
+`tags`, `has_ac`, `files`, `reviewed`), `excluded` (with reasons), `decisions`,
 `decision_candidates`, `cycles`, `overlaps`, `unannotated`, `large`,
 `setup_warnings`, `integration`, and `stats`. If `tickets` is empty, show
 `excluded` and stop.
@@ -136,8 +137,19 @@ Never let an untagged decision ticket run because nobody asked.
 **Setup warnings.** These are repo problems that break agents in fresh
 worktrees. Show each one and offer to fix it before proceeding. The common one
 is a JS repo with no `node_modules/` line in `.worktreelinks`: offer to append
-it (commit that on the main branch only if the user agrees). Do not proceed
-past an unfixed setup warning without the user's explicit choice.
+it (commit that on the main branch only if the user agrees). Another is no
+permission rule allowing `git merge`: in auto mode the classifier judges each
+merge step's commands, has refused one that it allowed for earlier merges, and
+two refusals for one ticket halt merging for the whole run. Offer to add
+`"Bash(git merge:*)"` to `permissions.allow` in the project's
+`.claude/settings.local.json` (create the file if needed). Do not proceed past
+an unfixed setup warning without the user's explicit choice.
+
+**Reviewed on an earlier run.** A ticket with a non-null `reviewed` passed AC
+verification and review in an earlier run that never merged it, and its
+`ticket/<id>` branch has not moved since. The workflow sends it straight to
+merge, carrying the human checks from that verification. Pass `reviewed` into
+the workflow args unchanged.
 
 **File overlaps.** `overlaps` lists files named by tickets with no dependency
 path between them. The workflow never runs two of them at once and starts the
@@ -204,7 +216,7 @@ Present the plan:
 Run: <epic <id>: <title> | <N> tickets>
 Tickets: <N> runnable (<K> with AC), <R> ready now · longest chain <L> · max width <W>
 
-  [<id>] <title>  deps: <ids or ->  AC: <yes|no>  <"decided: <answer>" when the owner decided it>
+  [<id>] <title>  deps: <ids or ->  AC: <yes|no>  <"decided: <answer>" when the owner decided it>  <"reviewed at <sha>: straight to merge" when reviewed>
   ...
 
 Excluded:
@@ -247,9 +259,18 @@ ticket with `tk start`. It prints `repoRoot`, `integrationBranch`,
   without `--merge-main`; existing worktrees are reused) or cancel (then
   remove the integration worktree it made).
 
+On `--resume` after a run that died without a completion notification, its
+run record (`.worktrees/run-<stamp>.json`) and worktrees are still there:
+pass that record's stamp instead of a new one, so setup reuses its worktrees,
+and keep the record's `baseBranch` in the Workflow args instead of the one
+setup prints (the branch has moved since, and the integration check compares
+against where it started). If `git status` in the integration worktree shows
+a merge in progress, show it to the user before going on.
+
 **Gate baseline.** Run each gate once in the integration worktree, timing it,
-with a Bash timeout of 600000 ms. Drop a gate, and tell the user which and
-why, when:
+with a Bash timeout of 600000 ms. Use a subshell,
+`(cd <integrationWorktree> && <gate>)`, so your own working directory stays at
+the repo root. Drop a gate, and tell the user which and why, when:
 - it already fails there, since it would fail every merge;
 - it takes more than about 8 minutes, since the merge step's 10-minute
   command limit would cut it off;
@@ -278,7 +299,7 @@ Workflow({
     baseBranch, backlogParent,                                 // from run-tickets-setup
     findingsParent: "<id>",                       // epic, shared parent, or sessionEpic
     gates: ["<command>", ...],                    // passed the baseline; [] for none
-    tickets: [{ id, title, deps, has_ac, files, decision }, ...]   // from the plan, same order
+    tickets: [{ id, title, deps, has_ac, files, decision, reviewed }, ...]   // from the plan, same order
   }
 })
 ```
@@ -302,11 +323,23 @@ Pass `args` as a JSON object, not a string. The launch result prints a `Run ID`
 
 Do not poll. You are notified when the workflow completes.
 
-**If the run is stopped or dies:** in this session, relaunch with
-`Workflow({ scriptPath, resumeFromRunId })`; finished agents replay from cache.
-From a new session, run `/run-tickets <same args> --resume`. Merged tickets are
-already closed in `tk`, and unfinished `ticket/<id>` branches are picked up
-where they left off.
+**If the run halts or dies,** continue it with `/run-tickets <same args> --resume`,
+in this session or a new one. Never relaunch it with `resumeFromRunId`. The
+workflow runtime replays a cached agent only while the relaunched script calls
+agents in exactly the original order. This script calls them in whatever order
+agents finish, so a relaunch replays little beyond the first implementers. It
+then re-runs verification, review and merge for everything after them, even
+tickets that already merged.
+- The workflow completed, a merge halt included: do Phase 4 first. It closes
+  merged tickets, reopens the rest with their branches kept, and removes the
+  worktrees unless the integration worktree is mid-merge.
+- It died or was stopped with no completion notification: run `--resume`
+  directly, reusing the old run's stamp and `baseBranch` (Phase 2).
+
+On `--resume`, merged tickets are closed and drop out. A ticket whose branch
+tip is exactly what its last passing review saw goes straight to merge
+(`reviewed`). Any other unfinished `ticket/<id>` branch is picked up by its
+implementer, then verified and reviewed again.
 
 ## Phase 4: Finish
 

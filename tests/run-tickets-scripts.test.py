@@ -1,4 +1,5 @@
-"""Checks bin/run-tickets-setup and bin/run-tickets-finish against throwaway git repos.
+"""Checks bin/run-tickets-setup and bin/run-tickets-finish against throwaway git repos, and
+run-tickets-status's test for metadata an in-session resume has outdated.
 
     python3 tests/run-tickets-scripts.test.py
 
@@ -11,6 +12,9 @@ import json
 import os
 import subprocess
 import tempfile
+from datetime import datetime, timezone
+from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 
 BIN = Path(__file__).resolve().parent.parent / "bin"
@@ -160,7 +164,8 @@ def finished_run(tmp, merge_halted=None):
         {"id": "a", "title": "A", "outcome": "merged", "sha": "m1", "acFails": 1, "qrRounds": 2, "conflicts": 0,
          "gateFails": 0, "findings": ["f1"], "outOfScope": ["f2"], "backlog": ["k1"], "noted": [],
          "humanChecks": ["menu opens: look at the menu on a phone", "limit is 5: DISPUTED: the design doc says 3"]},
-        {"id": "b", "title": "B", "outcome": "blocked", "reason": "implementer failed: needs decision: which limit"},
+        {"id": "b", "title": "B", "outcome": "blocked", "reason": "implementer failed: needs decision: which limit",
+         "humanChecks": ["list scrolls: try it on a tablet", "size is 2: DISPUTED: the spec says 4"]},
         {"id": "c", "title": "C", "outcome": "stalled", "reason": "depends on unmerged b"},
     ]}
     result_path = os.path.join(tmp, "result.json")
@@ -187,6 +192,8 @@ with tempfile.TemporaryDirectory() as tmp:
     check("finish: files the disputed check as needs-human under the findings parent",
           "--parent e1 --tags needs-human" in log and out.get("disputed", [{}])[0].get("ticket"), log)
     check("finish: keeps other human checks for the report", [h["id"] for h in out.get("human_checks", [])] == ["a"])
+    check("finish: an unmerged ticket's human checks wait for the run that merges it",
+          log.count("create ") == 1 and [d["source"] for d in out.get("disputed", [])] == ["a"], log)
     check("finish: collects findings and out-of-scope ids", out.get("findings") == ["f1", "f2"] and out.get("backlog") == ["k1"])
     check("finish: reports the owner's decisions from the args", out.get("decided") == [{"id": "a", "decision": "limit is 3"}])
     check("finish: removes every worktree", sorted(out.get("worktrees_removed", [])) == sorted([s["integrationWorktree"], *s["slots"]])
@@ -199,10 +206,13 @@ with tempfile.TemporaryDirectory() as tmp:
 
 with tempfile.TemporaryDirectory() as tmp:
     root, env, s, record, result_path = finished_run(tmp, merge_halted="merge agent died")
+    # The merge agent died mid-merge: a merge is in progress in the integration worktree.
+    sh("git", "merge", "--no-ff", "--no-commit", "ticket/b", cwd=s["integrationWorktree"])
     code, out, err = run(FINISH, "--result", result_path, "wf_test", cwd=root, env=env)
     out = out or {}
-    check("finish after a merge halt: keeps the integration worktree and the record",
+    check("finish after a merge halt mid-merge: keeps the integration worktree and the record",
           [w["path"] for w in out.get("worktrees_left", [])] == [s["integrationWorktree"]] and os.path.exists(record), f"{out} {err}")
+    check("finish after a merge halt mid-merge: reports the integration worktree's status", bool(out.get("integration_status")))
     check("finish after a merge halt: still removes the slots", sorted(out.get("worktrees_removed", [])) == sorted(s["slots"]))
     log_before = Path(env["TK_LOG"]).read_text()
     code, out, err = run(FINISH, "--result", result_path, "wf_test", cwd=root, env=env)
@@ -210,9 +220,37 @@ with tempfile.TemporaryDirectory() as tmp:
           code == 0 and (out or {}).get("tickets_already_recorded") and Path(env["TK_LOG"]).read_text() == log_before, err)
 
 with tempfile.TemporaryDirectory() as tmp:
+    root, env, s, record, result_path = finished_run(tmp, merge_halted="git merge was refused")
+    code, out, err = run(FINISH, "--result", result_path, "wf_test", cwd=root, env=env)
+    out = out or {}
+    check("finish after a merge halt with the tree clean: removes the integration worktree too, so --resume can reuse the branch",
+          s["integrationWorktree"] in out.get("worktrees_removed", []) and not out.get("worktrees_left")
+          and not os.path.exists(record), f"{out} {err}")
+
+with tempfile.TemporaryDirectory() as tmp:
     root, env = new_repo(tmp)
     code, _, err = run(FINISH, "wf_missing", cwd=root, env=env)
     check("finish: a run with no result says how to pass one", code == 1 and "--result" in err, err)
+
+# ---------- status ----------
+
+loader = SourceFileLoader("run_tickets_status", str(BIN / "run-tickets-status"))
+status = module_from_spec(spec_from_loader(loader.name, loader))
+loader.exec_module(status)
+
+with tempfile.TemporaryDirectory() as tmp:
+    journal = os.path.join(tmp, "journal.jsonl")
+    Path(journal).write_text("")
+    os.utime(journal, (1_800_000_100, 1_800_000_100))
+    written = datetime.fromtimestamp(1_800_000_000, timezone.utc).isoformat()
+    check("status: metadata written before the journal's last write is an earlier pass's",
+          status.superseded({"timestamp": written}, journal))
+    os.utime(journal, (1_800_000_002, 1_800_000_002))
+    check("status: metadata written as the run finished is current", not status.superseded({"timestamp": written}, journal))
+    check("status: without a timestamp, start plus duration is when it was written",
+          not status.superseded({"startTime": 1_799_999_000_000, "durationMs": 1_000_000}, journal)
+          and status.superseded({"startTime": 1_799_990_000_000, "durationMs": 1_000_000}, journal))
+    check("status: no metadata or no journal is never stale", not status.superseded(None, journal) and not status.superseded({"timestamp": written}, None))
 
 print(f"\n{failures} check(s) failed" if failures else "\nall checks passed")
 raise SystemExit(1 if failures else 0)

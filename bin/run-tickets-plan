@@ -13,8 +13,12 @@ Resolves the input to a set of runnable tickets and prints one JSON object:
                     an epic that has (or, in epic mode, will get) a branch; null
                     means cut a fresh run/<stamp> from main
   tickets           runnable tickets, topologically ordered:
-                      {id, title, priority, parent, tags, deps, has_ac, files}
-                    deps lists only in-set tickets this one waits on
+                      {id, title, priority, parent, tags, deps, has_ac, files, reviewed}
+                    deps lists only in-set tickets this one waits on. reviewed is
+                    {sha, human_checks} when the ticket's notes end in a passing review
+                    of exactly its ticket/<id> branch tip (an earlier run reviewed it
+                    but did not merge it), else null; the workflow sends such a ticket
+                    straight to merge
   excluded          [{id, title, reason}] for tickets that will not run
   decisions         [{id, title, tags, outside_run, downstream}] for tickets tagged
                     decision: they wait on the owner's call, and so does everything
@@ -41,7 +45,8 @@ when they wait on an open ticket outside the set, or when they sit downstream
 of an excluded ticket.
 
 Also reports `setup_warnings` about the repo itself, such as a package.json with
-no node_modules/ entry in .worktreelinks (worktrees would lack dependencies).
+no node_modules/ entry in .worktreelinks (worktrees would lack dependencies), or
+no permission rule allowing `git merge` (the merge step can be refused).
 """
 
 import json
@@ -70,6 +75,23 @@ DECISION_RE = re.compile(
 
 # tk show appends these after the description; their text is other tickets' or earlier runs'.
 TRAILING_SECTIONS_RE = re.compile(r"^## (?:Notes|Blockers|Blocking|Children|Linked)\b.*$", re.MULTILINE)
+
+# tk keeps notes in the ticket file under ## Notes, each after a **<UTC timestamp>** line;
+# tk show prints the sections after that one itself.
+NOTES_RE = re.compile(r"^## Notes\s*$(.*?)(?=^## (?:Blockers|Blocking|Children|Linked)\b|\Z)", re.MULTILINE | re.DOTALL)
+NOTE_STAMP_RE = re.compile(r"^\*\*\d{4}-\d\d-\d\dT[\d:.]+Z?\*\*\s*$", re.MULTILINE)
+# Notes that say what state the ticket's work is in. A passing review is only current
+# while none of these follow it: new work, a new verdict, or changed criteria.
+PIPELINE_NOTE_RE = re.compile(
+    r"^(?:\*\*Review round \d+\*\*|\*\*Implementer round|AC VERIFICATION:|ACCEPTANCE CRITERIA:|Owner decision)")
+PASSING_REVIEW_RE = re.compile(r"^\*\*Review round \d+\*\*:\s*(?:CLEAN|FINDINGS)\b")
+# The reviewer's form, "<integration branch>...ticket/<id> at <sha>". Free-form text after
+# the label can name other commits (where the branch merged), so nothing looser is trusted.
+REVIEWED_AT_RE = re.compile(r"^\*\*Diff reviewed\*\*:\s*\S+\.\.\.ticket/\S+ at ([0-9a-f]{7,40})\b", re.MULTILINE)
+# Verifiers write "2. <criterion>: met, NEEDS A PERSON: <check>. Code: ..." or put the
+# NEEDS A PERSON line on its own, sometimes with a qualifier before the colon.
+CRITERION_MET_RE = re.compile(r"^\s*(?:[-*]|\d+[.)])?\s*(.+?):\s*met\b")
+NEEDS_PERSON_LABEL_RE = re.compile(r"NEEDS A PERSON(?:\s*\([^)]*\))?\s*:\s*(.*)")
 
 # Words people put in a **Files** line that are not paths. Paths become in-run locks,
 # so prose must not.
@@ -159,6 +181,83 @@ def ac_count(body):
     return count
 
 
+def notes(body):
+    """The ticket's notes from tk show's output, oldest first, each without its timestamp line."""
+    m = NOTES_RE.search(body)
+    if not m:
+        return []
+    return [n.strip() for n in NOTE_STAMP_RE.split(m.group(1))[1:] if n.strip()]
+
+
+def passing_review(note_list):
+    """(reviewed sha, human checks) when the ticket's state is a passing review, else None.
+
+    The human checks are the NEEDS A PERSON lines of the AC pass the review
+    followed, in the form the workflow reports them.
+    """
+    pipeline = [n for n in note_list if PIPELINE_NOTE_RE.match(n)]
+    if not pipeline or not PASSING_REVIEW_RE.match(pipeline[-1]):
+        return None
+    at = REVIEWED_AT_RE.search(pipeline[-1])
+    if not at:
+        return None
+    acs = [n for n in pipeline if n.startswith("AC VERIFICATION:")]
+    checks = []
+    if acs and acs[-1].startswith("AC VERIFICATION: PASS"):
+        for line in acs[-1].splitlines():
+            i = line.find("NEEDS A PERSON")
+            if i < 0:
+                continue
+            label = NEEDS_PERSON_LABEL_RE.match(line[i:])
+            what = (label.group(1) if label else line[i:]).split(". Code:")[0].strip()
+            crit = CRITERION_MET_RE.match(line[:i])
+            checks.append(f"{crit.group(1)}: {what}" if crit else what)
+    return at.group(1), checks
+
+
+def reviewed(ticket_id, body):
+    """{sha, human_checks} when the last passing review saw exactly ticket/<id>'s tip, else None."""
+    found = passing_review(notes(body))
+    if not found:
+        return None
+    sha, checks = found
+    tip = git("rev-parse", "--verify", "--quiet", f"refs/heads/ticket/{ticket_id}")
+    if not tip or not tip.startswith(sha):
+        return None
+    return {"sha": sha, "human_checks": checks}
+
+
+def allows_git_merge(rules):
+    """True when one of these permission allow rules covers `git merge ...`."""
+    for rule in rules:
+        m = re.fullmatch(r"Bash(?:\((.*)\))?", str(rule).strip())
+        if not m:
+            continue
+        body = (m.group(1) if m.group(1) is not None else "*").strip()
+        if body.endswith(":*"):
+            prefix = body[:-2]
+        elif body.endswith("*"):
+            prefix = body[:-1]
+        else:
+            continue  # an exact command, not a prefix
+        if prefix.strip() in ("", "git", "git merge"):
+            return True
+    return False
+
+
+def allow_rules(root):
+    """permissions.allow from the project's and the user's settings files."""
+    rules = []
+    for path in (os.path.join(root, ".claude", "settings.json"), os.path.join(root, ".claude", "settings.local.json"),
+                 os.path.expanduser("~/.claude/settings.json"), os.path.expanduser("~/.claude/settings.local.json")):
+        try:
+            with open(path) as f:
+                rules += (json.load(f).get("permissions") or {}).get("allow") or []
+        except (OSError, ValueError, AttributeError):
+            continue
+    return rules
+
+
 def setup_warnings():
     """Repo-level problems that would break agents working in fresh worktrees."""
     out = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
@@ -180,6 +279,11 @@ def setup_warnings():
             "package.json exists but node_modules is not in .worktreelinks, so worktrees have no "
             "dependencies: tests, type checks, and commit hooks will fail or pick up the wrong tool "
             "versions. Add a `node_modules/` line to .worktreelinks.")
+    if not allows_git_merge(allow_rules(root)):
+        warnings.append(
+            "No permission allow rule covers `git merge`. In auto mode the permission classifier judges every "
+            "merge step's git commands and can refuse one, which halts merging for the rest of the run. Add "
+            "`Bash(git merge:*)` to permissions.allow in .claude/settings.local.json.")
     return warnings
 
 
@@ -290,6 +394,7 @@ def main(argv):
             "has_ac": bool(AC_RE.search(body)),
             "ac_count": ac_count(body),
             "files": parse_files(body),
+            "reviewed": reviewed(tid, body),
         }
 
     # Split deps into in-set edges and external blockers. An external blocker tagged
@@ -382,7 +487,8 @@ def main(argv):
 
     parents = {t["parent"] for t in info.values()}
     shared_parent = next(iter(parents)) if len(parents) == 1 else None
-    tickets = [{k: info[t][k] for k in ("id", "title", "priority", "parent", "tags", "deps", "has_ac", "ac_count", "files")}
+    tickets = [{k: info[t][k] for k in ("id", "title", "priority", "parent", "tags", "deps", "has_ac", "ac_count", "files",
+                                        "reviewed")}
                for t in order]
     dependents = {t["id"]: sum(1 for o in tickets if t["id"] in anc(o["id"])) for t in tickets}
     print(json.dumps({

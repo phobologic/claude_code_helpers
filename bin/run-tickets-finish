@@ -15,12 +15,15 @@ In order:
   2. Tickets. merged: closed with a note if still open (the merge step normally
      closed it). blocked: reopened, with a note giving the reason and the branch
      that holds the work. stalled: reopened, with a note naming what it waited on.
-  3. Each human check whose text carries DISPUTED: becomes a ticket tagged
-     needs-human under the findings parent, so the owner confirms the disputed
-     criterion before the epic wraps.
+  3. Human checks of merged tickets: each whose text carries DISPUTED: becomes a
+     ticket tagged needs-human under the findings parent, so the owner confirms
+     the disputed criterion before the epic wraps; the rest go in the report.
+     An unmerged ticket's checks wait for the run that merges it, which carries
+     them over when it skips straight to merge, so none is filed twice.
      Steps 2 and 3 are marked done in the run record and skipped on a re-run.
   4. Worktrees are removed without --force, integration worktree first. After a
-     merge halt the integration worktree is left as is and its status reported.
+     merge halt the integration worktree is left as is, and its status reported,
+     unless it is clean with no merge in progress.
   5. Slot placeholder branches are deleted once their worktree is gone, if they
      hold no commits of their own. ticket/<id> branches of merged tickets are
      deleted once the integration branch contains them. Blocked tickets keep theirs.
@@ -39,7 +42,7 @@ Prints one JSON object:
   decided             [{id, decision}]: owner answers the run carried, from the args
   needs_decision      [{id, reason}]: blocked because the implementer says the
                       ticket needs an owner's choice. The lead checks the claim.
-  human_checks        [{id, check}]: criteria a person should check by hand
+  human_checks        [{id, check}]: criteria of merged tickets a person should check by hand
   disputed            [{source, check, ticket}]: the needs-human tickets filed
   findings, backlog, noted
                       ids across all tickets (findings includes out-of-scope
@@ -164,7 +167,9 @@ def record_tickets(r, report, args, result, tickets_dir):
             "conflicts": t.get("conflicts", 0), "gateFails": t.get("gateFails", 0), "action": action,
         })
 
-        for check in t.get("humanChecks") or []:
+        # Checks describe merged work; an unmerged ticket's wait for the run that merges it.
+        checks = (t.get("humanChecks") or []) if outcome == "merged" else []
+        for check in checks:
             if not DISPUTED_RE.search(check):
                 report["human_checks"].append({"id": tid, "check": check})
                 continue
@@ -185,6 +190,12 @@ def record_tickets(r, report, args, result, tickets_dir):
             report["disputed"].append({"source": tid, "check": check, "ticket": new_id})
 
 
+def tree_clean(r, path):
+    """No tracked changes and no merge in progress."""
+    return (r.read("git", "status", "--porcelain", "--untracked-files=no", cwd=path).stdout.strip() == ""
+            and r.read("git", "rev-parse", "-q", "--verify", "MERGE_HEAD", cwd=path).returncode != 0)
+
+
 def clean_git(r, report, args, result):
     branch = args.get("integrationBranch")
     integration = args.get("integrationWorktree")
@@ -193,7 +204,9 @@ def clean_git(r, report, args, result):
     for path in paths:
         if os.path.realpath(path) not in present:
             continue
-        if path == integration and result.get("mergeHalted"):
+        # A halt left as clean as the merge step found it (a refused command, a gate that
+        # could not run) has nothing to inspect, and keeping it would block --resume.
+        if path == integration and result.get("mergeHalted") and not tree_clean(r, path):
             report["worktrees_left"].append({"path": path, "reason": "merge step halted; inspect before removing"})
             st = r.read("git", "status", "--short", cwd=path)
             report["integration_status"] = st.stdout.splitlines()

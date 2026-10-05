@@ -21,7 +21,9 @@ agent prose:
   run metadata ~/.claude/projects/*/*/workflows/<run-id>.json, which Claude Code
                writes only when the run finishes: args, final result, start
                time and duration. Finished runs are found through it after the
-               run record is gone.
+               run record is gone. A run relaunched with resumeFromRunId keeps
+               its id, so until it finishes again this file still holds the
+               earlier pass; a journal written after it marks it stale.
 
 With no run-id, reports the newest run for the current repo, running or
 finished. --list shows recent runs for the repo. Because every source is found
@@ -127,12 +129,42 @@ def find_run(run_id):
     return newest, runs[newest]
 
 
-def read_journal(run_id):
+def find_journal(run_id):
     matches = glob.glob(os.path.join(PROJECTS, "*", "*", "subagents", "workflows", run_id, "journal.jsonl"))
-    if not matches:
+    return matches[0] if matches else None
+
+
+def read_journal(run_id):
+    path = find_journal(run_id)
+    if not path:
         return None, []
-    with open(matches[0]) as f:
-        return matches[0], [json.loads(line) for line in f if line.strip()]
+    with open(path) as f:
+        return path, [json.loads(line) for line in f if line.strip()]
+
+
+# The journal's last write comes before the metadata is written; allow for clock and filesystem slack.
+STALE_AFTER_SECONDS = 5
+
+
+def superseded(final, journal_path):
+    """True when the finished-run metadata predates the journal's last write.
+
+    Relaunching with resumeFromRunId keeps the run id and appends to the same
+    journal, but Claude Code rewrites the metadata only when the relaunched run
+    finishes. Until then the metadata's result is the earlier pass's.
+    """
+    if not final or not journal_path:
+        return False
+    if final.get("timestamp"):
+        written = parse_ts(final["timestamp"]).timestamp()
+    elif final.get("startTime") and final.get("durationMs") is not None:
+        written = (final["startTime"] + final["durationMs"]) / 1000
+    else:
+        return False
+    try:
+        return os.path.getmtime(journal_path) > written + STALE_AFTER_SECONDS
+    except OSError:
+        return False
 
 
 # ---------- ticket state ----------
@@ -438,6 +470,8 @@ def list_runs():
     for run_id, entry in runs.items():
         final, record = entry.get("final"), entry.get("record")
         args = (final or {}).get("args") or (record or {}).get("args") or {}
+        if superseded(final, find_journal(run_id)):
+            final = None
         tickets = ((final or {}).get("result") or {}).get("tickets") or []
         merged = sum(1 for t in tickets if t.get("outcome") == "merged")
         if final and final.get("startTime"):
@@ -461,10 +495,12 @@ def main(argv):
     run_id, entry = find_run(rest[0] if rest else None)
     final, record = entry.get("final"), entry.get("record")
     args = (final or {}).get("args") or (record or {}).get("args") or {}
+    journal_path, events = read_journal(run_id)
+    if superseded(final, journal_path):
+        final = None  # an earlier pass's result; the relaunched run is still going
     result = (final or {}).get("result")
     finished = final is not None
 
-    journal_path, events = read_journal(run_id)
     run_dir = os.path.dirname(journal_path) if journal_path else None
     tickets, integration, integration_agent = ticket_states(args, result, events)
     by_id = {t["id"]: t for t in tickets}

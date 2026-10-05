@@ -24,9 +24,11 @@ export const meta = {
 //                        against; the skill passes the integration branch's starting commit
 //   gates                optional: commands that must pass on every merged result before the merge commits
 //                        (lint, type check, tests), already known to pass on the integration branch
-//   tickets              [{id, title, deps, has_ac, files, decision?}] in topological order. files are the
-//                        ticket's **Files** paths (tickets that share one never run at once); decision is the
-//                        owner's answer to the ticket's open question, when it had one
+//   tickets              [{id, title, deps, has_ac, files, decision?, reviewed?}] in topological order. files
+//                        are the ticket's **Files** paths (tickets that share one never run at once); decision
+//                        is the owner's answer to the ticket's open question, when it had one; reviewed is
+//                        {sha, human_checks} when an earlier run's review passed the branch at exactly its
+//                        current tip (run-tickets-plan checks), and the ticket goes straight to merge
 //   caps                 optional {acFails, qrReworks, conflicts, gateFails}
 
 const A = args
@@ -249,6 +251,10 @@ const MERGE_SCHEMA = {
     sha: { type: 'string' },
     conflicted_files: { type: 'array', items: { type: 'string' } },
     failed_gate: { type: 'string', description: 'with gate_fail: the command that failed' },
+    tree_clean: {
+      type: 'boolean',
+      description: 'with error: true only when, after the failure, `git status --porcelain --untracked-files=no` and `git rev-parse -q --verify MERGE_HEAD` both printed nothing',
+    },
     detail: { type: 'string' },
   },
   required: ['result', 'detail'],
@@ -291,11 +297,13 @@ current directory name, and from inside a worktree it would produce a meaningles
 const branchOf = t => `ticket/${t.id}`
 
 function implementPrompt(t, slot, work) {
-  const setup = work.kind === 'new'
+  // The ticket's first implementer prepares the slot. That is usually the 'new' round, but a ticket
+  // that went straight to merge meets its first implementer at a conflict or a failed gate.
+  const setup = work.round === 1
     ? `Prepare the worktree for this ticket (after the WORKTREE OK check):
   worktree-reset ${slot} ${A.integrationBranch}
   git show-ref --verify --quiet refs/heads/${branchOf(t)} && git checkout ${branchOf(t)} || git checkout -b ${branchOf(t)} ${A.integrationBranch}
-The first form resumes a branch left by an earlier interrupted run; keep any commits on it.`
+The first form resumes a branch left by an earlier run; keep any commits on it.`
     : `Your worktree is already on ${branchOf(t)} with your earlier commits. Run \`git checkout ${branchOf(t)}\` to be sure, then continue there.`
 
   let task
@@ -423,31 +431,48 @@ verdict note on the ticket, then return the verdict with every field your instru
 \`reviewed_sha\` from \`git rev-parse --short ${branchOf(t)}\`.`
 }
 
-function mergePrompt(t) {
+// previousError: the detail of this ticket's last merge attempt, which stopped with the tree clean.
+function mergePrompt(t, previousError) {
   // The title goes inside a double-quoted shell argument, where these would be expanded or end it.
   const message = `Merge ${t.id}: ${t.title.replace(/["`$\\]/g, "'")}`
+  const retry = previousError ? `
+An earlier merge attempt for this ticket stopped with an error and left the tree clean:
+  ${previousError}
+Start again from step 1. If the ticket turns out to be merged already, step 3 says so.
+` : ''
   const opening = `${header(A.integrationWorktree)}
 You are the merge step for ticket ${t.id}. Run exactly these steps and nothing else. Do not edit any file.
-
+Give every git and tk command below its own Bash call after the \`cd\` prefix; never join two of them with && or ;.
+${retry}
 1. \`git status --porcelain --untracked-files=no\` must print nothing (untracked files cannot affect a merge and are ignored).
-   If it prints anything, return result "error" with the output and stop.
+   If it prints anything, return result "error" with the output and tree_clean false, and stop without touching anything.
 2. \`git checkout ${A.integrationBranch}\` (it should already be checked out here).`
+  const already = `If it says "Already up to date", the ticket was merged before (an earlier attempt committed but did not record it)`
   const conflict = `If the merge reports conflicts: run \`git diff --name-only --diff-filter=U\` to list them, then \`git merge --abort\`,
    confirm \`git status --porcelain --untracked-files=no\` is empty, and return result "conflict" with the conflicted files.`
-  const close = `capture \`git rev-parse --short HEAD\`, then run
+  // After an "Already up to date", HEAD is whatever merged last, not this ticket's merge.
+  const close = `Find the sha to record. After a merge you committed, it is \`git rev-parse --short HEAD\`. When step 3 said
+   "Already up to date", it is the ticket's own merge commit:
+     git log --merges -1 --format=%h --grep='^Merge ${t.id}:'
+   and if that prints nothing, \`git rev-parse --short ${branchOf(t)}\`. Then run \`tk show ${t.id}\`; unless it already
+   has a "Merged into ${A.integrationBranch}" note, run
      tk add-note ${t.id} "Merged into ${A.integrationBranch} by /run-tickets at <sha>."
-     tk close ${t.id}
-   and return result "merged" with the sha.
-Any other failure: return result "error" with the command output.`
+   Then \`tk close ${t.id}\`, and return result "merged" with the sha.`
+  const failure = `Any failure these steps do not cover, including a command that is refused or denied: do not try another way to
+do the same thing. If \`git rev-parse -q --verify MERGE_HEAD\` prints a sha, run \`git merge --abort\`. Then run
+\`git status --porcelain --untracked-files=no\` and \`git rev-parse -q --verify MERGE_HEAD\`, and return result "error"
+with the failing command and its output in detail, and tree_clean true only if both of those printed nothing.`
 
   if (!GATES.length) {
     return `${opening}
-3. \`git merge --no-ff ${branchOf(t)} -m "${message}"\`
+3. \`git merge --no-ff ${branchOf(t)} -m "${message}"\`. ${already}: skip to step 5.
 4. ${conflict}
-5. If the merge succeeded: ${close}`
+5. ${close}
+
+${failure}`
   }
   return `${opening}
-3. \`git merge --no-ff --no-commit ${branchOf(t)}\`. If it says "Already up to date", skip to step 8.
+3. \`git merge --no-ff --no-commit ${branchOf(t)}\`. ${already}: skip to step 8.
 4. ${conflict}
 5. Run each gate on the merged tree, in this order, and stop at the first one that fails. Give every gate's Bash call
    a timeout of 600000 ms:
@@ -456,19 +481,22 @@ ${GATES.map(g => `     ${g}`).join('\n')}
      output, put the tree back (step 7), and return result "gate_fail" with failed_gate set to the command and that
      output in detail.
    - A gate times out or cannot run at all (command not found, missing dependencies): put the tree back (step 7) and
-     return result "error" with what happened. That is a problem with the gate, not with this ticket.
+     return result "error" as the end of these steps describes. That is a problem with the gate, not with this ticket.
 6. Every gate passed. \`git diff --name-only\` must print nothing. If it lists files, a gate rewrote them (a formatter,
    a lockfile, snapshots), so the merged result needs changes the ticket did not make: put the tree back (step 7) and
    return "gate_fail" with failed_gate set to the gate that wrote them and the file list in detail.
-   Otherwise commit the merge the same way merges are always committed here, by repeating it:
+   Otherwise commit the merge the same way merges are always committed here, by repeating it in two Bash calls:
      git merge --abort
      git merge --no-ff ${branchOf(t)} -m "${message}"
-   That is the identical merge, now committed. If it reports anything other than a clean merge, return "error" with
-   its output. Then go to step 8.
+   That is the identical merge, now committed. If it reports a clean merge, go to step 8; anything else is a failure
+   (see the end of these steps).
 7. Putting the tree back: \`git merge --abort\`. If that fails, \`git reset --hard HEAD\` (safe here: step 1 proved the
    tree clean, and this worktree only does merges). Then \`git status --porcelain --untracked-files=no\` must print
-   nothing; if it prints anything, return "error" with that output instead of the result you were about to return.
-8. ${close.charAt(0).toUpperCase()}${close.slice(1)}`
+   nothing; if it prints anything, return "error" with that output and tree_clean false instead of the result you were
+   about to return.
+8. ${close}
+
+${failure}`
 }
 
 function checkPrompt() {
@@ -501,81 +529,95 @@ function withMergeLock(fn) {
 
 // ---------- per-ticket pipeline ----------
 
+// Short and full shas of the same commit match.
+const sameCommit = (a, b) => Boolean(a && b) && (a.startsWith(b) || b.startsWith(a))
+
 async function runTicket(t, slot) {
   const rec = { id: t.id, title: t.title, outcome: null, reason: '', sha: '', acFails: 0, qrRounds: 0, qrReworks: 0,
-    conflicts: 0, gateFails: 0, findings: [], backlog: [], noted: [], outOfScope: [], humanChecks: [], summary: '' }
+    conflicts: 0, gateFails: 0, mergeErrors: 0, findings: [], backlog: [], noted: [], outOfScope: [], humanChecks: [], summary: '' }
   const block = reason => { rec.outcome = 'blocked'; rec.reason = reason; log(`${t.id}: BLOCKED (${reason})`); return rec }
 
-  let work = { kind: 'new' }
+  // What the implementer does next. Null means the branch is ready to merge as it
+  // stands: a resumed run's ticket whose tip is exactly what an earlier review passed.
+  let work = t.reviewed ? null : { kind: 'new' }
   let implRound = 0
   let priorReview = null
   let passedSha = null   // branch tip the last passing review saw
+  let mergeError = null  // detail of the last merge attempt that stopped with the tree clean
+  if (t.reviewed) {
+    passedSha = t.reviewed.sha
+    rec.humanChecks = t.reviewed.human_checks || []
+    rec.summary = `verified and reviewed in an earlier run at ${t.reviewed.sha}`
+    log(`${t.id}: passed review in an earlier run at ${t.reviewed.sha}; going straight to merge`)
+  }
   while (true) {
-    implRound += 1
-    const impl = await agent(implementPrompt(t, slot, { ...work, round: implRound }), {
-      label: `impl ${t.id}${implRound > 1 ? ` r${implRound}` : ''}`, phase: 'Implement', agentType: 'ticket-implementer', schema: IMPL_SCHEMA,
-      ...implEffort(t, work),
-    })
-    if (!impl) return block('implementer died or was stopped')
-    if (impl.status !== 'done') return block(`implementer failed: ${impl.failure_reason || impl.summary}`)
-    rec.summary = impl.summary
-    rec.outOfScope.push(...(impl.out_of_scope || []).map(o => o.ticket_id))
-    log(`${t.id}: implemented (round ${implRound})`)
-
-    // A gate-failure round that could not reproduce the failure commits nothing.
-    // Code that already passed verification and review goes straight back to merge.
-    const unchanged = Boolean(passedSha && impl.head_sha && impl.head_sha === passedSha)
-    if (unchanged) log(`${t.id}: no new commits since review passed; merging again`)
-
-    if (!unchanged && t.has_ac) {
-      const ac = await agent(acPrompt(t, slot, impl.verification), { label: `ac ${t.id}`, phase: 'Verify', agentType: 'ticket-verifier', schema: AC_SCHEMA })
-      if (!ac) return block('AC verifier died or was stopped')
-      if (ac.verdict === 'ERROR') return block(`AC verifier could not run: ${ac.error || ac.failures.join('; ')}`)
-      if (ac.verdict === 'FAIL') {
-        rec.acFails += 1
-        log(`${t.id}: AC FAIL (${rec.acFails}/${CAPS.acFails})`)
-        if (rec.acFails >= CAPS.acFails) return block(`failed AC verification ${rec.acFails} times: ${ac.failures.join('; ')}`)
-        work = { kind: 'ac_fail', failures: ac.failures }
-        continue
-      }
-      // The latest passing round is the one that describes the code being merged.
-      rec.humanChecks = (ac.criteria || []).filter(c => c.human_check).map(c => `${c.criterion}: ${c.human_check}`)
-      log(`${t.id}: AC PASS${rec.humanChecks.length ? `, ${rec.humanChecks.length} criterion(s) need a person to check` : ''}`)
-    }
-
-    if (!unchanged) {
-      rec.qrRounds += 1
-      // One more REWORK would reach the cap, so this review may only send back critical or high findings.
-      const finalRound = rec.qrReworks + 1 >= CAPS.qrReworks
-      const qr = await agent(qrPrompt(t, slot, rec.qrRounds, impl.summary, impl.conditions, finalRound, priorReview), {
-        label: `review ${t.id}${rec.qrRounds > 1 ? ` r${rec.qrRounds}` : ''}`, phase: 'Review', agentType: 'ticket-reviewer', schema: QR_SCHEMA,
-        ...reviewEffort(t, impl),
+    if (work) {
+      implRound += 1
+      const impl = await agent(implementPrompt(t, slot, { ...work, round: implRound }), {
+        label: `impl ${t.id}${implRound > 1 ? ` r${implRound}` : ''}`, phase: 'Implement', agentType: 'ticket-implementer', schema: IMPL_SCHEMA,
+        ...implEffort(t, work),
       })
-      if (!qr) return block('quality reviewer died or was stopped')
-      if (qr.verdict === 'ERROR') return block(`reviewer could not run: ${qr.error || 'no detail'}`)
-      // Only a REWORK carries into the next review; after a conflict round the review starts fresh.
-      priorReview = qr.verdict === 'REWORK' && qr.findings.length && qr.reviewed_sha
-        ? { sha: qr.reviewed_sha, findings: qr.findings } : null
-      for (const f of qr.filed || []) {
-        if (f.action === 'noted') rec.noted.push(f.id)
-        else if (f.parent === 'backlog' && A.backlogParent) rec.backlog.push(f.id)
-        else rec.findings.push(f.id)
-      }
-      if (qr.verdict === 'REWORK' && qr.findings.length) {
-        rec.qrReworks += 1
-        log(`${t.id}: REWORK, ${qr.findings.length} finding(s) (${rec.qrReworks}/${CAPS.qrReworks})`)
-        if (rec.qrReworks >= CAPS.qrReworks) {
-          return block(`quality review asked for rework ${rec.qrReworks} times; last: ${qr.findings.map(f => `${f.location} ${f.description}`).join('; ')}`)
+      if (!impl) return block('implementer died or was stopped')
+      if (impl.status !== 'done') return block(`implementer failed: ${impl.failure_reason || impl.summary}`)
+      rec.summary = impl.summary
+      rec.outOfScope.push(...(impl.out_of_scope || []).map(o => o.ticket_id))
+      log(`${t.id}: implemented (round ${implRound})`)
+
+      // A gate-failure round that could not reproduce the failure commits nothing.
+      // Code that already passed verification and review goes straight back to merge.
+      const unchanged = sameCommit(passedSha, impl.head_sha)
+      if (unchanged) log(`${t.id}: no new commits since review passed; merging again`)
+
+      if (!unchanged && t.has_ac) {
+        const ac = await agent(acPrompt(t, slot, impl.verification), { label: `ac ${t.id}`, phase: 'Verify', agentType: 'ticket-verifier', schema: AC_SCHEMA })
+        if (!ac) return block('AC verifier died or was stopped')
+        if (ac.verdict === 'ERROR') return block(`AC verifier could not run: ${ac.error || ac.failures.join('; ')}`)
+        if (ac.verdict === 'FAIL') {
+          rec.acFails += 1
+          log(`${t.id}: AC FAIL (${rec.acFails}/${CAPS.acFails})`)
+          if (rec.acFails >= CAPS.acFails) return block(`failed AC verification ${rec.acFails} times: ${ac.failures.join('; ')}`)
+          work = { kind: 'ac_fail', failures: ac.failures }
+          continue
         }
-        work = { kind: 'qr_rework', findings: qr.findings }
-        continue
+        // The latest passing round is the one that describes the code being merged.
+        rec.humanChecks = (ac.criteria || []).filter(c => c.human_check).map(c => `${c.criterion}: ${c.human_check}`)
+        log(`${t.id}: AC PASS${rec.humanChecks.length ? `, ${rec.humanChecks.length} criterion(s) need a person to check` : ''}`)
       }
-      passedSha = impl.head_sha || null
-      const filed = (qr.filed || []).map(f => `${f.id} (${f.action === 'noted' ? 'noted' : f.parent})`)
-      log(`${t.id}: review ${qr.verdict}${filed.length ? `, filed ${filed.join(', ')}` : ''}`)
+
+      if (!unchanged) {
+        rec.qrRounds += 1
+        // One more REWORK would reach the cap, so this review may only send back critical or high findings.
+        const finalRound = rec.qrReworks + 1 >= CAPS.qrReworks
+        const qr = await agent(qrPrompt(t, slot, rec.qrRounds, impl.summary, impl.conditions, finalRound, priorReview), {
+          label: `review ${t.id}${rec.qrRounds > 1 ? ` r${rec.qrRounds}` : ''}`, phase: 'Review', agentType: 'ticket-reviewer', schema: QR_SCHEMA,
+          ...reviewEffort(t, impl),
+        })
+        if (!qr) return block('quality reviewer died or was stopped')
+        if (qr.verdict === 'ERROR') return block(`reviewer could not run: ${qr.error || 'no detail'}`)
+        // Only a REWORK carries into the next review; after a conflict round the review starts fresh.
+        priorReview = qr.verdict === 'REWORK' && qr.findings.length && qr.reviewed_sha
+          ? { sha: qr.reviewed_sha, findings: qr.findings } : null
+        for (const f of qr.filed || []) {
+          if (f.action === 'noted') rec.noted.push(f.id)
+          else if (f.parent === 'backlog' && A.backlogParent) rec.backlog.push(f.id)
+          else rec.findings.push(f.id)
+        }
+        if (qr.verdict === 'REWORK' && qr.findings.length) {
+          rec.qrReworks += 1
+          log(`${t.id}: REWORK, ${qr.findings.length} finding(s) (${rec.qrReworks}/${CAPS.qrReworks})`)
+          if (rec.qrReworks >= CAPS.qrReworks) {
+            return block(`quality review asked for rework ${rec.qrReworks} times; last: ${qr.findings.map(f => `${f.location} ${f.description}`).join('; ')}`)
+          }
+          work = { kind: 'qr_rework', findings: qr.findings }
+          continue
+        }
+        passedSha = impl.head_sha || null
+        const filed = (qr.filed || []).map(f => `${f.id} (${f.action === 'noted' ? 'noted' : f.parent})`)
+        log(`${t.id}: review ${qr.verdict}${filed.length ? `, filed ${filed.join(', ')}` : ''}`)
+      }
     }
 
-    const merge = await withMergeLock(() => mergeHalted ? null : agent(mergePrompt(t), {
+    const merge = await withMergeLock(() => mergeHalted ? null : agent(mergePrompt(t, mergeError), {
       label: `merge ${t.id}`, phase: 'Merge', schema: MERGE_SCHEMA, model: 'sonnet', effort: 'medium',
     }))
     if (mergeHalted && !merge) return block(`not merged: run halted after merge error: ${mergeHalted}`)
@@ -592,9 +634,19 @@ async function runTicket(t, slot) {
       return rec
     }
     if (merge.result === 'error') {
+      rec.mergeErrors += 1
+      // A refused command or a gate that could not run, with the tree put back, gets one
+      // more attempt from a fresh agent. Twice, or with the tree in doubt, halts merging.
+      if (merge.tree_clean === true && rec.mergeErrors === 1) {
+        mergeError = merge.detail || '(no detail given)'
+        log(`${t.id}: merge step errored with the tree clean; trying once more: ${mergeError}`)
+        work = null
+        continue
+      }
       mergeHalted = merge.detail
       return block(`merge step errored: ${merge.detail}`)
     }
+    mergeError = null
     if (merge.result === 'gate_fail') {
       rec.gateFails += 1
       const gate = merge.failed_gate || 'a gate'
@@ -610,9 +662,11 @@ async function runTicket(t, slot) {
   }
 }
 
-// A merge "error" means the integration worktree is in an unknown state, so no
-// ticket that has not merged yet should try. Tickets already mid-flight finish
-// their current agent and then stop at the merge step.
+// A merge "error" that left the tree in doubt, a second one for the same ticket,
+// or a merge agent that died halts merging: the integration worktree may be in an
+// unknown state, or something every merge needs is broken, so no ticket that has
+// not merged yet should try. Tickets already mid-flight finish their current
+// agent and then stop at the merge step.
 let mergeHalted = null
 
 // ---------- scheduling ----------

@@ -22,11 +22,11 @@ It reads the run record and the workflow's result, then: archives the run's
 metrics to `~/.claude/run-history/` (before anything the archive reads is
 removed); closes merged tickets that are still open; reopens blocked and
 stalled tickets with a note giving the reason; files each `DISPUTED:` human
-check as a `needs-human` ticket under the findings parent; removes the
-worktrees without `--force` (integration first); deletes slot placeholder
-branches and the `ticket/<id>` branches the integration branch contains; and
-deletes the run record unless a worktree was left in place. It prints a JSON
-report, which the steps below read.
+check of a merged ticket as a `needs-human` ticket under the findings parent;
+removes the worktrees without `--force` (integration first); deletes slot
+placeholder branches and the `ticket/<id>` branches the integration branch
+contains; and deletes the run record unless a worktree was left in place. It
+prints a JSON report, which the steps below read.
 
 If it says there is no result yet, write the notification's `<result>` JSON to
 `.tmp/run-result-<stamp>.json` with the Write tool and run it again with
@@ -41,8 +41,13 @@ If it says there is no result yet, write the notification's `<result>` JSON to
   next run asks instead of retrying, and list it under "Left open for you". If
   something does settle it, add a note saying what, leave the tag off, and
   suggest `--resume`.
-- **`merge_halted`**: the integration worktree was in an unexpected state. It
-  was left in place; show the user `integration_status`.
+- **`merge_halted`**: merging stopped for the rest of the run. Say why (the
+  value is the merge step's detail). If the integration worktree was left in
+  place, it is mid-merge or has changes: show the user `integration_status`. If
+  it was removed, it was clean, and `/run-tickets <same args> --resume` picks up
+  where the run stopped: tickets that already passed review go straight to
+  merge. When the cause was a refused command, check that the project allows
+  `git merge` first (the planner's setup warning).
 - **`worktrees_left`**, **`branches_kept`** with an unexpected reason, a
   failed `archive`, or any `errors`: list them in the report. None of them
   stops the report.
