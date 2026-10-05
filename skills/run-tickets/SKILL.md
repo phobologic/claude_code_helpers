@@ -78,18 +78,36 @@ runs.
    the ticket does not settle it. A ticket that offers options but whose
    answer follows from the code, a design doc, or a stated convention is not
    a decision: note which source settles it and let it run.
-2. **Prepare each one.** Read the ticket and the docs or code it names. Write
-   one line for the decision needed, the realistic options, and your
-   recommendation with the reason (the doc, code, or evidence behind it). A
-   ticket that says to decide "after a playthrough" or "against real play"
-   needs that evidence first: recommend leaving it open unless the evidence is
-   already in its notes.
-3. **Ask once.** Show the list, numbered, then `AskUserQuestion` (header
-   "Decisions"): **Take every recommendation**, **Leave them all open**, or
-   **Answer one by one**. One by one: up to 4 questions per call, one per
-   decision, with options for the recommendation (first, marked
-   "(Recommended)"), the main alternative, and "Leave open"; the automatic
-   "Other" takes a custom answer.
+2. **Brief each one.** Assume the owner has not looked at the ticket recently,
+   or at the code and systems it touches: decision tickets are usually filed
+   days or weeks earlier, by reviewers, playtests or other runs. Before asking
+   anything, read the ticket and its notes, the ticket or review it came from
+   (its `**Source ticket**` line, notes naming a run), the code it names, and
+   the design docs for that area. Then write a brief the owner can decide
+   from without opening anything:
+   ```
+   Decision <n> of <N>: <id> "<title>"
+   Where it came from: <who or what filed it, and when: review of <ticket>, a playtest note, by hand>
+   What happens today: <current behavior as a user or player sees it> (code: <path:function>)
+   Why it's open: <what the ticket, the code and the docs leave unsettled>
+   Options:
+     A. <option>: <what the owner would notice; cost or risk>
+     B. <option>: <same>
+   Recommendation: <letter>, because <the doc, code or evidence behind it>
+   Holds back: <tickets waiting on it, from the planner's downstream, or "nothing">
+   ```
+   Describe behavior in product terms; the code reference is for checking,
+   not for understanding. A ticket that says to decide "after a playthrough"
+   or "against real play" needs that evidence first: recommend leaving it open
+   unless the evidence is already in its notes.
+3. **Ask one at a time.** Say how many decisions there are. Then, for each:
+   show its brief, and ask with `AskUserQuestion` (header "Decision <n>/<N>"),
+   one question whose options are your recommendation (first, marked
+   "(Recommended)"), the other realistic options (up to three in all), and
+   "Leave open". The automatic "Other" takes a custom answer or a request for
+   more detail: answer the request, then ask again. Do not offer to accept
+   every recommendation at once; if the owner says to take the rest of your
+   recommendations, do that.
 4. **Record the answers.**
    - Decided: `tk add-note <id> "Owner decision (/run-tickets, <date>): <answer>"`.
      If it carries the `decision` tag, remove just that tag:
@@ -106,9 +124,8 @@ runs.
      instead. Add the same note to each ticket that waits on it, and give
      each of those the answer as its `decision` (join several with "; ").
      Restate their criteria as above where the answer changes them.
-   - Left open: tag it `decision` if it is not already, and add a note with
-     the decision needed and your recommendation, so the next run (or person)
-     starts from it.
+   - Left open: tag it `decision` if it is not already, and add the brief as
+     a note, so the next run (or person) starts from it.
 
    Then re-run the planner once all answers are recorded: decided tickets
    and what they unblock join `tickets`, and open ones stay excluded with

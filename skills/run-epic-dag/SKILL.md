@@ -54,8 +54,14 @@ Stop — do not spawn any agents.
 and neither does anything that depends on them. Then read the rest: a ticket
 that asks for a choice the owner would notice in the product ("decide
 whether", "a design call", untuned numbers) and that nothing settles is a
-decision too. Ask the user about all of them in one batch, with your
-recommendation for each, and record the answers:
+decision too. Put them to the user one at a time. Assume the user has not
+looked at the ticket recently, or at the code it touches: first read the
+ticket, its notes, where it came from, the code it names and the design docs,
+then show a short brief (where it came from; what happens today, as a user
+sees it; why it is open; the options and what each would change; your
+recommendation and why; what it holds back) and ask with `AskUserQuestion`:
+your recommendation first, the other realistic options, and "Leave open".
+Never offer to accept every recommendation at once. Record the answers:
 - Decided: note the answer on the ticket (`tk add-note <id> "Owner decision:
   <answer>"`) and remove its `decision` tag (`tk set <id> --tags <its other
   tags>`; `tk set` replaces the list). If the answer changes what its

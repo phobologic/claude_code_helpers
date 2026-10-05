@@ -83,9 +83,12 @@ Alongside the forks, ask the intake questions the idea and docs do not already a
 whose answers would change the breakdown: what done looks like, who it is for, how it will
 be verified, what is out of scope, and what it depends on.
 
-**Ask everything in one batch, numbered.** For each question:
+**Ask everything in one batch, numbered.** The user knows the idea, but may not know the
+code or systems it touches, so each question carries the context to answer it cold:
 - the question in one line,
-- the options, when they are discrete (2-4),
+- when it touches existing behavior, what the system does today, as a user sees it (with
+  the code location for checking, not for understanding),
+- the options, when they are discrete (2-4), with what each would change for the user,
 - your recommendation and why, in a sentence or two that names the code, doc, or answer
   that drove it.
 
