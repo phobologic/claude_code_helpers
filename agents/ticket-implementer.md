@@ -153,6 +153,11 @@ return an empty `conditions` list.
 - **Merge conflict:** run `git merge <integration-branch>` on your ticket
   branch, resolve every conflict keeping both this ticket's intent and what
   already landed, run lint and the full suite, and commit the merge.
+  Keep the merge commit to the resolution itself. If the merged code then
+  needs more changes to pass, make them in a separate commit after the merge.
+  The reviewer sees the resolution through `git show --remerge-diff` and
+  reviews later commits as new code, so mixing the two hides one inside the
+  other.
 - **Merge gate failure:** your branch merges cleanly, but the merged result
   fails a gate (lint, types, or tests), usually because of how your change
   meets something that landed after you started. Merge the integration branch

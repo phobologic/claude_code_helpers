@@ -25,18 +25,21 @@ export const meta = {
 //   gates                optional: commands that must pass on every merged result before the merge commits
 //                        (lint, type check, tests), already known to pass on the integration branch
 //   tickets              [{id, title, deps, has_ac, files, decision?, reviewed?}] in topological order. files
-//                        are the ticket's **Files** paths (tickets that share one never run at once); decision
+//                        are the ticket's **Files** paths (they break ties when choosing what starts next); decision
 //                        is the owner's answer to the ticket's open question, when it had one; reviewed is
 //                        {sha, human_checks} when an earlier run's review passed the branch at exactly its
 //                        current tip (run-tickets-plan checks), and the ticket goes straight to merge
 //   caps                 optional {acFails, qrReworks, conflicts, gateFails}
 
 const A = args
-const CAPS = Object.assign({ acFails: 3, qrReworks: 3, conflicts: 2, gateFails: 2 }, A.caps || {})
+// Tickets that share files run together, so a ticket can conflict once or twice on a
+// moving integration branch through no fault of its own; the conflict cap allows for that.
+const CAPS = Object.assign({ acFails: 3, qrReworks: 3, conflicts: 3, gateFails: 2 }, A.caps || {})
 const GATES = A.gates || []
 
 // Dispatch below relies on these: a dependency missing from the run or listed after
-// its dependent, a malformed files list, or no slots would leave tickets waiting forever.
+// its dependent, or no slots, would leave tickets waiting forever, and a malformed
+// files list would throw inside the scheduler.
 if (!A.slots || !A.slots.length) throw new Error('no worktree slots given')
 A.tickets.forEach((t, i) => {
   const late = t.deps.filter(d => !A.tickets.slice(0, i).some(o => o.id === d))
@@ -73,7 +76,9 @@ function implEffort(t, work) {
 }
 
 // The reviewer's agent file defaults to xhigh; only small, low-fanout diffs drop.
-function reviewEffort(t, impl) {
+// A resolution review covers only a conflict or gate fix, so it always runs at high.
+function reviewEffort(t, impl, resolution) {
+  if (resolution) return { effort: 'high' }
   const small = Number.isInteger(impl.src_lines_changed) && impl.src_lines_changed < SMALL_DIFF
   return small && !highFanout(t) ? { effort: 'high' } : {}
 }
@@ -395,7 +400,25 @@ round 2 rules in your instructions.
 `
 }
 
-function qrPrompt(t, slot, round, implSummary, conditions, final, prior) {
+// After a conflict or a failed merge gate, the code the last review passed is unchanged;
+// what is new is how the implementer brought it together with what landed since.
+function resolutionNote(t, res) {
+  if (!res) return ''
+  const why = res.kind === 'conflict'
+    ? `hit merge conflicts${res.files.length ? ` in ${res.files.join(', ')}` : ''}`
+    : `merged cleanly but failed \`${res.gate}\` on the merged result`
+  return `
+RESOLUTION REVIEW. A review passed this ticket at ${res.sha}. Since then it ${why}, and its implementer
+merged ${A.integrationBranch} into ${branchOf(t)} and fixed that. The code at ${res.sha} is not under review again:
+review only what the implementer did since, as "Resolution review" in your instructions describes. The full
+ticket diff above is context.
+  git log --first-parent --oneline ${res.sha}..${branchOf(t)}
+  git show --remerge-diff <sha>        # for each merge commit listed: what the resolver changed beyond git's own merge
+  git log --first-parent --no-merges -p ${res.sha}..${branchOf(t)}   # commits made on top of the merge
+`
+}
+
+function qrPrompt(t, slot, round, implSummary, conditions, final, prior, resolution) {
   const finalNote = final ? `
 FINAL ROUND: this ticket has had ${CAPS.qrReworks - 1} rework round(s). Another REWORK blocks it, and every ticket
 that depends on it stalls. Return REWORK only for critical or high findings. File each medium or low finding you
@@ -410,7 +433,7 @@ That choice is binding. Do not raise it as a finding; do check that the change i
 Review ticket ${t.id} (${t.title}) on branch ${branchOf(t)} (round ${round}).${finalNote}${decided}
 Diff the ticket's own changes only:
   git diff ${A.integrationBranch}...${branchOf(t)}
-${priorReviewNote(t, prior)}Repo root (run tk create and tk backlog from here): ${A.repoRoot}
+${priorReviewNote(t, prior)}${resolutionNote(t, resolution)}Repo root (run tk create and tk backlog from here): ${A.repoRoot}
 Findings parent: ${A.findingsParent}
 Backlog parent: ${A.backlogParent || A.findingsParent}
 Route each Bucket B finding by origin and priority as your instructions say, and search before filing.
@@ -568,7 +591,13 @@ async function runTicket(t, slot) {
       const unchanged = sameCommit(passedSha, impl.head_sha)
       if (unchanged) log(`${t.id}: no new commits since review passed; merging again`)
 
-      if (!unchanged && t.has_ac) {
+      // A conflict or gate-failure round only fits passed code to what landed since. The merge
+      // gates re-run the suite on the merged result, so AC verification is not repeated, and
+      // the review covers just the commits since the last passing one.
+      const resolution = (work.kind === 'conflict' || work.kind === 'gate_fail') && passedSha
+        ? { ...work, sha: passedSha } : null
+
+      if (!unchanged && t.has_ac && !resolution) {
         const ac = await agent(acPrompt(t, slot, impl.verification), { label: `ac ${t.id}`, phase: 'Verify', agentType: 'ticket-verifier', schema: AC_SCHEMA })
         if (!ac) return block('AC verifier died or was stopped')
         if (ac.verdict === 'ERROR') return block(`AC verifier could not run: ${ac.error || ac.failures.join('; ')}`)
@@ -588,13 +617,14 @@ async function runTicket(t, slot) {
         rec.qrRounds += 1
         // One more REWORK would reach the cap, so this review may only send back critical or high findings.
         const finalRound = rec.qrReworks + 1 >= CAPS.qrReworks
-        const qr = await agent(qrPrompt(t, slot, rec.qrRounds, impl.summary, impl.conditions, finalRound, priorReview), {
+        const qr = await agent(qrPrompt(t, slot, rec.qrRounds, impl.summary, impl.conditions, finalRound, priorReview, resolution), {
           label: `review ${t.id}${rec.qrRounds > 1 ? ` r${rec.qrRounds}` : ''}`, phase: 'Review', agentType: 'ticket-reviewer', schema: QR_SCHEMA,
-          ...reviewEffort(t, impl),
+          ...reviewEffort(t, impl, resolution),
         })
         if (!qr) return block('quality reviewer died or was stopped')
         if (qr.verdict === 'ERROR') return block(`reviewer could not run: ${qr.error || 'no detail'}`)
-        // Only a REWORK carries into the next review; after a conflict round the review starts fresh.
+        // Only a REWORK carries into the next review; after a passing one, a conflict or gate
+        // round gets a resolution review instead.
         priorReview = qr.verdict === 'REWORK' && qr.findings.length && qr.reviewed_sha
           ? { sha: qr.reviewed_sha, findings: qr.findings } : null
         for (const f of qr.filed || []) {
@@ -670,12 +700,13 @@ async function runTicket(t, slot) {
 let mergeHalted = null
 
 // ---------- scheduling ----------
-// A ticket is ready once every dependency has finished. A ready ticket waits for
-// a worktree slot and for its files: two tickets that name the same file never
-// run at once, so the second starts from the first one's merged result instead
-// of conflicting with it, and a file stays held until its ticket merges or
-// blocks. Among ready tickets that fit, the one the most other tickets wait on
-// starts first, so a long chain is never queued behind leaves.
+// A ticket is ready once every dependency has finished, and starts as soon as a
+// worktree slot is free. Among ready tickets, the one the most other tickets wait
+// on starts first, so a long chain is never queued behind leaves. Files only break
+// ties: a ticket that names no file a running ticket names goes ahead of one that
+// does. A slot never sits idle over a shared file. Two tickets that name the same
+// file rarely change the same lines, and when they do, the merge step reports the
+// conflict and the ticket gets a resolution round.
 //
 // All of this is in-run state. A shared file never becomes a tk dependency, so it
 // does not fix an order, outlive the run, or count toward a ticket's dependents
@@ -694,8 +725,7 @@ const filesOf = t => t.files || []
 
 const freeSlots = [...A.slots]
 const ready = []        // dependencies all finished, not started yet
-const heldBy = {}       // file -> id of the running ticket that named it
-const waitLogged = new Set()
+const running = {}      // id -> files, for tickets started and not finished
 const outcomes = {}
 let finishedCount = 0
 let allFinished
@@ -723,8 +753,14 @@ function becomeReady(t) {
 
 // A path ending in "/" names a directory and covers everything under it.
 const covers = (a, b) => a === b || (a.endsWith('/') && b.startsWith(a)) || (b.endsWith('/') && a.startsWith(b))
-// The held path that blocks t, if any.
-const heldFile = t => Object.keys(heldBy).find(held => filesOf(t).some(f => covers(f, held)))
+// The first running ticket that names a file t names, and that file, if any.
+function overlap(t) {
+  for (const [id, files] of Object.entries(running)) {
+    const file = filesOf(t).find(f => files.some(g => covers(f, g)))
+    if (file) return { id, file }
+  }
+  return null
+}
 
 function dispatch() {
   if (mergeHalted) {
@@ -734,24 +770,20 @@ function dispatch() {
     }
     return
   }
-  while (freeSlots.length) {
-    const fits = ready.filter(t => !heldFile(t))
-    if (!fits.length) break
-    fits.sort((a, b) => dependents[b.id] - dependents[a.id] || position[a.id] - position[b.id])
-    ready.splice(ready.indexOf(fits[0]), 1)
-    start(fits[0], freeSlots.shift())
-  }
-  for (const t of ready) {
-    const f = heldFile(t)
-    if (f && !waitLogged.has(t.id)) {
-      waitLogged.add(t.id)
-      log(`${t.id}: waiting for ${f} (held by ${heldBy[f]})`)
-    }
+  while (freeSlots.length && ready.length) {
+    // Re-sorted for every slot: the ticket just started may now share a file with the rest.
+    const shares = Object.fromEntries(ready.map(t => [t.id, overlap(t)]))
+    ready.sort((a, b) => dependents[b.id] - dependents[a.id] || Number(Boolean(shares[a.id])) - Number(Boolean(shares[b.id]))
+      || position[a.id] - position[b.id])
+    const t = ready.shift()
+    const o = shares[t.id]
+    if (o) log(`${t.id}: starts alongside ${o.id} (both name ${o.file}); a conflict is resolved at merge`)
+    start(t, freeSlots.shift())
   }
 }
 
 async function start(t, slot) {
-  for (const f of filesOf(t)) heldBy[f] = t.id
+  running[t.id] = filesOf(t)
   let rec
   try {
     rec = await runTicket(t, slot)
@@ -759,7 +791,7 @@ async function start(t, slot) {
     rec = { id: t.id, title: t.title, outcome: 'blocked', reason: `workflow error: ${(e && e.message) || e}` }
     log(`${t.id}: BLOCKED (${rec.reason})`)
   }
-  for (const f of filesOf(t)) if (heldBy[f] === t.id) delete heldBy[f]
+  delete running[t.id]
   freeSlots.push(slot)
   finish(t, rec)
   dispatch()
@@ -787,6 +819,6 @@ return {
   mergeHalted,
   integration,
   // Recorded so run-tickets-status archives which thresholds and rules each run used.
-  policy: { highFanout: HIGH_FANOUT, smallDiff: SMALL_DIFF, fileLocks: true, mergeGates: GATES.length > 0 },
+  policy: { highFanout: HIGH_FANOUT, smallDiff: SMALL_DIFF, fileLocks: 'soft', mergeGates: GATES.length > 0 },
   tickets: results,
 }

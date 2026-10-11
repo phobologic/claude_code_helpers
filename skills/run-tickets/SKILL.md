@@ -152,12 +152,15 @@ merge, carrying the human checks from that verification. Pass `reviewed` into
 the workflow args unchanged.
 
 **File overlaps.** `overlaps` lists files named by tickets with no dependency
-path between them. The workflow never runs two of them at once and starts the
-next from the merged result, so never add `tk dep` edges for overlaps: a dep
-fixes the order permanently and makes the earlier ticket look like it has
-dependents, which raises its effort. Warn only about a file named by four or
-more tickets, since those take turns. List the `unannotated` tickets: with no
-`**Files**:` line, nothing keeps them apart from others.
+path between them. The workflow runs them side by side: when slots are short it
+starts a ticket that shares no file with running work first, but it never leaves
+a slot idle over a shared file. A conflict goes back to the ticket's implementer
+and gets a review of just the resolution. So never add `tk dep` edges for
+overlaps: a dep fixes the order permanently and makes the earlier ticket look
+like it has dependents, which raises its effort. Warn only about a file named
+by four or more tickets, since those are the likeliest to conflict. List the
+`unannotated` tickets: with no `**Files**:` line, the workflow cannot tell
+what they overlap with.
 
 **Gates.** Find the project's lint, type check, and test commands (CLAUDE.md,
 `package.json` scripts, Makefile or justfile, `pyproject.toml`, CI config).

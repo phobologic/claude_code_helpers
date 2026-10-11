@@ -86,6 +86,29 @@ only moved, papered over, or fixed at one location of several? Record each in
 `findings` at its original priority. Then aim steps 3 and 4 at the fix range:
 code a fix added is where regressions come from, and it has had no review yet.
 
+**Resolution review.** When your prompt says RESOLUTION REVIEW, an earlier
+round passed this ticket, and the branch then hit a merge conflict or failed a
+merge gate. The implementer merged the integration branch in and fixed it.
+Review only what the implementer did since the sha your prompt names: the code
+at that sha has passed, and it is not under review again. Two things changed
+since that sha:
+
+- **The merge itself.** `git show --remerge-diff <merge-sha>` shows what the
+  resolver changed beyond git's automatic merge, conflict hunks included. Check
+  that both sides survived: nothing this ticket added was dropped, and nothing
+  that landed on the integration branch was undone. Pay closest attention to
+  deleted or weakened tests and assertions on either side, and to a rule both
+  sides changed, where the resolution can silently keep one change and lose
+  the other.
+- **Commits on top of the merge** (the `--no-merges` log). These are new code
+  that has had no review. They get steps 2 to 4 like any rework.
+
+Aim steps 3 and 4 at those two. Step 3 covers the tests the resolution touched
+and the conditions where the two sides meet. Step 4 attacks the places where
+this ticket's change and the incoming change interact. Round 2 rules apply:
+anything from the passed code that the resolution did not touch stays where
+the earlier round left it.
+
 ### 2. Dispose of every flag the implementer raised
 
 The implementer's summary in your prompt, and its notes on the ticket, often
@@ -294,7 +317,7 @@ can go through `/run-tickets` later and be verified.
 tk add-note <ticket-id> <<'EOF'
 **Review round <N>**: <CLEAN | REWORK | FINDINGS>
 
-**Diff reviewed**: <integration-branch>...ticket/<id> at <reviewed sha>
+**Diff reviewed**: <integration-branch>...ticket/<id> at <reviewed sha> (resolution review: <passed sha>..ticket/<id>)
 **Previous findings**: <each: fixed or not, and why, or "none, first round">
 **Implementer flags**: <each flag: finding or refuted, and why>
 **Test audit**: <tests checked, and any that cannot fail>

@@ -112,11 +112,11 @@ Verify the shape matches the content:
   phase deps. **Red flags:**
   - A SLICES phase whose tasks `Consume` each other — they aren't slices, they're
     a chain mislabeled.
-  - A SLICES phase where most tasks share one file in `Files` (Medium). The
-    runners never run two tickets that name the same file at once, so these
-    will take turns and the phase is less parallel than it claims. Suggest
-    splitting the shared file's change into a foundational task, or combining
-    the tasks. Do not suggest a dep.
+  - A SLICES phase where most tasks share one file in `Files` (Medium). Every
+    task edits the same file in parallel, so they are likely to conflict at
+    merge, or to take turns in the runners that keep shared files apart.
+    Suggest splitting the shared file's change into a foundational task, or
+    combining the tasks. Do not suggest a dep.
   - A SLICES phase wired with `tk dep T2_2 T2_1` etc. between siblings —
     silently serializes parallelizable work. This is the bug the new format
     exists to prevent.
@@ -136,9 +136,9 @@ Walk the graph:
 - For each `tk dep` in the plan, verify a `Consumes` entry points at the
   producer (or the dep waits on a `decision` ticket). A dep whose only reason
   is a shared file is over-serialization: flag it High. Shared files do not
-  need a dep, because the runners keep tickets that name the same file from
-  running at once; a dep for one fixes an order permanently and makes the
-  earlier ticket look like a bottleneck.
+  need a dep, because the runners handle them within the run (side by side
+  with conflicts resolved at merge, or kept apart); a dep for one fixes an
+  order permanently and makes the earlier ticket look like a bottleneck.
 - Two tasks that change the same function where one builds on the other's
   change do need a dep, through `Produces`/`Consumes`. Flag it High if the
   later task's `Consumes` does not name that change.

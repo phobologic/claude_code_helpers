@@ -170,7 +170,7 @@ def superseded(final, journal_path):
 # ---------- ticket state ----------
 
 def ticket_states(args, result, events):
-    caps = {"acFails": 3, "qrReworks": 3, "conflicts": 2, "gateFails": 2, **(args.get("caps") or {})}
+    caps = {"acFails": 3, "qrReworks": 3, "conflicts": 3, "gateFails": 2, **(args.get("caps") or {})}
 
     def fresh(t):
         return {"id": t["id"], "title": t["title"], "deps": t["deps"], "has_ac": t["has_ac"],
@@ -287,12 +287,7 @@ def describe(t, tickets_by_id, finished):
         return "never started"
     if waiting:
         return f"waiting on {', '.join(waiting)}"
-    # The workflow never runs two tickets that name the same file at once.
-    for other in tickets_by_id.values():
-        if other["id"] != t["id"] and other["agents"] and not other["outcome"]:
-            shared = sorted(set(t["files"]) & set(other["files"]))
-            if shared:
-                return f"waiting for {shared[0]} (held by {other['id']})"
+    # Shared files never hold a ticket back, so a ready ticket only waits for a slot.
     return "queued for a worktree slot"
 
 

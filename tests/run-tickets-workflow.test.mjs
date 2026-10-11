@@ -28,9 +28,9 @@ function check(name, cond, detail = '') {
 async function run(args, behave = () => ({})) {
   const calls = []
   // Ticket id -> files, from its first implement call until it merges. A ticket that blocks keeps its entry,
-  // so the lock scenarios below use tickets that all merge.
+  // so the shared-file scenarios below use tickets that all merge.
   const running = new Map()
-  const lockViolations = []
+  const sharedStarts = []
   const byId = Object.fromEntries(args.tickets.map(t => [t.id, t]))
   const rounds = {}
   const agent = async (prompt, opts) => {
@@ -41,11 +41,11 @@ async function run(args, behave = () => ({})) {
     const key = `${kind} ${id}`
     rounds[key] = (rounds[key] || 0) + 1
     const round = rounds[key]
-    calls.push({ kind, id, round, prompt })
+    calls.push({ kind, id, round, prompt, effort: opts.effort })
     if (kind === 'impl' && round === 1) {
       for (const [other, files] of running) {
         const shared = (byId[id].files || []).filter(f => files.some(g => f === g || f.startsWith(g) || g.startsWith(f)))
-        if (shared.length) lockViolations.push(`${id} started while ${other} holds ${shared}`)
+        if (shared.length) sharedStarts.push(`${id} started while ${other} runs with ${shared}`)
       }
       running.set(id, byId[id].files || [])
     }
@@ -65,7 +65,7 @@ async function run(args, behave = () => ({})) {
   const logs = []
   const fn = new AsyncFunction('args', 'agent', 'log', 'phase', src)
   const out = await fn(args, agent, m => logs.push(m), () => {})
-  return { out, calls, logs, lockViolations }
+  return { out, calls, logs, sharedStarts }
 }
 
 const base = { repoRoot: '/r', integrationBranch: 'run/x', integrationWorktree: '/r/int', findingsParent: 'f', backlogParent: 'b' }
@@ -88,21 +88,40 @@ const implDone = (sha, extra = {}) => ({ result: { status: 'done', head_sha: sha
   check('results come back in ticket order', out.tickets.map(t => t.id).join() === tickets.map(t => t.id).join())
 }
 
-// Tickets that share a file take turns; the others fill free slots meanwhile.
+// A shared file never leaves a slot idle: tickets that share one start together when slots are free.
 {
-  const tickets = [T('F1', [], ['shared.ts', 'a.ts']), T('F2', [], ['shared.ts']), T('F3', [], ['b.ts']), T('F4', [], ['shared.ts', 'c.ts'])]
-  const { out, lockViolations, logs } = await run({ ...base, slots: ['s1', 's2', 's3'], tickets }, kind => ({ ms: kind === 'impl' ? 20 : 3 }))
-  check('no two tickets hold the same file at once', lockViolations.length === 0, lockViolations.join('; '))
-  check('a lock wait is logged with the file and its holder', logs.some(l => l.includes('F2') && l.includes('shared.ts') && l.includes('F1')), logs.join(' | '))
+  const tickets = [T('F1', [], ['shared.ts', 'a.ts']), T('F2', [], ['shared.ts']), T('F3', [], ['shared.ts', 'c.ts'])]
+  const { out, calls, sharedStarts, logs } = await run({ ...base, slots: ['s1', 's2', 's3'], tickets }, kind => ({ ms: kind === 'impl' ? 20 : 3 }))
+  const firstMerge = calls.findIndex(c => c.kind === 'merge')
+  check('tickets that share a file all start before any merges', calls.slice(0, firstMerge).filter(c => c.kind === 'impl').length === 3,
+    calls.map(c => `${c.kind} ${c.id}`).join(', '))
+  check('starting alongside a ticket with the same file is logged with both',
+    ['F2', 'F3'].every(id => sharedStarts.some(s => s.startsWith(id)))
+    && logs.some(l => l.includes('F2') && l.includes('starts alongside F1') && l.includes('shared.ts')), logs.join(' | '))
   check('all of them merge', out.tickets.every(t => t.outcome === 'merged'))
 }
 
-// A directory entry holds every file under it.
+// When slots are short, a ticket that shares no file with running work goes first.
+{
+  const tickets = [T('A', [], ['shared.ts']), T('B', [], ['shared.ts']), T('C', [], ['c.ts'])]
+  const { calls } = await run({ ...base, slots: ['s1', 's2'], tickets }, kind => ({ ms: kind === 'impl' ? 20 : 3 }))
+  check('a shared file breaks the tie between equal tickets', implOrder(calls).join() === 'A,C,B', implOrder(calls).join())
+}
+
+// A directory entry overlaps every file under it.
 {
   const tickets = [T('D1', [], ['src/ui/']), T('D2', [], ['src/ui/footer.ts']), T('D3', [], ['src/api/handler.ts'])]
-  const { lockViolations, logs } = await run({ ...base, slots: ['s1', 's2', 's3'], tickets }, kind => ({ ms: kind === 'impl' ? 20 : 3 }))
-  check('a directory lock covers the files under it', lockViolations.length === 0 && logs.some(l => l.includes('D2') && l.includes('src/ui/')),
-    `${lockViolations.join('; ')} | ${logs.join(' | ')}`)
+  const { calls } = await run({ ...base, slots: ['s1', 's2'], tickets }, kind => ({ ms: kind === 'impl' ? 20 : 3 }))
+  check('a directory entry counts as sharing the files under it', implOrder(calls).join() === 'D1,D3,D2', implOrder(calls).join())
+}
+
+// Dependents still come first: a ticket others wait on starts ahead of a leaf even though it shares a file.
+{
+  const tickets = [T('P', [], ['p.ts']), T('H', [], ['p.ts']), T('L', [], ['l.ts']),
+    T('P1', ['P'], ['p1.ts']), T('P2', ['P1'], ['p2.ts']), T('H1', ['H'], ['h1.ts'])]
+  const { calls } = await run({ ...base, slots: ['s1', 's2'], tickets }, kind => ({ ms: kind === 'impl' ? 20 : 3 }))
+  const order = implOrder(calls)
+  check('more dependents outranks sharing a file', order[0] === 'P' && order[1] === 'H', order.join())
 }
 
 // A ticket whose dependency blocks never starts.
@@ -116,7 +135,7 @@ const implDone = (sha, extra = {}) => ({ result: { status: 'done', head_sha: sha
 
 // ---------- merge gates ----------
 
-// A failed gate sends the ticket back with the output; the fix is re-verified and re-reviewed, then merges.
+// A failed gate sends the ticket back with the output; the fix gets a resolution review, not a fresh one, then merges.
 {
   const { out, calls } = await run({ ...base, slots: ['s1'], gates: ['npm test', 'npx tsc --noEmit'], tickets: [T('G', [], ['g'])] },
     (kind, id, round) => {
@@ -124,9 +143,57 @@ const implDone = (sha, extra = {}) => ({ result: { status: 'done', head_sha: sha
       return kind === 'merge' && round === 1 ? { result: { result: 'gate_fail', failed_gate: 'npm test', detail: 'FAIL foo.test.ts' } } : {}
     })
   const fix = promptOf(calls, 'impl', 2)
+  const review = calls.find(c => c.kind === 'review' && c.round === 2) || {}
   check('the fix round names the gate and carries its output', fix.includes('npm test') && fix.includes('FAIL foo.test.ts'))
-  check('the fix is re-verified and re-reviewed', calls.filter(c => c.kind === 'ac').length === 2 && calls.filter(c => c.kind === 'review').length === 2)
+  check('the gate fix skips AC verification', calls.map(c => c.kind).join() === 'impl,ac,review,merge,impl,review,merge', calls.map(c => c.kind).join())
+  check('the gate fix gets a resolution review from the passed sha, at high effort',
+    (review.prompt || '').includes('RESOLUTION REVIEW') && review.prompt.includes('fix1..ticket/G') && review.prompt.includes('failed `npm test`')
+    && review.effort === 'high', `${review.effort} ${review.prompt}`)
+  check('a first review is not a resolution review', !promptOf(calls, 'review').includes('RESOLUTION REVIEW'))
   check('the ticket merges after the fix', out.tickets[0].outcome === 'merged' && out.tickets[0].gateFails === 1, JSON.stringify(out.tickets[0]))
+}
+
+// A conflict round gets a resolution review that names the conflicted files and shows only the resolver's changes.
+{
+  const { out, calls } = await run({ ...base, slots: ['s1'], tickets: [T('C', [], ['c.ts'])] }, (kind, id, round) => {
+    if (kind === 'impl') return implDone(`h${round}`, { src_lines_changed: 400 })
+    return kind === 'merge' && round === 1 ? { result: { result: 'conflict', conflicted_files: ['c.ts', 'd.ts'], detail: '' } } : {}
+  })
+  const review = calls.find(c => c.kind === 'review' && c.round === 2) || {}
+  const p = review.prompt || ''
+  check('the conflict round skips AC verification', calls.map(c => c.kind).join() === 'impl,ac,review,merge,impl,review,merge', calls.map(c => c.kind).join())
+  check('the resolution review names the files and the range since the passed review',
+    p.includes('c.ts, d.ts') && p.includes('h1..ticket/C') && p.includes('--remerge-diff') && p.includes('--first-parent'), p)
+  check('a large ticket\'s resolution review still runs at high', review.effort === 'high' && calls.find(c => c.kind === 'review').effort === undefined,
+    calls.filter(c => c.kind === 'review').map(c => c.effort).join())
+  check('it merges', out.tickets[0].outcome === 'merged' && out.tickets[0].conflicts === 1)
+}
+
+// A resolution review that sends work back does not make the next round a resolution round.
+{
+  const { calls } = await run({ ...base, slots: ['s1'], tickets: [T('RR', [], ['r.ts'])] }, (kind, id, round) => {
+    if (kind === 'impl') return implDone(`h${round}`)
+    if (kind === 'merge' && round === 1) return { result: { result: 'conflict', conflicted_files: ['r.ts'], detail: '' } }
+    if (kind === 'review' && round === 2) {
+      return { result: { verdict: 'REWORK', reviewed_sha: 'h2', prior_findings: [], filed: [], implementer_flags: [], test_audit: [], risks_checked: [{}, {}],
+        findings: [{ priority: 'high', location: 'r.ts:3', description: 'the resolution dropped the guard', fix: 'restore it' }] } }
+    }
+    return {}
+  })
+  const third = promptOf(calls, 'review', 3)
+  check('the fix after a resolution review is verified and re-reviewed as usual',
+    calls.map(c => c.kind).join() === 'impl,ac,review,merge,impl,review,impl,ac,review,merge', calls.map(c => c.kind).join())
+  check('that re-review aims at the fix, not the resolution', third.includes('RE-REVIEW') && !third.includes('RESOLUTION REVIEW'), third)
+}
+
+// Conflicts up to the cap (3) block the ticket.
+{
+  const { out, calls } = await run({ ...base, slots: ['s1'], tickets: [T('CC', [], ['c'])] }, (kind, id, round) => {
+    if (kind === 'impl') return implDone(`h${round}`)
+    return kind === 'merge' ? { result: { result: 'conflict', conflicted_files: ['c'], detail: '' } } : {}
+  })
+  check('the third conflict blocks the ticket', out.tickets[0].outcome === 'blocked' && out.tickets[0].conflicts === 3
+    && calls.filter(c => c.kind === 'merge').length === 3, JSON.stringify(out.tickets[0]))
 }
 
 // A fix round that commits nothing goes straight back to merge.
@@ -253,7 +320,7 @@ for (const gates of [[], ['npm test']]) {
   check('the log says it skipped to merge', logs.some(l => l.includes('W') && l.includes('earlier run')), logs.join(' | '))
 }
 
-// If it then conflicts, its first implementer prepares the slot, and the fix is verified and reviewed.
+// If it then conflicts, its first implementer prepares the slot, and the resolution is reviewed from the earlier run's sha.
 {
   const { out, calls } = await run({ ...base, slots: ['s1'], tickets: [T('Y', [], ['y'], { reviewed: { sha: 'abc1234', human_checks: [] } })] },
     (kind, id, round) => {
@@ -262,8 +329,9 @@ for (const gates of [[], ['npm test']]) {
     })
   const impl = promptOf(calls, 'impl')
   check('the conflict round prepares the slot', impl.includes('worktree-reset') && impl.includes('Merge conflict'))
-  check('the resolved branch is verified and reviewed before merging again',
-    calls.map(c => c.kind).join() === 'merge,impl,ac,review,merge' && out.tickets[0].outcome === 'merged', calls.map(c => c.kind).join())
+  check('the resolution is reviewed before merging again',
+    calls.map(c => c.kind).join() === 'merge,impl,review,merge' && out.tickets[0].outcome === 'merged', calls.map(c => c.kind).join())
+  check('the resolution review starts from the sha the earlier run reviewed', promptOf(calls, 'review').includes('abc1234..ticket/Y'))
 }
 
 // A gate fix that commits nothing on a reviewed ticket merges again without review, even when shas differ in length.
@@ -324,7 +392,7 @@ for (const gates of [[], ['npm test']]) {
 }
 {
   const { out } = await run({ ...base, slots: ['s1'], gates: ['npm test'], tickets: [T('P', [], ['p'])] })
-  check('the result records the policy the run used', out.policy.fileLocks === true && out.policy.mergeGates === true)
+  check('the result records the policy the run used', out.policy.fileLocks === 'soft' && out.policy.mergeGates === true)
   check('the result points the lead at the finish steps', /skills\/run-tickets\/finish\.md/.test(out.next || ''))
 }
 

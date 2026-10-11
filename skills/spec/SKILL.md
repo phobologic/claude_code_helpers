@@ -187,8 +187,9 @@ the task in your draft so the spec-critic can check the dependency reasoning:
 something in A's `Produces`. That includes B building on A's change to a shared function:
 name that change in A's `Produces`. A task that needs an open decision's answer depends on
 that decision's ticket. Nothing else creates a dependency: not being in a later phase, and
-not sharing a file. The runners never run two tickets that name the same file at once, so
-a dep added for a shared file only fixes an order for the life of the epic and makes the
+not sharing a file. The runners handle shared files within the run (`/run-tickets` runs such
+tickets side by side and resolves any conflict at merge; the others keep them apart), so a
+dep added for a shared file only fixes an order for the life of the epic and makes the
 earlier ticket look like a bottleneck.
 
 ### Shared rules

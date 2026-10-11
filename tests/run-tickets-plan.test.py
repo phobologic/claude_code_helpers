@@ -3,8 +3,8 @@ review notes, and permission rules.
 
     python3 tests/run-tickets-plan.test.py
 
-Parsed files become in-run locks in the run-tickets workflow, so prose must not
-parse as a path. Decision wording only flags candidates for the lead to judge,
+Parsed files decide which ready ticket starts first in the run-tickets workflow,
+so prose must not parse as a path. Decision wording only flags candidates for the lead to judge,
 but false positives cost the lead's time and false negatives let a decision
 through, so both directions are checked. A passing review read from the notes
 sends a resumed ticket straight to merge, so anything that should invalidate it
