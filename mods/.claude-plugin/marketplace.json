@@ -11,6 +11,11 @@
       "name": "workflow-monitor",
       "source": "./workflow-monitor",
       "description": "A live pane of workflow agents with their start times, and the ticket state of the repo's /run-tickets run"
+    },
+    {
+      "name": "blast-radius",
+      "source": "./blast-radius",
+      "description": "Asks before a command deletes or overwrites anything outside the repo, touches .git, or loses uncommitted work"
     }
   ]
 }

@@ -71,7 +71,8 @@ To add language auto-formatting hooks to a project:
 - Installed with `claude plugin marketplace add ~/git/claude_code/mods` once, then `claude plugin install <mod>@claude-mods --scope user` (every session) or `--scope project`
 - Installed mods are read from this folder, so an edit here takes effect with `/reload-plugins`
 - `workflow-monitor`: a live band above the prompt with the repo's newest `/run-tickets` run (ticket state and when each current step started) and the session's running workflow agents with their start times; shows on the first workflow agent; `/workflow-monitor` shows or hides it, and a hide lasts the session
-- Check a mod with `claude plugin validate mods/<mod>` and `claude plugin test mods/<mod>`; see `mods/README.md`
+- `blast-radius`: holds a Bash command or Write that would delete or overwrite anything outside the repository, touch `.git`, or lose work git can't restore (untracked or modified files, an ignored `.env` or database, unmerged commits, stashes), and asks the person in the AskUserQuestion dialog; any answer but "Run it" refuses. It judges by where the files are: an agent's scratch worktree inside the repository folder and temp folders are free, so `/run-tickets` mutation checks never prompt. `hooks/parse.ts` reads the command, `bin/judge.py` checks the disk and git
+- Check a mod with `claude plugin validate mods/<mod>` and `claude plugin test mods/<mod>`; `blast-radius`'s judge also has `python3 mods/blast-radius/bin/judge.test.py`. See `mods/README.md`
 
 ### Tool Rules
 - `tools/` contains plain markdown rule files for deployment and database tooling

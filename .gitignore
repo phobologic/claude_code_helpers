@@ -8,8 +8,10 @@ test-file.txt
 # claude.ai account skills, synced by Claude Code into ~/.claude/skills (symlinked here)
 skills/synced/
 
-# Mod API types Claude Code writes next to each mod it loads
+# Mod API types Claude Code writes next to each mod it loads, and the tsconfig.json
+# that extends them
 mods/*/.claude-plugin/types/
+mods/*/tsconfig.json
 
 # Environment and secrets
 .env
