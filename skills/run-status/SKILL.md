@@ -36,7 +36,11 @@ does not report, and do not message or inspect agents yourself.
    many tickets merged out of the total, how long it has run or took, and
    anything needing attention (`MERGES HALTED`, `BLOCKED`, a failing
    integration check). Then the ticket list as the script printed it,
-   including each ticket's `time:` line.
+   including each ticket's `time:` and `started:` lines.
+
+   The `started:` line lists every agent the ticket ran, in order, with the
+   local time it started and how long it took (`running 3m` for the one still
+   going). A time from another day than the launch carries its date.
 
    Timing notes, when they explain something:
    - `waiting` is time a ticket spent between steps, mostly queued behind

@@ -12,7 +12,7 @@ import json
 import os
 import subprocess
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
@@ -251,6 +251,19 @@ with tempfile.TemporaryDirectory() as tmp:
           not status.superseded({"startTime": 1_799_999_000_000, "durationMs": 1_000_000}, journal)
           and status.superseded({"startTime": 1_799_990_000_000, "durationMs": 1_000_000}, journal))
     check("status: no metadata or no journal is never stale", not status.superseded(None, journal) and not status.superseded({"timestamp": written}, None))
+
+# Each agent's local start time and duration, in order; the running one shows how long it has run so far.
+launch = datetime(2030, 3, 1, 23, 50).astimezone()
+at = lambda minutes: (launch + timedelta(minutes=minutes)).isoformat(timespec="seconds")
+steps = [{"step": "impl", "round": 1, "started": at(2), "seconds": 600},
+         {"step": "review", "round": 1, "started": at(12), "seconds": 300},
+         {"step": "impl", "round": 2, "started": at(18), "seconds": None},
+         {"step": "review", "round": 2, "started": None, "seconds": None}]
+line = status.started_line({"steps": steps[:3], "active": ("impl", 2)}, launch, launch + timedelta(minutes=21))
+check("status: started line gives each agent's clock time and duration, and the running one's time so far",
+      line == "started: impl 23:52 (10m), review 03-02 00:02 (5m), impl r2 03-02 00:08 (running 3m)", line)
+line = status.started_line({"steps": steps, "active": None}, launch, launch)
+check("status: an agent with no log yet shows a question mark", line.endswith("review r2 ?"), line)
 
 print(f"\n{failures} check(s) failed" if failures else "\nall checks passed")
 raise SystemExit(1 if failures else 0)
