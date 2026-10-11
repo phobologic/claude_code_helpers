@@ -1,31 +1,30 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AgentRow, RunSummary, TicketRow } from '../types'
+import type { AgentRow, RunSummary, TicketRow, Visibility } from '../types'
 
-// A pane with two parts:
+// A band above the prompt with two parts:
 // - the newest /run-tickets run of the session's repo, from `run-tickets-status --json`:
 //   its progress and every ticket not merged yet, with when its current step started;
-// - every agent a workflow script started in this session, newest first, with its
-//   start time and how long it ran or has been running.
+// - the agents a workflow script started in this session: how many ran, and each one
+//   still running with its start time and how long it has run.
+// It takes rows from the transcript, so finished agents are a count, not a list; a tree
+// taller than the band's room scrolls.
 // Hooks modules have no Date, so clock times come from the UTC offset `date +%z` gives.
 
-const PANE = 'workflow-monitor'
-const TITLE = 'Workflows'
 const TICK_MS = 15_000 // redraws running times
 const BUSY_POLL_TICKS = 2 // read the run's status every 30s while something runs
 const IDLE_POLL_TICKS = 20 // and every 5 minutes otherwise, to notice a run started elsewhere
-const VISIBLE_MS = 60_000 // only while the pane has drawn within this long
+const VISIBLE_MS = 60_000 // only while the band has drawn within this long
 const KEEP_AGENTS = 300
 
 const agents = atom({ plugin: 'workflow-monitor', key: 'agents' } as const, [])
 const run = atom({ plugin: 'workflow-monitor', key: 'run' } as const, null)
 const tick = atom({ plugin: 'workflow-monitor', key: 'tick' } as const, 0)
 const offset = atom({ plugin: 'workflow-monitor', key: 'utcOffsetMinutes' } as const, 0)
-const hidden = atom({ plugin: 'workflow-monitor', key: 'isHidden' } as const, false)
+const visibility = atom({ plugin: 'workflow-monitor', key: 'visibility' } as const, 'unset' as Visibility)
 
-// Module state: it starts over on a reload, which costs at most one extra open or poll.
-let opened = false
+// Module state: it starts over on a reload, which costs at most one extra poll.
 let lastDrawnAt = 0
 let polling = false
 
@@ -141,15 +140,22 @@ export function runLines(summary: RunSummary, now: number): Line[] {
   return lines
 }
 
+// A count of the session's workflow agents, then each one still running, newest first.
 export function agentLines(list: readonly AgentRow[], now: number, offsetMinutes: number): Line[] {
-  const newest = [...list].reverse()
-  const width = Math.min(40, Math.max(0, ...newest.map(a => a.label.length)))
-  return newest.map(a => {
-    const took = a.endedAt === undefined
-      ? `running ${duration((now - a.startedAt) / 1000)}`
-      : `${duration((a.endedAt - a.startedAt) / 1000)}${a.isAborted ? '  stopped' : ''}`
-    return { text: `${clock(a.startedAt, offsetMinutes)}  ${a.label.slice(0, 40).padEnd(width)}  ${took}`, isDim: a.endedAt !== undefined }
-  })
+  const running = list.filter(a => a.endedAt === undefined).reverse()
+  const finished = list.length - running.length
+  const stopped = list.filter(a => a.isAborted).length
+  const lines: Line[] = [{
+    text: `agents  ${running.length} running, ${finished} finished${stopped ? ` (${stopped} stopped)` : ''}`,
+    isDim: running.length === 0,
+  }]
+  const width = Math.min(40, Math.max(0, ...running.map(a => a.label.length)))
+  for (const a of running) {
+    lines.push({
+      text: `  ${clock(a.startedAt, offsetMinutes)}  ${a.label.slice(0, 40).padEnd(width)}  running ${duration((now - a.startedAt) / 1000)}`,
+    })
+  }
+  return lines
 }
 
 // ---------- hooks ----------
@@ -158,7 +164,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'workflow-monitor',
-      description: 'Show or hide the pane of workflow agents with their start times, and this repo\'s /run-tickets run',
+      description: 'Show or hide the band above the prompt with this session\'s workflow agents and this repo\'s /run-tickets run',
     })
     try {
       const { stdout } = await $.process.run(['/bin/date', '+%z'])
@@ -181,24 +187,15 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // Toggles the pane. Hiding it keeps it hidden until shown again, even as new agents start.
+  // Toggles the band. Hiding it keeps it hidden until shown again, even as new agents start.
   on('command.run', { command: 'workflow-monitor' }, async $ => {
-    if ((await $.ui.panes()).some(p => p.id === PANE)) {
-      await update($, hidden, () => true)
-      await $.ui.close({ id: PANE })
+    if ((await read($, visibility)) === 'shown') {
+      await update($, visibility, () => 'hidden')
       return { text: 'Workflow monitor hidden. /workflow-monitor shows it again.' }
     }
-    opened = true
-    await update($, hidden, () => false)
-    await $.ui.open({ id: PANE, title: TITLE, closeOnEscape: true })
+    await update($, visibility, () => 'shown')
     await poll($)
-    return { text: 'Workflow monitor shown. /workflow-monitor or Esc hides it.' }
-  })
-
-  // Closed by the person (its close mark, or Esc while it has the keys): stay hidden.
-  on('ui.close', async ($, e, next) => {
-    if (e.id === PANE && e.origin.kind === 'person') await update($, hidden, () => true)
-    return next(e)
+    return { text: 'Workflow monitor shown above the prompt. /workflow-monitor hides it.' }
   })
 
   // Every agent a workflow script starts. Agents a resume replays from the journal are not raised.
@@ -208,9 +205,9 @@ export const register: Register = on => {
     const key = `${e.workflow.runId}#${e.workflow.agentIndex}@${startedAt}`
     const row: AgentRow = { key, runId: e.workflow.runId, label: e.description || `agent ${e.workflow.agentIndex}`, startedAt }
     await update($, agents, list => [...list, row].slice(-KEEP_AGENTS))
-    if (!opened && !(await read($, hidden))) {
-      opened = true
-      void $.ui.open({ id: PANE, title: TITLE })
+    // The session's first workflow agent shows the band, unless the person hid it.
+    if ((await read($, visibility)) === 'unset') {
+      await update($, visibility, () => 'shown')
       void poll($)
     }
     const started = await next(e)
@@ -232,7 +229,10 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+  // The band yields to a survey, and draws nothing until shown. The engine scrolls a tree
+  // taller than its room, so every line is drawn.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey || (await read($, visibility)) !== 'shown') return next(e)
     const { Box, Text } = $.ui.resolve(e)
     await read($, tick) // redraw on every tick, so running times move
     const now = await $.clock.now()
@@ -241,19 +241,15 @@ export const register: Register = on => {
     const list = await read($, agents)
     const summary = await read($, run)
     const columns = Math.max(20, e.props.bodyColumns)
-    const room = Math.max(4, (e.viewport?.rows ?? 24) - 1)
 
     const lines: Line[] = []
-    if (summary) lines.push(...runLines(summary, now), { text: '' })
-    if (list.length) {
-      lines.push({ text: 'agents (newest first)' }, ...agentLines(list, now, offsetMinutes))
-    } else {
-      lines.push({ text: 'No workflow agents in this session yet.', isDim: true })
-    }
+    if (summary) lines.push(...runLines(summary, now))
+    if (list.length) lines.push(...agentLines(list, now, offsetMinutes))
+    if (!lines.length) lines.push({ text: 'No workflow agents in this session yet.', isDim: true })
 
     return (
       <Box flexDirection="column">
-        {lines.slice(0, room).map(line => (
+        {lines.map(line => (
           <Text dimColor={line.isDim === true}>{line.text.slice(0, columns) || ' '}</Text>
         ))}
       </Box>

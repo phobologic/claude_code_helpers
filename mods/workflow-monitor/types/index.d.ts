@@ -32,6 +32,10 @@ export type RunSummary = {
   checkedAt: number // ms since the epoch when the status was read
 }
 
+// Whether the band shows: `unset` until the first workflow agent or /workflow-monitor shows
+// it; `hidden` once the person hides it, so new agents do not show it again.
+export type Visibility = 'unset' | 'shown' | 'hidden'
+
 declare module 'claude-code' {
   interface PluginState {
     'workflow-monitor': {
@@ -39,8 +43,7 @@ declare module 'claude-code' {
       run: RunSummary | null
       tick: number
       utcOffsetMinutes: number
-      // The person hid the pane: new workflow agents do not open it again until they show it.
-      isHidden: boolean
+      visibility: Visibility
     }
   }
 }

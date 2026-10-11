@@ -70,7 +70,7 @@ To add language auto-formatting hooks to a project:
 - `mods/` is a plugin marketplace (`claude-mods`) of mods: hooks modules that change Claude Code's own interface or behaviour
 - Installed with `claude plugin marketplace add ~/git/claude_code/mods` once, then `claude plugin install <mod>@claude-mods --scope user` (every session) or `--scope project`
 - Installed mods are read from this folder, so an edit here takes effect with `/reload-plugins`
-- `workflow-monitor`: a live pane of the session's workflow agents with their start times, plus the repo's newest `/run-tickets` run (ticket state and when each current step started); opens on the first workflow agent; `/workflow-monitor` shows or hides it, and a hide lasts the session
+- `workflow-monitor`: a live band above the prompt with the repo's newest `/run-tickets` run (ticket state and when each current step started) and the session's running workflow agents with their start times; shows on the first workflow agent; `/workflow-monitor` shows or hides it, and a hide lasts the session
 - Check a mod with `claude plugin validate mods/<mod>` and `claude plugin test mods/<mod>`; see `mods/README.md`
 
 ### Tool Rules

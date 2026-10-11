@@ -57,18 +57,26 @@ test('run lines move a running run and its running step on from when the status 
   expect(finished[0]?.text).toContain('finished 10m')
 })
 
-test('agent lines are newest first, with start time and running or finished duration', () => {
+test('agent lines count every agent and list the running ones, newest first', () => {
   const lines = agentLines([
     { key: 'a', runId: 'wf_1', label: 'impl x-2', startedAt: T0, agentId: 'a1', endedAt: T0 + 148_000 },
-    { key: 'b', runId: 'wf_1', label: 'review x-2 r2', startedAt: T0 + 3 * MIN },
+    { key: 'b', runId: 'wf_1', label: 'impl x-3', startedAt: T0 + MIN, agentId: 'a2', endedAt: T0 + 2 * MIN, isAborted: true },
+    { key: 'c', runId: 'wf_1', label: 'review x-2 r2', startedAt: T0 + 3 * MIN },
+    { key: 'd', runId: 'wf_1', label: 'impl x-4', startedAt: T0 + 4 * MIN },
   ], T0 + 5 * MIN, 0)
-  expect(lines.map(l => l.text)).toEqual(['23:53  review x-2 r2  running 2m00s', '23:50  impl x-2       2m28s'])
-  expect(lines.map(l => l.isDim)).toEqual([false, true])
+  expect(lines.map(l => l.text)).toEqual([
+    'agents  2 running, 2 finished (1 stopped)',
+    '  23:54  impl x-4       running 1m00s',
+    '  23:53  review x-2 r2  running 2m00s',
+  ])
+  expect(lines[0]?.isDim).toBe(false)
+  const done = agentLines([{ key: 'a', runId: 'wf_1', label: 'impl x-2', startedAt: T0, endedAt: T0 + MIN }], T0 + 5 * MIN, 0)
+  expect(done).toEqual([{ text: 'agents  0 running, 1 finished', isDim: true }])
 })
 
-const PANE = {
-  plugin: 'workflow-monitor', component: 'Pane', requestId: 'workflow-monitor',
-  props: { title: 'Workflows', isFocused: false, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+const BAND = {
+  plugin: 'workflow-monitor', component: 'AbovePrompt',
+  props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 120, scroll: { offset: 0, bodyRows: 19 }, view: {} },
 } as const
 
 // /workflow-monitor typed at the prompt.
@@ -77,39 +85,44 @@ const COMMAND = {
   presentation: { isFullscreen: true, columns: 160 },
 } as const
 
-// Stands in for the engine: keeps the set of open panes, and answers run-tickets-status with `status`.
+// Stands in for the engine: draws its own band beneath the mod's, and answers
+// run-tickets-status with `status`.
 function engine(on: On, status: { exitCode: number; stdout: string }, ran: string[][]) {
-  const open = new Set<string>()
-  on('ui.open', ($, e) => {
-    open.add(e.id)
-    return { value: { isPlaced: true } }
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine band</Text>
   })
-  on('ui.close', ($, e) => {
-    open.delete(e.id)
-    return { value: undefined }
-  })
-  on('ui.panes', () => ({
-    value: [...open].map(id => ({ id, title: 'Workflows', isShown: true, isFocused: false, isPlaced: true })),
-  }))
   on('process.run', ($, e) => {
     ran.push([...e.argv])
     return { value: { ...status, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
-  return open
 }
 
-test('the command toggles the pane', async ($, on) => {
+test('the band draws nothing until shown, and the command toggles it', async ($, on) => {
   mock.clock(on, { now: T0 })
-  const open = engine(on, { exitCode: 1, stdout: '' }, [])
-  expect(await $.command.run(COMMAND)).toEqual({ text: 'Workflow monitor shown. /workflow-monitor or Esc hides it.' })
-  expect([...open]).toEqual(['workflow-monitor'])
-  expect(await $.command.run(COMMAND)).toEqual({ text: 'Workflow monitor hidden. /workflow-monitor shows it again.' })
-  expect([...open]).toEqual([])
-  await $.command.run(COMMAND)
-  expect([...open]).toEqual(['workflow-monitor'])
+  engine(on, { exitCode: 1, stdout: '' }, [])
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...BAND, surface })
+    expect(await ui.find({ type: 'Text', text: 'engine band' })).toBeDefined()
+    expect(await $.command.run(COMMAND)).toEqual({ text: 'Workflow monitor shown above the prompt. /workflow-monitor hides it.' })
+    expect(await ui.find({ type: 'Text', text: /No workflow agents/ })).toBeDefined()
+    expect(await $.command.run(COMMAND)).toEqual({ text: 'Workflow monitor hidden. /workflow-monitor shows it again.' })
+    expect(await ui.find({ type: 'Text', text: /No workflow agents/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: 'engine band' })).toBeDefined()
+    await ui.unmount()
+  }
 })
 
-test('the command opens the pane with the run read from run-tickets-status', async ($, on) => {
+test('the band yields to a survey', async ($, on) => {
+  mock.clock(on, { now: T0 })
+  engine(on, { exitCode: 1, stdout: '' }, [])
+  await $.command.run(COMMAND)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal', props: { ...BAND.props, hasSurvey: true } })
+  expect(await ui.find({ type: 'Text', text: /No workflow agents/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'engine band' })).toBeDefined()
+})
+
+test('the command shows the band with the run read from run-tickets-status', async ($, on) => {
   mock.clock(on, { now: T0 + 2 * MIN })
   const ran: string[][] = []
   engine(on, { exitCode: 0, stdout: JSON.stringify(REPORT) }, ran)
@@ -117,10 +130,11 @@ test('the command opens the pane with the run read from run-tickets-status', asy
   await $.command.run(COMMAND)
   expect(ran).toEqual([['run-tickets-status', '--json']])
   for (const surface of ['terminal', 'desktop'] as const) {
-    const ui = await $.ui.mount({ ...PANE, surface })
-    expect(await ui.find({ type: 'Text', text: 'run-tickets wf_test-1  running 10m  merged 1/3' })).toBeDefined()
+    const ui = await $.ui.mount({ ...BAND, surface })
+    expect(await ui.find({ type: 'Text', text: 'run-tickets wf_test-1  running 10m  merged 1/3  epic/x-1' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /x-2 +reviewing \(round 2\) +started 16:47 +running 3m00s/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /No workflow agents/ })).toBeDefined()
+    // A run and no agents in this session: no agent section, and no empty-session line.
+    expect(await ui.find({ type: 'Text', text: /agents|No workflow agents/ })).toBeUndefined()
     await ui.unmount()
   }
 })
@@ -129,7 +143,7 @@ test('a repo with no run shows no run section', async ($, on) => {
   mock.clock(on, { now: T0 })
   engine(on, { exitCode: 1, stdout: '' }, [])
   await $.command.run(COMMAND)
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /run-tickets/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /No workflow agents/ })).toBeDefined()
 })
