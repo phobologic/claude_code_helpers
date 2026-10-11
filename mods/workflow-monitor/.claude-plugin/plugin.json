@@ -1,0 +1,7 @@
+{
+  "name": "workflow-monitor",
+  "version": "0.1.0",
+  "description": "A live pane of workflow agents with their start times, and the ticket state of the repo's /run-tickets run",
+  "author": { "name": "mike" },
+  "types": "./types/index.d.ts"
+}

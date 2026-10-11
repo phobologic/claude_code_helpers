@@ -8,6 +8,9 @@ test-file.txt
 # claude.ai account skills, synced by Claude Code into ~/.claude/skills (symlinked here)
 skills/synced/
 
+# Mod API types Claude Code writes next to each mod it loads
+mods/*/.claude-plugin/types/
+
 # Environment and secrets
 .env
 .env.*

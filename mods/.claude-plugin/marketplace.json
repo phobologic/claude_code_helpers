@@ -1,0 +1,16 @@
+{
+  "name": "claude-mods",
+  "owner": {
+    "name": "mike"
+  },
+  "metadata": {
+    "description": "Claude Code mods: changes to Claude Code's own interface and behaviour"
+  },
+  "plugins": [
+    {
+      "name": "workflow-monitor",
+      "source": "./workflow-monitor",
+      "description": "A live pane of workflow agents with their start times, and the ticket state of the repo's /run-tickets run"
+    }
+  ]
+}
