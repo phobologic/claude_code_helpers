@@ -617,6 +617,8 @@ def spelled_by_the_caller(s):
     expect("  and the home folder shows as ~", s.judge(delete("~/.zshrc"), home=home), [("outside", "~/.zshrc")])
     write(os.path.join(s.tmp, "y"))
     expect("with the temp folder in another case, its files are free", s.judge(delete(os.path.join(s.tmp, "y")), temp=temp), [])
+    expect("from a working folder in another case, a missing folder is named from the repository",
+           s.judge(delete("x", dir="no/such/dir"), cwd=os.path.join(s.root, "REPO")), [("unknown", "no/such/dir")])
     plain = os.path.join(s.root, "plain")
     write(os.path.join(plain, "f.txt"))
     expect("outside git, a session folder in another case holds its files as the project's",
