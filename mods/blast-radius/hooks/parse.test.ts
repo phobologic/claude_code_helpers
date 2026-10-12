@@ -275,6 +275,9 @@ test('"" is an empty quoted word, as \'\' is: kept next to an empty variable, dr
   // declaration builtin still reads X=1 once the quotes are gone, split as any word is.
   expect(analyze('""X=1 rm -rf foo')).toEqual([])
   expect(paths('F="a b"; export ""X=$F; rm "$X"')).toEqual(['a'])
+  // Text is joined around a "" only with text quoted the same way: a quoted * stays no glob.
+  expect(paths("rm -rf x''y'*' a\"\"\"*\"b")).toEqual(['xy[*]', 'a[*]b'])
+  expect(paths("rm -rf x'*' a\"*\"b")).toEqual(['x[*]', 'a[*]b'])
 })
 
 test('zsh splits no variable into words, and drops one that is unquoted and empty', () => {
