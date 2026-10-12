@@ -700,7 +700,7 @@ function optionWord(w: Word, flag: string, g: Grammar): { opts: Opt[]; next: str
 
 // The options from words[k], up to the first word that isn't one or just past `--`, and
 // the index after them. A lone `-` is an operand, as getopt reads it: env takes it as -i,
-// and `uv run -` runs stdin as Python.
+// `uv run -` runs stdin as Python, and in zsh `exec -` is the `-` wrapper below.
 function readOpts(words: Word[], k: number, g: Grammar): { opts: Opt[]; k: number } {
   const opts: Opt[] = []
   while (k < words.length) {
@@ -831,6 +831,8 @@ const WRAPPERS = new Map<string, Wrapper>([
   ['nohup', grammar({})],
   ['chronic', grammar({})],
   ['unbuffer', grammar({})],
+  // zsh's `-` precommand modifier: `- cmd` and `exec - cmd` run cmd with a - before its argv[0].
+  ['-', grammar({})],
 ])
 
 // Strips the wrappers that run another command unchanged (sudo, env, timeout, uv run, ...).
