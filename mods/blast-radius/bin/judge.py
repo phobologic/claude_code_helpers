@@ -356,8 +356,15 @@ def tracked(ctx, paths):
     found = set()
     for repo, ps in by_repo.items():
         out = git_out(["ls-files", "-z"], repo)
-        if out:
-            found |= ps & {os.path.join(repo, e) for e in out.split("\0")}
+        folded = {p.casefold() for p in ps}
+        for e in (out or "").split("\0"):
+            full = os.path.join(repo, e)
+            # `paths` are spelled as on disk, the index as git recorded them: after a
+            # case-only rename git never saw, src/.env is in a folder named SRC.
+            if full not in ps and full.casefold() in folded:
+                full = spelled(full)
+            if full in ps:
+                found.add(full)
     return found
 
 
@@ -473,7 +480,10 @@ def judge_in_repo(ctx, owner, entries):
         # A repository nested in the session's: git status there would run its config.
         return [finding("history", ctx.show(owner), SEPARATE)]
     targets = {rp for rp, _ in entries}
-    lost = {path: what for path, what in changes(owner, untracked=True) if covered(path, targets)}
+    # git reports a path as its index spells it, which a case-only rename git never
+    # recorded leaves behind (src/a.py in a folder now named SRC), so each is respelled
+    # before it is compared with the targets, which are spelled as on disk.
+    lost = {sp: what for path, what in changes(owner, untracked=True) if covered(sp := spelled(path), targets)}
     protected, nested = search(ctx, owner, entries)
     findings = judge_nested(ctx, nested, lost)
     unsure = [p for p in protected if p not in lost]
@@ -493,7 +503,7 @@ def judge_nested(ctx, nested, lost):
             findings.append(finding("history", ctx.show(repo), "a separate git repository: its history would be deleted"))
         elif repo in ctx.worktrees:
             for path, what in changes(repo, untracked=True):
-                lost[path] = what
+                lost[spelled(path)] = what  # as judge_in_repo spells it
         else:
             # Its .git file can point at any git folder, whose config git status would run.
             findings.append(finding("history", ctx.show(repo), SEPARATE))
@@ -558,9 +568,17 @@ def spec_path(cwd, top, spec):
         return os.path.join(top, spec[2:])
     if spec.startswith(":"):
         return top  # other pathspec magic: count the whole repository
-    # git matches a pathspec by case even where the volume ignores it, so only `cwd`
-    # (from git_start) is spelled as on disk, and SRC/a.py matches nothing in src/.
-    return os.path.realpath(os.path.join(cwd, spec))
+    # Where the volume ignores case, git finds the working tree in an absolute pathspec
+    # ignoring case, but matches what is inside it by case: /abs/REPO/src/a.py is
+    # src/a.py, while SRC/a.py matches nothing in src/. So only the working-tree part is
+    # spelled as on disk (`cwd` already is, from git_start). A relative spec that leaves
+    # the working tree and comes back in another case is refused by git.
+    p = os.path.realpath(os.path.join(cwd, spec))
+    if os.path.isabs(spec):
+        head = "/".join(p.split("/")[: top.count("/") + 1])
+        if ondisk(head) == top:
+            p = top + p[len(head) :]
+    return p
 
 
 def discard(ctx, top, cwd, pathspecs):
@@ -772,7 +790,7 @@ def git_worktree(ctx, top, cwd, rest):
         return [finding("history", ctx.show(p), SEPARATE)]  # git status there would run its config
     findings = []
     if any(a in ("-f", "--force") for a in rest):
-        findings += [finding("uncommitted", ctx.show(path), what) for path, what in changes(p, untracked=True)]
+        findings += [finding("uncommitted", ctx.show(spelled(path)), what) for path, what in changes(p, untracked=True)]
     protected = []
     walk(ctx, p, protected, [])
     known = tracked(ctx, protected)

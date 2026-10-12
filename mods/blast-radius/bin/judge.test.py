@@ -793,7 +793,12 @@ def ignored_case(s):
     expect("cd SRC, then checkout -- a.py over a change holds", s.judge(git("checkout", "--", "a.py", dir="SRC")),
            [("uncommitted", "src/a.py")])
     expect("checkout -- SRC/a.py passes, since git matches pathspecs by case", s.judge(git("checkout", "--", "SRC/a.py")), [])
+    expect("checkout -- /abs/REPO/src/a.py holds, since git finds the working tree ignoring case",
+           s.judge(git("checkout", "--", os.path.join(s.root, "REPO", "src", "a.py"))), [("uncommitted", "src/a.py")])
+    expect("  but checkout -- ../REPO/src/a.py passes, since git refuses it",
+           s.judge(git("checkout", "--", os.path.join("..", "REPO", "src", "a.py"))), [])
     sh("git", "checkout", "--", "src/a.py", cwd=s.repo)
+    renamed_by_case(s)
     caps = s.p(".worktrees", "caps")
     sh("git", "worktree", "add", "-q", "-b", "caps", ".WORKTREES/caps", cwd=s.repo)
     write(os.path.join(caps, "README.md"), "mutant\n")
@@ -805,9 +810,46 @@ def ignored_case(s):
     away = os.path.join(s.root, "wt-away")
     expect("worktree remove --force named in another case holds its changes",
            s.judge(git("worktree", "remove", "--force", os.path.join(s.root, "WT-AWAY"))),
-           [("uncommitted", os.path.join(away, "README.md"))])
+           [("uncommitted", os.path.join(away, name)) for name in ("README.md", ".env", os.path.join("sub", ".env"))])
     spelled_by_the_caller(s)
     spelled_by_git(s)
+
+
+def renamed_by_case(s):
+    """git reports files as its index spells them, the targets are spelled as on disk."""
+    write(s.p("src", ".env"))
+    sh("git", "add", "-f", "src/.env", cwd=s.repo)
+    sh("git", "commit", "-q", "-m", "env", cwd=s.repo)
+    try:
+        expect("a committed .env deleted as SRC/.env passes", s.judge(delete("SRC/.env")), [])
+        os.rename(s.p("src"), s.p("moved"))
+        os.rename(s.p("moved"), s.p("SRC"))  # a case-only rename git never recorded
+        try:
+            write(s.p("SRC", "a.py"), "changed\n")
+            for typed in ("src/a.py", "SRC/a.py", "src"):
+                expect(f"after src/ became SRC/, rm {typed} holds a change git lists as src/a.py",
+                       s.judge(delete(typed)), [("uncommitted", "SRC/a.py")])
+            expect("  and a committed .env git lists as src/.env is still committed", s.judge(delete("src/.env")), [])
+        finally:
+            os.rename(s.p("SRC"), s.p("moved"))
+            os.rename(s.p("moved"), s.p("src"))
+            sh("git", "checkout", "--", "src/a.py", cwd=s.repo)
+    finally:
+        sh("git", "rm", "-q", "--cached", "src/.env", cwd=s.repo)
+        sh("git", "commit", "-q", "-m", "no env", cwd=s.repo)
+        os.remove(s.p("src", ".env"))
+    outer = os.path.join(s.root, "case-outer")
+    inner = os.path.join(outer, "box", "inner")
+    sh("git", "worktree", "add", "-q", "-b", "case-outer", outer, cwd=s.repo)
+    sh("git", "worktree", "add", "-q", "-b", "case-inner", inner, cwd=s.repo)
+    os.rename(os.path.join(inner, "src"), os.path.join(inner, "SRC"))
+    write(os.path.join(inner, "SRC", "a.py"), "changed\n")
+    expect("in a nested session worktree, a change git lists as src/a.py shows as SRC/a.py",
+           s.judge(delete("box"), cwd=outer), [("uncommitted", inner), ("uncommitted", os.path.join(inner, "SRC", "a.py"))])
+    expect("  and so it does for worktree remove --force", s.judge(git("worktree", "remove", "--force", inner)),
+           [("uncommitted", os.path.join(inner, "SRC", "a.py"))])
+    sh("git", "worktree", "remove", "--force", inner, cwd=s.repo)
+    sh("git", "worktree", "remove", "--force", outer, cwd=s.repo)
 
 
 def spelled_by_the_caller(s):
