@@ -386,6 +386,10 @@ test("eval runs its text in the line's shell, so a cd, pushd or variable in it l
   expect(dirOf('eval "cd /tmp"; rm -rf x')).toBe('/tmp')
   expect(endOf('eval "cd /srv"')).toBe('/srv')
   expect(only('eval "D=/opt"; rm -rf "$D/x"')).toMatchObject({ dir: null, paths: ['/opt/x'] })
+  // Its words are joined with spaces into one command line.
+  expect(dirOf('eval cd /tmp; rm -rf x')).toBe('/tmp')
+  // Text that can't be read is held when it looks destructive.
+  expect(only('eval "rm -rf $X"')).toMatchObject({ op: 'unknown', what: 'eval: $X is not set on this command line' })
   // As a cd in its place would: through pushd and popd, an if, a nested eval and a
   // prefix assignment, and not out of ( ).
   expect(dirOf('eval "pushd /a"; rm x')).toBe('/a')
@@ -413,6 +417,8 @@ test('an eval in a pipeline stage or behind a wrapper sets nothing for the rest 
   expect(only('nohup eval "D=/opt"; rm -rf "$D/x"')).toMatchObject({ op: 'unknown', what: '$D is not set on this command line' })
   expect(endOf('env eval "cd $W"')).toBe(null)
   expect(only('sudo eval "rm -rf ~/x"')).toMatchObject({ op: 'delete', dir: null, paths: ['~/x'] })
+  // Measured from the folder the wrapper would run it in, like any wrapped command.
+  expect(dirOf('env -C /srv eval "rm -rf x"')).toBe('/srv')
 })
 
 test('an eval nested too deep is held, and each eval gives its depth back', () => {
