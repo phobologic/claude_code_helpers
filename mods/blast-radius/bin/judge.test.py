@@ -7,13 +7,18 @@ sandbox stands in for the machine: HOME is a folder in it, and only its tmp/ cou
 as a temp folder, so "outside the repository" is somewhere the test owns.
 """
 
+import importlib.util
 import json
 import os
 import shutil
 import subprocess
 import tempfile
+from unittest import mock
 
 JUDGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "judge.py")
+_spec = importlib.util.spec_from_file_location("judge", JUDGE)
+judge_module = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(judge_module)
 GIT_ENV = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
 
 failures = 0
@@ -229,7 +234,38 @@ def overwrites_and_copies(s):
     expect("a new file outside the repository is free", s.judge(overwrite("~/new.txt")), [])
     expect("overwriting a file in the repository is free", s.judge(overwrite("README.md")), [])
     expect("overwriting git's own files holds", s.judge(overwrite(".git/config")), [("git", ".git/config")])
-    expect("/dev is never a file to lose", s.judge(overwrite("/dev/null")), [])
+    for sink in ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/fd/1", "/dev/fd/3"):
+        expect(f"writing to {sink} loses nothing", s.judge(overwrite(sink)), [])
+    expect("cp to /dev/stdout loses nothing", s.judge(copy("cp", ["README.md"], "/dev/stdout")), [])
+    v = s.judge(overwrite("/dev/zero"))
+    expect("writing to any other device holds, as outside the repository", v, [("outside", "/dev/zero")])
+    check("  and says it is a device", any("(a device)" in f["detail"] for f in v["findings"]), v["findings"])
+    if os.path.exists("/dev/disk2"):  # the disk from the bug report, where this machine has one
+        v = s.judge(overwrite("/dev/disk2"))
+        expect("dd of=/dev/disk2 holds", v, [("outside", "/dev/disk2")])
+        check("  and says it is a device", any("(a device)" in f["detail"] for f in v["findings"]), v["findings"])
+        expect("cp onto /dev/disk2 holds", s.judge(copy("cp", ["README.md"], "/dev/disk2")), [("outside", "/dev/disk2")])
+    # Checked on the pattern itself: a real lstat through macOS's /dev/fd/.. fails now and then under load.
+    check("only a number after /dev/fd/ is a stream",
+          judge_module.SINK.fullmatch("/dev/fd/../zero") is None and judge_module.SINK.fullmatch("/dev/fd/12") is not None)
+    for spelling in ("/dev//null", "/dev/./null", os.path.relpath("/dev/null", s.repo)):
+        expect(f"another spelling of /dev/null loses nothing ({spelling})", s.judge(overwrite(spelling)), [])
+    # On Linux /dev/stdout resolves through /proc/self/fd/1 to whatever stdout is, perhaps a file
+    # outside; the path as written still marks it as the command's own stream.
+    class OutsideCtx:
+        def where(self, rp):
+            return "outside"
+
+        def show(self, rp):
+            return rp
+
+    with mock.patch.object(judge_module.os.path, "realpath", return_value=os.path.join(s.outside, "notes.txt")):
+        got = judge_module.judge_overwrite(OutsideCtx(), "/dev/stdout")
+    check("/dev/stdout is free wherever it resolves", got == [], got)
+    # A terminal such as /dev/ttyp0 or /dev/ttyS0, where the machine has one: only /dev/tty itself is free.
+    near = next((n for n in sorted(os.listdir("/dev")) if n.startswith("tty") and n[3:].isalnum()), None)
+    if near:
+        expect(f"/dev/{near} is not /dev/tty", s.judge(overwrite(f"/dev/{near}")), [("outside", f"/dev/{near}")])
     expect("mv onto an existing file outside holds", s.judge(copy("mv", ["README.md"], "~/.zshrc")), [("outside", "~/.zshrc")])
     write(os.path.join(s.outside, "README.md"))
     expect("mv into a folder that has the name holds", s.judge(copy("mv", ["README.md"], s.outside)), [("outside", os.path.join(s.outside, "README.md"))])
