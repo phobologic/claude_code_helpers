@@ -299,6 +299,45 @@ test('git commands that can discard work go to the judge; the rest never do', ()
   }
 })
 
+test('git short options combined in one word count one by one, as git reads them', () => {
+  for (const argv of [
+    ['branch', '-df', 'x'],
+    ['branch', '-fd', 'x'],
+    ['branch', '-qD', 'x'],
+    ['checkout', '-fb', 'new'],
+    ['checkout', '-qfb', 'new'],
+    ['checkout', '-fbfix/x'],
+    // -bnew holds its own value, so the next word is options again.
+    ['checkout', '-bnew', '-qf'],
+    ['switch', '-qf', 'main'],
+    ['restore', '-SW', 'a'],
+    ['rm', '-qf', 'x'],
+    ['rm', '-r', '--force', 'x'],
+    // A value, and every word after --, is never read as options.
+    ['clean', '-fe', '-nq'],
+    ['clean', '-f', '--exclude', '-nq'],
+    ['clean', '-f', '--', '-nq'],
+  ]) {
+    expect({ argv, risky: gitRisky(argv) }).toEqual({ argv, risky: true })
+  }
+  for (const argv of [
+    ['branch', '-dq', 'x'],
+    ['checkout', '-qb', 'new'],
+    ['checkout', '-bfix'],
+    // A cluster with a non-letter still splits: -q -b, and fix/x is -b's value.
+    ['checkout', '-qbfix/x'],
+    ['switch', '-cf', 'main'],
+    ['restore', '-Sq', 'a'],
+    ['restore', '-SsWIP', 'a'],
+    ['branch', '-uorigin/Dev'],
+    ['rm', '-rq', 'x'],
+    ['clean', '-nfd'],
+  ]) {
+    expect({ argv, risky: gitRisky(argv) }).toEqual({ argv, risky: false })
+  }
+  expect(only('git branch -df topic')).toEqual({ op: 'git', dir: null, argv: ['branch', '-df', 'topic'], cmd: 'git branch -df topic' })
+})
+
 test('mv, cp, ln -f, tee, dd, curl and rsync name what they overwrite', () => {
   expect(only('mv a.txt ~/Desktop/')).toEqual({
     op: 'copy', dir: null, mode: 'mv', sources: ['a.txt'], dest: ['~/Desktop/'], intoDir: false, noTargetDir: false, noClobber: false, cmd: 'mv a.txt ~/Desktop/',
