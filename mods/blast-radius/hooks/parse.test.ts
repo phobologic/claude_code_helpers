@@ -106,6 +106,7 @@ test('a write to any other device is an overwrite, so the judge sees it', () => 
   expect(analyze('eval echo $X \\>/dev/null')).toEqual([])
   expect(only('bash -c "echo $X > /dev/disk2"')).toMatchObject({ op: 'unknown' })
   expect(only('bash -c "echo $X > /dev/null2"')).toMatchObject({ op: 'unknown' })
+  expect(analyze('bash -c "x=`cmd $Y 2>/dev/null`"')).toEqual([])
 })
 
 test('heredoc bodies are text, except where a shell or interpreter reads them', () => {

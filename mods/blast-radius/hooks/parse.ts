@@ -53,7 +53,7 @@ const SINK_PATH = new RegExp(`^${SINK.source}$`)
 const isSink = (p: string): boolean => SINK_PATH.test(p)
 // Text that could delete or clobber, for a command whose words cannot be expanded.
 const DESTRUCTIVE = new RegExp(
-  String.raw`\b(rm|unlink|shred|rmtree|truncate|dd)\b|-delete\b|>(?![>&]|\s*${SINK.source}(?=[\s;&|()<>'"]|$))`,
+  String.raw`\b(rm|unlink|shred|rmtree|truncate|dd)\b|-delete\b|>(?![>&]|\s*${SINK.source}(?=[\s;&|()<>'"\`]|$))`,
 )
 // Command text that can't be expanded and could do anything: it looks destructive, or
 // the command itself is a variable or substitution (`sh -c "$CMD"`).

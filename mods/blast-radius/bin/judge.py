@@ -353,9 +353,9 @@ def judge_in_repo(ctx, owner, entries):
 
 
 def judge_overwrite(ctx, p):
-    if SINK.fullmatch(p):
-        return []
     rp = os.path.realpath(p)  # a write goes through links to their target
+    if SINK.fullmatch(p) or SINK.fullmatch(rp):  # /dev//null and kin are still the null device
+        return []
     if not os.path.exists(rp):
         return []
     w = ctx.where(rp)
