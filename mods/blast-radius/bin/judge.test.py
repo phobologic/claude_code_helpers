@@ -91,9 +91,10 @@ class Sandbox:
     def p(self, *parts):
         return os.path.join(self.repo, *parts)
 
-    def judge(self, *effects, cwd=None, root=None, git_log=None, **extra):
+    def judge(self, *effects, cwd=None, root=None, home=None, temp=None, git_log=None, **extra):
         """The verdict; with `git_log`, each git command the judge runs is logged there."""
-        env = {**os.environ, "HOME": self.home, "TMPDIR": self.tmp, "BLAST_RADIUS_TEMP_ROOTS": self.tmp}
+        temp = temp or self.tmp
+        env = {**os.environ, "HOME": home or self.home, "TMPDIR": temp, "BLAST_RADIUS_TEMP_ROOTS": temp}
         if git_log:
             env["PATH"] = self.git_shim(git_log) + os.pathsep + env["PATH"]
         req = {"sessionRoot": root or self.repo, "cwd": cwd or self.repo, "effects": list(effects), **extra}
@@ -157,6 +158,7 @@ def main():
         other_repos(s)
         subagent_folders(s)
         odd_cases(s)
+        letter_case(s)
     finally:
         s.done()
     print(f"\n{failures} failure(s)" if failures else "\nall passed")
@@ -856,6 +858,153 @@ def odd_cases(s):
     plain = os.path.join(s.root, "plain")
     write(os.path.join(plain, "f.txt"))
     expect("outside git, deleting project files holds", s.judge(delete("f.txt"), cwd=plain, root=plain), [("uncommitted", os.path.join(plain, "f.txt"))])
+
+
+def letter_case(s):
+    """A path is judged as the volume spells it. Run the test with TMPDIR on a volume
+    of the other kind to cover the checks this one skips."""
+    locked = os.path.join(s.outside, "locked")
+    write(os.path.join(locked, "f.txt"))
+    os.chmod(locked, 0o300)
+    try:
+        expect("a file in a folder that can't be listed is still judged",
+               s.judge(delete(os.path.join(locked, "f.txt"))), [("outside", os.path.join(locked, "f.txt"))])
+    finally:
+        os.chmod(locked, 0o700)
+    if os.path.exists(s.p("readme.md")):
+        print("SKIP  checks for a volume that keeps case: this one ignores it")
+        ignored_case(s)
+    else:
+        print("SKIP  checks for a volume that ignores case: this one keeps it")
+        kept_case(s)
+
+
+def ignored_case(s):
+    """Where the volume ignores case, SRC is src and .GIT is .git."""
+    write(s.p("src", "new.py"))
+    expect("rm -rf SRC holds like rm -rf src", s.judge(delete("SRC")), [("uncommitted", "src/new.py")])
+    expect("  and so does rm -rf SRC/", s.judge(delete("SRC/")), [("uncommitted", "src/new.py")])
+    os.remove(s.p("src", "new.py"))
+    expect("rm -rf .GIT holds like rm -rf .git", s.judge(delete(".GIT")), [("git", ".git")])
+    expect("overwriting .GIT/config holds", s.judge(overwrite(".GIT/config")), [("git", ".git/config")])
+    expect("deleting the repository folder in another case holds as the repository", s.judge(delete("../REPO")), [("git", s.repo)])
+    expect("a memory file in another case is free", s.judge(delete("~/.claude/projects/p/MEMORY/m.md")), [])
+    write(s.p("src", "a.py"), "changed\n")
+    expect("cd SRC, then checkout -- a.py over a change holds", s.judge(git("checkout", "--", "a.py", dir="SRC")),
+           [("uncommitted", "src/a.py")])
+    expect("checkout -- SRC/a.py passes, since git matches pathspecs by case", s.judge(git("checkout", "--", "SRC/a.py")), [])
+    expect("checkout -- /abs/REPO/src/a.py holds, since git finds the working tree ignoring case",
+           s.judge(git("checkout", "--", os.path.join(s.root, "REPO", "src", "a.py"))), [("uncommitted", "src/a.py")])
+    expect("  but checkout -- ../REPO/src/a.py passes, since git refuses it",
+           s.judge(git("checkout", "--", os.path.join("..", "REPO", "src", "a.py"))), [])
+    expect("  and checkout -- /abs/other/src/a.py passes, since it is outside the working tree",
+           s.judge(git("checkout", "--", os.path.join(s.root, "other", "src", "a.py"))), [])
+    sh("git", "checkout", "--", "src/a.py", cwd=s.repo)
+    renamed_by_case(s)
+    caps = s.p(".worktrees", "caps")
+    sh("git", "worktree", "add", "-q", "-b", "caps", ".WORKTREES/caps", cwd=s.repo)
+    write(os.path.join(caps, "README.md"), "mutant\n")
+    expect("an agent's worktree git recorded in another case is still scratch",
+           s.judge(git("checkout", "--", "README.md"), cwd=caps), [])
+    expect("the worktree a session runs in keeps full protection when named as git recorded it",
+           s.judge(delete(s.p(".WORKTREES", "caps", "README.md")), cwd=caps, root=caps),
+           [("uncommitted", ".worktrees/caps/README.md")])
+    away = os.path.join(s.root, "wt-away")
+    expect("worktree remove --force named in another case holds its changes",
+           s.judge(git("worktree", "remove", "--force", os.path.join(s.root, "WT-AWAY"))),
+           [("uncommitted", os.path.join(away, name)) for name in ("README.md", ".env", os.path.join("sub", ".env"))])
+    spelled_by_the_caller(s)
+    spelled_by_git(s)
+
+
+def renamed_by_case(s):
+    """git reports files as its index spells them, the targets are spelled as on disk."""
+    write(s.p("src", ".env"))
+    sh("git", "add", "-f", "src/.env", cwd=s.repo)
+    sh("git", "commit", "-q", "-m", "env", cwd=s.repo)
+    try:
+        expect("a committed .env deleted as SRC/.env passes", s.judge(delete("SRC/.env")), [])
+        os.rename(s.p("src"), s.p("moved"))
+        os.rename(s.p("moved"), s.p("SRC"))  # a case-only rename git never recorded
+        try:
+            write(s.p("SRC", "a.py"), "changed\n")
+            for typed in ("src/a.py", "SRC/a.py", "src"):
+                expect(f"after src/ became SRC/, rm {typed} holds a change git lists as src/a.py",
+                       s.judge(delete(typed)), [("uncommitted", "SRC/a.py")])
+            expect("  and a committed .env git lists as src/.env is still committed", s.judge(delete("src/.env")), [])
+        finally:
+            os.rename(s.p("SRC"), s.p("moved"))
+            os.rename(s.p("moved"), s.p("src"))
+            sh("git", "checkout", "--", "src/a.py", cwd=s.repo)
+    finally:
+        sh("git", "rm", "-q", "--cached", "src/.env", cwd=s.repo)
+        sh("git", "commit", "-q", "-m", "no env", cwd=s.repo)
+        os.remove(s.p("src", ".env"))
+    outer = os.path.join(s.root, "case-outer")
+    inner = os.path.join(outer, "box", "inner")
+    sh("git", "worktree", "add", "-q", "-b", "case-outer", outer, cwd=s.repo)
+    sh("git", "worktree", "add", "-q", "-b", "case-inner", inner, cwd=s.repo)
+    os.rename(os.path.join(inner, "src"), os.path.join(inner, "SRC"))
+    write(os.path.join(inner, "SRC", "a.py"), "changed\n")
+    expect("in a nested session worktree, a change git lists as src/a.py shows as SRC/a.py",
+           s.judge(delete("box"), cwd=outer), [("uncommitted", inner), ("uncommitted", os.path.join(inner, "SRC", "a.py"))])
+    expect("  and so it does for worktree remove --force", s.judge(git("worktree", "remove", "--force", inner)),
+           [("uncommitted", os.path.join(inner, "SRC", "a.py"))])
+    sh("git", "worktree", "remove", "--force", inner, cwd=s.repo)
+    sh("git", "worktree", "remove", "--force", outer, cwd=s.repo)
+
+
+def spelled_by_the_caller(s):
+    """HOME, the temp folder and the session's folder can arrive in another case too."""
+    home, temp = os.path.join(s.root, "HOME"), os.path.join(s.root, "TMP")
+    expect("with HOME in another case, memory files are free", s.judge(delete("~/.claude/projects/p/memory/m.md"), home=home), [])
+    expect("  and the home folder shows as ~", s.judge(delete("~/.zshrc"), home=home), [("outside", "~/.zshrc")])
+    write(os.path.join(s.tmp, "y"))
+    expect("with the temp folder in another case, its files are free", s.judge(delete(os.path.join(s.tmp, "y")), temp=temp), [])
+    expect("from a working folder in another case, a missing folder is named from the repository",
+           s.judge(delete("x", dir="no/such/dir"), cwd=os.path.join(s.root, "REPO")), [("unknown", "no/such/dir")])
+    plain = os.path.join(s.root, "plain")
+    write(os.path.join(plain, "f.txt"))
+    expect("outside git, a session folder in another case holds its files as the project's",
+           s.judge(delete("f.txt"), cwd=plain, root=os.path.join(s.root, "PLAIN")), [("uncommitted", os.path.join(plain, "f.txt"))])
+
+
+def spelled_by_git(s):
+    """git echoes some folders as they were written: core.worktree, and the main checkout
+    as a linked worktree recorded it before the folder was renamed."""
+    cw = os.path.join(s.root, "cw")
+    sh("git", "init", "-q", "-b", "main", cw, cwd=s.root)
+    write(os.path.join(cw, "f.txt"))
+    sh("git", "add", "-A", cwd=cw)
+    sh("git", "commit", "-q", "-m", "init", cwd=cw)
+    sh("git", "config", "core.worktree", os.path.join(s.root, "CW"), cwd=cw)
+    expect("with core.worktree in another case, deleting a committed file passes", s.judge(delete("f.txt"), cwd=cw, root=cw), [])
+
+    throwaway = os.path.join(s.root, "throwaway")
+    copy_repo = os.path.join(throwaway, "copy")
+    sh("git", "clone", "-q", s.repo, copy_repo, cwd=s.root)
+    sh("git", "checkout", "-q", "-b", "gone", cwd=copy_repo)
+    sh("git", "commit", "-q", "--allow-empty", "-m", "gone", cwd=copy_repo)
+    sh("git", "checkout", "-q", "main", cwd=copy_repo)
+    sh("git", "worktree", "add", "-q", "-b", "wt", os.path.join(throwaway, "wt"), cwd=copy_repo)
+    renamed = os.path.join(s.root, "THROWAWAY")
+    os.rename(throwaway, renamed)  # the worktree's .git still names throwaway/copy
+    expect("a throwaway copy renamed by case keeps its unmerged branch free to delete from its worktree",
+           s.judge(git("branch", "-D", "gone"), cwd=os.path.join(renamed, "wt"), temp=renamed), [])
+
+
+def kept_case(s):
+    """Where the volume keeps case, SRC and src are different folders."""
+    write(s.p("src", "new.py"))
+    expect("rm -rf SRC with only src/ has nothing to lose", s.judge(delete("SRC")), [])
+    write(s.p("SRC", "x.py"))
+    expect("with SRC/ and src/, rm -rf src judges src/", s.judge(delete("src")), [("uncommitted", "src/new.py")])
+    expect("  and rm -rf SRC judges SRC/", s.judge(delete("SRC")), [("uncommitted", "SRC/x.py")])
+    shutil.rmtree(s.p("SRC"))
+    os.remove(s.p("src", "new.py"))
+    write(os.path.join(s.outside, "README.md"))
+    expect("cp to a new name that differs from a folder only in case makes a file",
+           s.judge(copy("cp", ["README.md"], os.path.join(s.root, "OUTSIDE"))), [])
 
 
 if __name__ == "__main__":
