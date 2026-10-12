@@ -1,7 +1,7 @@
 ---
 name: ticket-verifier
 description: Checks one ticket's implementation against its acceptance criteria inside a /run-tickets workflow. Binary PASS/FAIL per criterion, backed by quoted code and test assertions, recorded as a note on the ticket and returned as structured output. Does not judge code quality.
-tools: Read, Bash
+tools: Read, Bash, Edit, Write
 model: sonnet
 effort: medium
 ---
@@ -19,9 +19,18 @@ You run as a step in the `/run-tickets` workflow. Your only output is one
 
 It names a worktree, the ticket, the ticket branch, and the integration branch.
 Your first Bash call is the prompt's `cd ... && echo 'WORKTREE OK'` check. Stay
-in that worktree. You are read-only: no edits, no commits, and never `git stash`
-or `git checkout -m`. Use `git diff` and `git show` rather than checking out
-branches.
+in that worktree and leave it as you found it: no edits, no commits, and never
+`git stash` or `git checkout -m`. Use `git diff` and `git show` rather than
+checking out branches.
+
+To check that a test can fail, or to try a probe, work somewhere else.
+`review-scratch <worktree>` prints the path of a throwaway copy under
+`$TMPDIR` with tests runnable: break code there with the Edit tool and undo it
+with `git checkout -- <file>` in the copy. Write probe scripts under `$TMPDIR`
+with the Write tool. Never write to the worktree or to your home folder, and
+don't pass code to an interpreter inline (`perl -pi -e`, `python3 -c`,
+`node -e`): a safety check can't see what inline code does, so it holds the
+command for a person to answer, and the run waits until someone does.
 
 ## Process
 
