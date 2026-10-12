@@ -679,71 +679,204 @@ function pathsOf(words: Word[], ctx: Ctx, raw: string): string[] | null {
   return v.values
 }
 
-const SUDO_VALUE = new Set(['-u', '-g', '-C', '-D', '-h', '-p', '-r', '-t', '-T', '-U'])
-const TIMEOUT_VALUE = new Set(['-s', '-k', '--signal', '--kill-after'])
+// ---------- wrappers ----------
 
-// Strips the wrappers that run another command unchanged (sudo, env, timeout, ...).
-function unwrap(words: Word[], ctx: Ctx): { words: Word[]; dir: DirState } | null {
-  let dir = ctx.dir
-  for (;;) {
-    const name = cmdName(words[0])
-    let k = 1
-    const opt = (): string | null => text(words[k])
-    if (name === 'sudo' || name === 'doas') {
-      while (opt()?.startsWith('-')) {
-        const t = opt() as string
-        k += SUDO_VALUE.has(t) ? 2 : 1
-        if (t === '--') break
-      }
-    } else if (name === 'env') {
-      while (k < words.length) {
-        const t = opt()
-        if (t === '--') {
-          k += 1
-          break
-        }
-        if (t === '-C' || t === '--chdir') {
-          const d = text(words[k + 1])
-          dir = d === null ? { unknown: 'env -C with an expansion' } : joinDir(dir, d)
-          k += 2
-        } else if (t?.startsWith('--chdir=')) {
-          dir = joinDir(dir, t.slice(8))
-          k += 1
-        } else if (t === '-S' || t === '--split-string') {
-          const v = words[k + 1] ? expand(words[k + 1] as Word, ctx, 'plain') : { values: [] }
-          if ('unknown' in v) ctx.out.push({ op: 'unknown', what: `env -S: ${v.unknown}`, cmd: '' })
-          else walk(v.values.join(' '), child(ctx))
-          return null
-        } else if (t === '-u' || t === '--unset') {
-          k += 2
-        } else if (t?.startsWith('-') || isAssign(words[k] as Word)) {
-          k += 1
-        } else {
-          break
-        }
-      }
-    } else if (name === 'command') {
-      if (opt() === '-v' || opt() === '-V') return null
-      if (opt() === '-p') k += 1
-    } else if (name === 'exec') {
-      while (opt()?.startsWith('-')) k += opt() === '-a' ? 2 : 1
-    } else if (name === 'time') {
-      if (opt() === '-p') k += 1
-    } else if (name === 'nice') {
-      if (opt() === '-n') k += 2
-      else if (/^(-\d+|--adjustment=.*)$/.test(opt() ?? '')) k += 1
-    } else if (name === 'timeout' || name === 'gtimeout') {
-      while (opt()?.startsWith('-')) k += TIMEOUT_VALUE.has(opt() as string) ? 2 : 1
-      k += 1 // the duration
-    } else if (name === 'stdbuf') {
-      while (opt()?.startsWith('-')) k += /^-[ioe]$/.test(opt() as string) ? 2 : 1
-    } else if (name === 'caffeinate') {
-      while (opt()?.startsWith('-')) k += opt() === '-t' || opt() === '-w' ? 2 : 1
-    } else if (name !== 'builtin' && name !== 'nohup' && name !== 'chronic' && name !== 'unbuffer') {
-      return { words, dir }
+// A command a wrapper runs and the folder it runs in; no words when it runs none.
+interface Wrapped {
+  words: Word[]
+  dir: DirState
+}
+type Wrapper = (words: Word[], dir: DirState, ctx: Ctx) => Wrapped
+
+// How a wrapper's own words are laid out before the command it runs.
+interface Grammar {
+  short?: string // short options whose value can be the next word: `-u root`, `-Eu root`
+  long?: string[] // long ones whose value can be the next word: `--user root`
+  chdir?: string[] // options whose value is the folder the command runs in
+  operands?: number // words between the options and the command: timeout's duration
+  sub?: string // the subcommand that runs a command (`uv run`); any other runs none
+  stdin?: string // the interpreter a lone `-` runs on stdin (`uv run -`)
+}
+
+interface Opt {
+  name: string // `-u` or `--user`, without its value
+  value?: Word | undefined // none for a flag, or for an option that ends the line
+}
+
+const literal = (s: string): Word => ({ parts: [{ kind: 'lit', text: s, quoted: false }], raw: s })
+
+// The word with its first n characters, all of them in its leading literal, cut off.
+function after(w: Word, n: number): Word {
+  const [head, ...rest] = w.parts as [Extract<Part, { kind: 'lit' }>, ...Part[]]
+  return { parts: [{ ...head, text: head.text.slice(n) }, ...rest], raw: w.raw }
+}
+
+// The options in one word (`-Eu`, `-uroot`, `--user=root`), and the name of a last one
+// whose value is the next word.
+function optionWord(w: Word, flag: string, g: Grammar): { opts: Opt[]; next: string | null } {
+  if (flag.startsWith('--')) {
+    const eq = flag.indexOf('=')
+    if (eq >= 0) return { opts: [{ name: flag.slice(0, eq), value: after(w, eq + 1) }], next: null }
+    return g.long?.includes(flag) ? { opts: [], next: flag } : { opts: [{ name: flag }], next: null }
+  }
+  const opts: Opt[] = []
+  for (let j = 1; j < flag.length; j += 1) {
+    const name = `-${flag[j]}`
+    if (g.short?.includes(flag[j] as string)) {
+      if (j + 1 === flag.length && w.parts.length === 1) return { opts, next: name }
+      opts.push({ name, value: after(w, j + 1) })
+      return { opts, next: null }
     }
-    words = words.slice(k)
-    if (words.length === 0) return null
+    opts.push({ name })
+  }
+  return { opts, next: null }
+}
+
+// The options from words[k], up to the first word that isn't one or just past `--`, and
+// the index after them. A lone `-` is an operand, as getopt reads it: env takes it as -i,
+// `uv run -` runs stdin as Python, and in zsh `exec -` is the `-` wrapper below.
+function readOpts(words: Word[], k: number, g: Grammar): { opts: Opt[]; k: number } {
+  const opts: Opt[] = []
+  while (k < words.length) {
+    const w = words[k] as Word
+    const head = w.parts[0]
+    const flag = head?.kind === 'lit' ? head.text : ''
+    if (!flag.startsWith('-') || text(w) === '-') break
+    k += 1
+    if (text(w) === '--') break
+    const found = optionWord(w, flag, g)
+    opts.push(...found.opts)
+    if (found.next !== null) {
+      opts.push({ name: found.next, value: words[k] })
+      k += 1
+    }
+  }
+  return { opts, k }
+}
+
+// The folder a wrapper's command runs in once its chdir options (`sudo -D`) are applied.
+function moveDir(dir: DirState, wrapper: string, opts: Opt[], chdir: string[]): DirState {
+  for (const o of opts) {
+    if (!chdir.includes(o.name)) continue
+    const d = text(o.value)
+    dir = d === null ? { unknown: `${wrapper} ${o.name} with an expansion` } : joinDir(dir, d)
+  }
+  return dir
+}
+
+// A wrapper whose words a Grammar describes.
+function grammar(g: Grammar): Wrapper {
+  return (words, dir) => {
+    let { opts, k } = readOpts(words, 1, g)
+    if (g.sub !== undefined) {
+      // `uv sync` and the like run nothing this file judges.
+      if (text(words[k]) !== g.sub) return { words: [], dir }
+      const more = readOpts(words, k + 1, g)
+      opts = opts.concat(more.opts)
+      k = more.k
+    }
+    const rest = words.slice(k + (g.operands ?? 0))
+    if (g.stdin !== undefined && text(rest[0]) === '-') rest.unshift(literal(g.stdin))
+    return { words: rest, dir: moveDir(dir, cmdName(words[0]) ?? '', opts, g.chdir ?? []) }
+  }
+}
+
+const ENV: Grammar = { short: 'CPSu', long: ['--chdir', '--split-string', '--unset'], chdir: ['-C', '--chdir'] }
+
+// env [options] [NAME=value ...] command, where -S's string is a command line of its own.
+function env(words: Word[], dir: DirState, ctx: Ctx): Wrapped {
+  const { opts, k } = readOpts(words, 1, ENV)
+  const split = opts.find(o => o.name === '-S' || o.name === '--split-string')
+  if (split) {
+    const v = split.value ? expand(split.value, ctx, 'plain') : { values: [] }
+    if ('unknown' in v) ctx.out.push({ op: 'unknown', what: `env -S: ${v.unknown}`, cmd: '' })
+    else walk(v.values.join(' '), child(ctx))
+    return { words: [], dir }
+  }
+  // A `-` right after the options means -i. env takes any word with `=` in it, once the
+  // shell has removed the quotes, as an assignment: `env "X=a b" cmd`.
+  let j = text(words[k]) === '-' ? k + 1 : k
+  while (j < words.length && litText(words[j] as Word).includes('=')) j += 1
+  return { words: words.slice(j), dir: moveDir(dir, 'env', opts, ENV.chdir ?? []) }
+}
+
+// command -v and -V only look the command up.
+function command(words: Word[], dir: DirState): Wrapped {
+  const { opts, k } = readOpts(words, 1, {})
+  return { words: opts.some(o => o.name === '-v' || o.name === '-V') ? [] : words.slice(k), dir }
+}
+
+const FLOCK: Grammar = { short: 'wE', long: ['--wait', '--timeout', '--conflict-exit-code'] }
+
+// flock [options] lockfile command..., or flock [options] lockfile -c 'command', which sh
+// runs. flock [options] fd runs nothing.
+function flock(words: Word[], dir: DirState): Wrapped {
+  const k = readOpts(words, 1, FLOCK).k + 1 // past the lock file
+  const c = text(words[k])
+  if (c === '-c' || c === '--command') return { words: [literal('sh'), literal('-c'), ...words.slice(k + 1)], dir }
+  return { words: words.slice(k), dir }
+}
+
+const SUDO: Grammar = {
+  short: 'aCcDghpRrTtUu',
+  long: ['--auth-type', '--close-from', '--login-class', '--chdir', '--group', '--host', '--prompt', '--chroot', '--role', '--type', '--command-timeout', '--other-user', '--user'],
+  chdir: ['-D', '--chdir'],
+}
+const TIMEOUT: Grammar = { short: 'ks', long: ['--kill-after', '--signal'], operands: 1 }
+// The options of uv run that take a value, from uv's CLI reference, global ones included.
+const UV: Grammar = {
+  sub: 'run',
+  short: 'CfiPpw',
+  long: [
+    '--allow-insecure-host', '--cache-dir', '--color', '--config-file', '--config-setting', '--config-settings',
+    '--config-settings-package', '--default-index', '--directory', '--env-file', '--exclude-newer',
+    '--exclude-newer-package', '--extra', '--extra-index-url', '--find-links', '--fork-strategy', '--group', '--index',
+    '--index-strategy', '--index-url', '--keyring-provider', '--link-mode', '--no-binary-package',
+    '--no-build-isolation-package', '--no-build-package', '--no-editable-package', '--no-extra', '--no-group',
+    '--no-sources-package', '--only-group', '--package', '--prerelease', '--prerelease-package', '--project', '--python',
+    '--python-platform', '--python-preference', '--refresh-package', '--reinstall-package', '--resolution',
+    '--trusted-host', '--upgrade-group', '--upgrade-package', '--with', '--with-editable', '--with-requirements',
+  ],
+  chdir: ['--directory'],
+  stdin: 'python',
+}
+// Poetry 2 runs the command in -C's folder; -P only says where the project is.
+const POETRY: Grammar = { sub: 'run', short: 'CP', long: ['--directory', '--project'], chdir: ['-C', '--directory'] }
+
+// Wrappers that run another command unchanged. npx, pnpm exec and uvx are not here: the
+// package binaries they run are unknown code either way.
+const WRAPPERS = new Map<string, Wrapper>([
+  ['sudo', grammar(SUDO)],
+  ['doas', grammar({ short: 'aCu' })],
+  ['env', env],
+  ['command', command],
+  ['exec', grammar({ short: 'a' })],
+  ['time', grammar({ short: 'fo', long: ['--format', '--output'] })],
+  ['nice', grammar({ short: 'n', long: ['--adjustment'] })],
+  ['timeout', grammar(TIMEOUT)],
+  ['gtimeout', grammar(TIMEOUT)],
+  ['stdbuf', grammar({ short: 'eio', long: ['--input', '--output', '--error'] })],
+  ['caffeinate', grammar({ short: 'tw' })],
+  ['ionice', grammar({ short: 'cnPpu', long: ['--class', '--classdata', '--pid', '--pgid', '--uid'] })],
+  ['flock', flock],
+  ['uv', grammar(UV)],
+  ['poetry', grammar(POETRY)],
+  ['builtin', grammar({})],
+  ['nohup', grammar({})],
+  ['chronic', grammar({})],
+  ['unbuffer', grammar({})],
+  // zsh's `-` precommand modifier: `- cmd` and `exec - cmd` run cmd with a - before its argv[0].
+  ['-', grammar({})],
+])
+
+// Strips the wrappers that run another command unchanged (sudo, env, timeout, uv run, ...).
+function unwrap(words: Word[], ctx: Ctx): Wrapped | null {
+  let w: Wrapped = { words, dir: ctx.dir }
+  for (;;) {
+    const wrapper = WRAPPERS.get(cmdName(w.words[0]) ?? '')
+    if (wrapper === undefined) return w
+    w = wrapper(w.words, w.dir, ctx)
+    if (w.words.length === 0) return null
   }
 }
 
@@ -966,13 +1099,51 @@ function xargs(args: Word[], ctx: Ctx, piped: Cmd | null, raw: string): void {
 }
 
 const GIT_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--super-prefix'])
+// A subcommand's options that take a value. judge.py's GIT_VALUED is the same table.
+const GIT_VALUED = new Map([
+  ['checkout', ['-b', '-B', '--orphan']],
+  ['switch', ['-c', '-C', '--orphan']],
+  ['restore', ['-s', '--source']],
+  ['clean', ['-e', '--exclude']],
+  ['branch', ['-u', '--set-upstream-to']],
+])
+
+// A subcommand's arguments with short options combined in one word spelled out one per
+// word, as git reads them: -df is -d -f. An option in `valued` takes the rest of its word
+// as its value (-bname is -b name), or else the next word, which is kept as written. So
+// are long options, arguments, and every word from `--` on. judge.py's unbundle matches it.
+function unbundle(words: string[], valued: string[]): string[] {
+  const out: string[] = []
+  for (let k = 0; k < words.length; k += 1) {
+    const a = words[k] as string
+    if (a === '--') return [...out, ...words.slice(k)]
+    let takesNext = valued.includes(a)
+    if (/^-[^-]/.test(a)) {
+      for (let j = 1; j < a.length; j += 1) {
+        out.push(`-${a[j]}`)
+        if (valued.includes(`-${a[j]}`)) {
+          if (j + 1 < a.length) out.push(a.slice(j + 1))
+          else takesNext = true
+          break
+        }
+      }
+    } else {
+      out.push(a)
+    }
+    if (takesNext) {
+      out.push(...words.slice(k + 1, k + 2))
+      k += 1
+    }
+  }
+  return out
+}
 
 // Whether a git command can discard work at all, so the safe majority never reaches the judge.
 export function gitRisky(argv: string[]): boolean {
   let k = 0
   while (k < argv.length && (argv[k] as string).startsWith('-')) k += GIT_VALUE.has(argv[k] as string) ? 2 : 1
   const sub = argv[k]
-  const rest = argv.slice(k + 1)
+  const rest = unbundle(argv.slice(k + 1), GIT_VALUED.get(sub ?? '') ?? [])
   const has = (...flags: string[]): boolean => rest.some(a => flags.includes(a))
   switch (sub) {
     case 'reset':
@@ -992,7 +1163,7 @@ export function gitRisky(argv: string[]): boolean {
     case 'worktree':
       return rest[0] === 'remove'
     case 'rm':
-      return !has('--cached') && rest.some(a => a === '--force' || /^-[a-z]*f/.test(a))
+      return !has('--cached') && has('-f', '--force')
     case 'reflog':
       return rest[0] === 'expire' || rest[0] === 'delete'
     case 'gc':
@@ -1021,46 +1192,105 @@ function git(args: Word[], dir: DirState, ctx: Ctx, raw: string): void {
   emit(ctx, dir, [], raw, d => ({ op: 'git', dir: d, argv, cmd: short(raw) }))
 }
 
-function copy(mode: 'mv' | 'cp' | 'ln', name: string, args: Word[], dir: DirState, ctx: Ctx, raw: string): void {
-  let targetDir: Word | null = null
-  let noTargetDir = false
-  let noClobber = false
-  let force = false
-  const pos: Word[] = []
+// What an option of mv, cp, install or ln does about a destination that already exists:
+// `keep` it or `replace` it (the last of the two wins, as in BSD mv and cp and GNU mv;
+// GNU cp keeps on `-nf`, which this counts as replacing), `backup` it first so nothing is
+// lost, treat it as a file even when it is a folder (`noTargetDir`), or make folders and
+// copy nothing (`makesDirs`, install -d).
+type CopyOpt = 'keep' | 'replace' | 'backup' | 'noTargetDir' | 'makesDirs'
+type CopyKind = 'mv' | 'cp' | 'install' | 'ln'
+
+const COPY_SHARED: Record<string, CopyOpt> = {
+  '-b': 'backup', '--backup': 'backup', '-T': 'noTargetDir', '--no-target-directory': 'noTargetDir',
+}
+const MV_CP_OPTS: Record<string, CopyOpt> = {
+  ...COPY_SHARED, '-n': 'keep', '--no-clobber': 'keep', '-f': 'replace', '--force': 'replace', '-i': 'replace', '--interactive': 'replace',
+}
+// Each command's own options; `valued` are the short ones that take a value in every
+// version of it (BSD cp's and install's -S take none, so a path after one is still a path),
+// and `replaces` says whether an existing destination is replaced when no option says.
+const COPY_OPTS: Record<CopyKind, { opts: Record<string, CopyOpt>; valued: string; replaces: boolean }> = {
+  mv: { opts: MV_CP_OPTS, valued: 'tS', replaces: true },
+  cp: { opts: MV_CP_OPTS, valued: 't', replaces: true },
+  install: { opts: { ...COPY_SHARED, '-d': 'makesDirs', '--directory': 'makesDirs' }, valued: 'tmog', replaces: true },
+  // ln fails on a destination that exists unless -f, BSD's -F (which implies -f with -s)
+  // or a yes to -i has it replaced. Its -n and -h only stop it following a link to a folder.
+  ln: {
+    opts: { ...COPY_SHARED, '-f': 'replace', '--force': 'replace', '-F': 'replace', '-i': 'replace', '--interactive': 'replace' },
+    valued: 'tS',
+    replaces: false,
+  },
+}
+// --backup=none and =off make no backup, so only a value naming a kind of backup counts.
+const BACKS_UP = /^--backup=(t|numbered|existing|nil|simple|never)$/
+
+interface CopyOptions {
+  pos: Word[]
+  targetDir: Word | null
+  noTargetDir: boolean
+  replace: boolean
+  backup: boolean
+  makesDirs: boolean
+}
+
+// An option's value cut out of its word, as a word of its own; its glob characters stay literal.
+const quotedLiteral = (value: string): Word => ({ parts: [{ kind: 'lit', text: value, quoted: true }], raw: value })
+
+function setCopyOpt(o: CopyOptions, opt: CopyOpt | undefined): void {
+  if (opt === 'keep' || opt === 'replace') o.replace = opt === 'replace'
+  else if (opt === 'backup') o.backup = true
+  else if (opt === 'noTargetDir') o.noTargetDir = true
+  else if (opt === 'makesDirs') o.makesDirs = true
+}
+
+// One long option; returns how many of the following words it took as its value.
+function longCopyOpt(o: CopyOptions, kind: CopyKind, t: string, next: Word | undefined): number {
+  if (t === '--target-directory') {
+    o.targetDir = next ?? null
+    return 1
+  }
+  if (t.startsWith('--target-directory=')) o.targetDir = quotedLiteral(t.slice(19))
+  else if (/^--(suffix|mode|owner|group)$/.test(t)) return 1
+  else if (t.startsWith('--backup=')) setCopyOpt(o, BACKS_UP.test(t) ? 'backup' : undefined)
+  else setCopyOpt(o, COPY_OPTS[kind].opts[t])
+  return 0
+}
+
+// Combined short options (-fv, -t DIR, -tDIR); returns how many following words they took.
+function shortCopyOpts(o: CopyOptions, kind: CopyKind, t: string, next: Word | undefined): number {
+  for (let j = 1; j < t.length; j += 1) {
+    const ch = t[j] as string
+    if (COPY_OPTS[kind].valued.includes(ch)) {
+      const value = t.slice(j + 1)
+      if (ch === 't') o.targetDir = value ? quotedLiteral(value) : (next ?? null)
+      return value ? 0 : 1
+    }
+    setCopyOpt(o, COPY_OPTS[kind].opts[`-${ch}`])
+  }
+  return 0
+}
+
+function copyOptions(kind: CopyKind, args: Word[]): CopyOptions {
+  const o: CopyOptions = { pos: [], targetDir: null, noTargetDir: false, replace: COPY_OPTS[kind].replaces, backup: false, makesDirs: false }
   let ended = false
-  const valued = name.endsWith('install') ? 'tSmog' : 'tS'
   for (let k = 0; k < args.length; k += 1) {
     const w = args[k] as Word
     const t = text(w)
-    if (ended || t === null || !t.startsWith('-') || t === '-') {
-      pos.push(w)
-      continue
-    }
-    if (t === '--') ended = true
-    else if (t === '--target-directory') targetDir = args[++k] ?? null
-    else if (t.startsWith('--target-directory=')) targetDir = { parts: [{ kind: 'lit', text: t.slice(19), quoted: true }], raw: t }
-    else if (t === '--no-target-directory') noTargetDir = true
-    else if (t === '--no-clobber' || t.startsWith('--backup')) noClobber = true
-    else if (t === '--force') force = true
-    else if (/^--(suffix|mode|owner|group)$/.test(t)) k += 1
-    else if (!t.startsWith('--')) {
-      // Combined short options: -fv, -t DIR, -tDIR.
-      for (let j = 1; j < t.length; j += 1) {
-        const ch = t[j] as string
-        if (valued.includes(ch)) {
-          const value = t.slice(j + 1)
-          const valueWord = value ? { parts: [{ kind: 'lit' as const, text: value, quoted: true }], raw: value } : (args[++k] ?? null)
-          if (ch === 't') targetDir = valueWord
-          break
-        }
-        if (ch === 'T') noTargetDir = true
-        if (ch === 'n' || ch === 'b') noClobber = true
-        if (ch === 'f') force = true
-        if (ch === 'd' && name.endsWith('install')) return // install -d makes folders
-      }
-    }
+    if (ended || t === null || !t.startsWith('-') || t === '-') o.pos.push(w)
+    else if (t === '--') ended = true
+    else if (t.startsWith('--')) k += longCopyOpt(o, kind, t, args[k + 1])
+    else k += shortCopyOpts(o, kind, t, args[k + 1])
   }
-  if (mode === 'ln' && !force) noClobber = true
+  return o
+}
+
+function copy(mode: 'mv' | 'cp' | 'ln', name: string, args: Word[], dir: DirState, ctx: Ctx, raw: string): void {
+  const o = copyOptions(name.endsWith('install') ? 'install' : mode, args)
+  if (o.makesDirs) return
+  const { pos, noTargetDir } = o
+  // `ln [-f] TARGET` links into the working folder, under the target's own name.
+  const targetDir = o.targetDir ?? (mode === 'ln' && pos.length === 1 ? quotedLiteral('.') : null)
+  const noClobber = o.backup || !o.replace
   let sources = pos
   let dest: Word[]
   if (targetDir) {

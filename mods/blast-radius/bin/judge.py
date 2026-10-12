@@ -141,6 +141,47 @@ def toplevel(path):
     return ondisk(t.strip()) if t and t.strip() else None
 
 
+def could_stop_git(d):
+    """Whether git, looking for the repository from `d` or a folder inside it, could stop at `d`.
+
+    git stops at a folder holding `.git`, at one that is itself a bare repository (it
+    holds HEAD), at /, and where the folder above is on another file system.
+    """
+    if os.path.lexists(os.path.join(d, ".git")) or os.path.lexists(os.path.join(d, "HEAD")):
+        return True
+    parent = os.path.dirname(d)
+    return parent == d or os.stat(d).st_dev != os.stat(parent).st_dev
+
+
+def owner_of(ctx, d):
+    """The working copy holding the real folder `d`, as `toplevel` finds it.
+
+    A folder where git can't stop has its parent's answer, so git runs once per folder
+    where the answer can change (each repository's top, mostly) rather than once per
+    path. `d` must be a real path, so its parents are the folders git walks.
+    """
+    chain = []
+    while d not in ctx.owners:
+        if could_stop_git(d):
+            ctx.owners[d] = toplevel(d)
+            break
+        chain.append(d)
+        d = os.path.dirname(d)
+    for c in chain:
+        ctx.owners[c] = ctx.owners[d]
+    return ctx.owners[d]
+
+
+def covered(path, roots):
+    """Whether `path` is one of the set `roots` or inside one: one lookup per folder above it."""
+    while path not in roots:
+        parent = os.path.dirname(path)
+        if parent == path:
+            return False
+        path = parent
+    return True
+
+
 def main_checkout(top):
     """The main working tree of the repository `top` belongs to, which every one of its
     worktrees shares branches, stashes and history with."""
@@ -193,6 +234,7 @@ class Ctx:
         # Linked worktrees inside the repository folder are agents' scratch space.
         self.scratch = [w for w in self.worktrees[1:] if under(w, self.main) and w != self.top] if self.main else []
         self.notes = []
+        self.owners = {}  # folder -> the working copy git finds from it (owner_of)
 
     def where(self, rp):
         if ".git" in rp.split("/"):
@@ -301,13 +343,22 @@ def is_protected(name):
     return name not in NOT_PROTECTED and any(fnmatchcase(name, p) for p in PROTECTED)
 
 
-def tracked(ctx, path):
-    # Asked of the session's innermost worktree holding `path`, never from the file's
-    # own folder: git there could find another repository (a folder laid out as a bare
-    # repository needs no .git) and run its config.
-    repo = max((w for w in ctx.worktrees if under(path, w)), key=len)
-    out = git_out(["--literal-pathspecs", "ls-files", "-z", "--", os.path.relpath(path, repo)], repo)
-    return bool(out)
+def tracked(ctx, paths):
+    """Which of `paths` are in git's index: one `git ls-files` per worktree holding them.
+
+    Each path is asked of the session's innermost worktree holding it, never of the
+    repository git finds from the file's own folder: git there could find another
+    repository (a folder laid out as a bare repository needs no .git) and run its config.
+    """
+    by_repo = {}
+    for p in paths:
+        by_repo.setdefault(max((w for w in ctx.worktrees if under(p, w)), key=len), set()).add(p)
+    found = set()
+    for repo, ps in by_repo.items():
+        out = git_out(["ls-files", "-z"], repo)
+        if out:
+            found |= ps & {os.path.join(repo, e) for e in out.split("\0")}
+    return found
 
 
 def changes(repo, untracked):
@@ -388,7 +439,7 @@ def judge_deletes(ctx, items):
         elif w == "nogit":
             findings.append(finding("uncommitted", ctx.show(rp), "not in a git repository, so it can't be restored"))
         elif w == "inside":
-            owner = toplevel(os.path.dirname(rp)) or (rp if rp in ctx.worktrees else None)
+            owner = owner_of(ctx, os.path.dirname(rp)) or (rp if rp in ctx.worktrees else None)
             if owner is None:
                 findings.append(finding("uncommitted", ctx.show(rp), "not in git, so it can't be restored"))
             else:
@@ -398,28 +449,37 @@ def judge_deletes(ctx, items):
     return findings
 
 
-def judge_in_repo(ctx, owner, entries):
-    if owner not in ctx.worktrees:
-        # A repository nested in the session's: git status there would run its config.
-        return [finding("history", ctx.show(owner), SEPARATE)]
-    findings = []
-    targets = [rp for rp, _ in entries]
-    lost = {}
-    for path, what in changes(owner, untracked=True):
-        if any(under(path, t) for t in targets):
-            lost[path] = what
+def search(ctx, owner, entries):
+    """Protected files and nested repositories in the deleted `entries`, as walk finds them."""
     protected, nested = [], []
-    for rp, isdir in entries:
+    searched = set()  # folders walked in full: nothing inside them needs a second walk
+    for rp, isdir in sorted(entries):  # a folder sorts before what is inside it
         if VENDORED & set(os.path.relpath(rp, owner).split("/")):
             continue  # installed files: rebuilt, never kept
         if not isdir:
             if is_protected(os.path.basename(rp)):
                 protected.append(rp)
+        elif covered(rp, searched):
+            continue
         elif walk(ctx, rp, protected, nested):
             ctx.notes.append(f"{ctx.show(rp)} is too large to search fully for .env files and nested repositories.")
-    findings += judge_nested(ctx, nested, lost)
-    for path in protected:
-        if path not in lost and not tracked(ctx, path):
+        else:
+            searched.add(rp)
+    return protected, nested
+
+
+def judge_in_repo(ctx, owner, entries):
+    if owner not in ctx.worktrees:
+        # A repository nested in the session's: git status there would run its config.
+        return [finding("history", ctx.show(owner), SEPARATE)]
+    targets = {rp for rp, _ in entries}
+    lost = {path: what for path, what in changes(owner, untracked=True) if covered(path, targets)}
+    protected, nested = search(ctx, owner, entries)
+    findings = judge_nested(ctx, nested, lost)
+    unsure = [p for p in protected if p not in lost]
+    known = tracked(ctx, unsure)
+    for path in unsure:
+        if path not in known:
             lost[path] = "ignored by git, so it can't be restored"
     findings += [finding("uncommitted", ctx.show(p), what) for p, what in sorted(lost.items())]
     return findings
@@ -515,6 +575,46 @@ def discard(ctx, top, cwd, pathspecs):
     return found
 
 
+# A subcommand's options that take a value. parse.ts's GIT_VALUED is the same table.
+GIT_VALUED = {
+    "checkout": ("-b", "-B", "--orphan"),
+    "switch": ("-c", "-C", "--orphan"),
+    "restore": ("-s", "--source"),
+    "clean": ("-e", "--exclude"),
+    "branch": ("-u", "--set-upstream-to"),
+}
+
+
+def unbundle(rest, valued=()):
+    """`rest` with short options combined in one word spelled out one per word, as git
+    reads them: -df is -d -f. An option in `valued` takes the rest of its word as its value
+    (-bname is -b name), or else the next word, which is kept as written. So are long
+    options, arguments, and every word from `--` on. parse.ts's unbundle matches it."""
+    out = []
+    i = 0
+    while i < len(rest):
+        a = rest[i]
+        i += 1
+        if a == "--":
+            return out + rest[i - 1 :]
+        takes_next = a in valued
+        if re.match(r"-[^-]", a):
+            for j in range(1, len(a)):
+                out.append("-" + a[j])
+                if "-" + a[j] in valued:
+                    if a[j + 1 :]:
+                        out.append(a[j + 1 :])
+                    else:
+                        takes_next = True
+                    break
+        else:
+            out.append(a)
+        if takes_next:
+            out += rest[i : i + 1]
+            i += 1
+    return out
+
+
 def positionals(rest, valued=()):
     """Arguments that aren't options, and those after `--`."""
     out = []
@@ -545,7 +645,7 @@ def git_reset(ctx, top, cwd, rest):
 
 def git_checkout(ctx, top, cwd, rest):
     force = any(a in ("-f", "--force") for a in rest)
-    pos, paths, dashdash = positionals(rest, ("-b", "-B", "--orphan"))
+    pos, paths, dashdash = positionals(rest, GIT_VALUED["checkout"])
     if dashdash:
         if pos and not paths:
             return []
@@ -568,13 +668,13 @@ def git_restore(ctx, top, cwd, rest):
     worktree = any(a in ("-W", "--worktree") for a in rest)
     if staged and not worktree:
         return []  # only unstages: the file keeps its content
-    pos, paths, _ = positionals(rest, ("-s", "--source"))
+    pos, paths, _ = positionals(rest, GIT_VALUED["restore"])
     specs = pos + paths
     return discard(ctx, top, cwd, specs) if specs else []
 
 
 def git_rm(ctx, top, cwd, rest):
-    if "--cached" in rest or not any(a == "--force" or re.match(r"^-[a-z]*f", a) for a in rest):
+    if "--cached" in rest or not any(a in ("-f", "--force") for a in rest):
         return []  # without -f git refuses to drop changes
     pos, paths, _ = positionals(rest)
     return discard(ctx, top, cwd, pos + paths)
@@ -597,22 +697,10 @@ def git_clean(ctx, top, cwd, rest):
             excludes.append(a)
         elif a in ("-n", "--dry-run"):
             dry = True
-        elif a == "--force":
+        elif a in ("-f", "--force"):
             force += 1
-        elif re.match(r"^-[a-zA-Z]+$", a):
-            letters = a[1:]
-            for j, ch in enumerate(letters):
-                if ch == "e":
-                    pattern = letters[j + 1 :]
-                    if not pattern and i + 1 < len(rest):
-                        i += 1
-                        pattern = rest[i]
-                    excludes += ["-e", pattern]
-                    break
-                force += ch == "f"
-                dry |= ch == "n"
-                if ch in "dxX":
-                    flags.append("-" + ch)
+        elif a in ("-d", "-x", "-X"):
+            flags.append(a)
         elif not a.startswith("-"):
             paths.append(a)
         i += 1
@@ -650,10 +738,8 @@ def git_branch(ctx, top, cwd, rest):
             delete = True
         elif a in ("-f", "--force"):
             force = True
-        elif re.match(r"^-[a-zA-Z]+$", a):
-            delete |= "d" in a or "D" in a
-            force |= "f" in a or "D" in a
-            remote |= "r" in a
+        elif a == "-D":
+            delete = force = True
         elif not a.startswith("-"):
             names.append(a)
     if not (delete and force) or remote:
@@ -689,7 +775,8 @@ def git_worktree(ctx, top, cwd, rest):
         findings += [finding("uncommitted", ctx.show(path), what) for path, what in changes(p, untracked=True)]
     protected = []
     walk(ctx, p, protected, [])
-    findings += [finding("uncommitted", ctx.show(f), "ignored by git, so it can't be restored") for f in protected if not tracked(ctx, f)]
+    known = tracked(ctx, protected)
+    findings += [finding("uncommitted", ctx.show(f), "ignored by git, so it can't be restored") for f in protected if f not in known]
     return findings
 
 
@@ -759,7 +846,7 @@ def judge_git(ctx, base, eff):
     # repository is a throwaway copy, never because a scratch worktree runs the command.
     if args[i] in SHARED and ctx.where(main_checkout(top)) in FREE:
         return []
-    return handler(ctx, top, cwd, args[i + 1 :])
+    return handler(ctx, top, cwd, unbundle(args[i + 1 :], GIT_VALUED.get(args[i], ())))
 
 
 # ---------- main ----------
