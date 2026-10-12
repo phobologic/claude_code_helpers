@@ -1195,7 +1195,8 @@ interface CopyOptions {
   makesDirs: boolean
 }
 
-const literal = (value: string): Word => ({ parts: [{ kind: 'lit', text: value, quoted: true }], raw: value })
+// An option's value cut out of its word, as a word of its own; its glob characters stay literal.
+const quotedLiteral = (value: string): Word => ({ parts: [{ kind: 'lit', text: value, quoted: true }], raw: value })
 
 function setCopyOpt(o: CopyOptions, opt: CopyOpt | undefined): void {
   if (opt === 'keep' || opt === 'replace') o.replace = opt === 'replace'
@@ -1210,7 +1211,7 @@ function longCopyOpt(o: CopyOptions, kind: CopyKind, t: string, next: Word | und
     o.targetDir = next ?? null
     return 1
   }
-  if (t.startsWith('--target-directory=')) o.targetDir = literal(t.slice(19))
+  if (t.startsWith('--target-directory=')) o.targetDir = quotedLiteral(t.slice(19))
   else if (/^--(suffix|mode|owner|group)$/.test(t)) return 1
   else if (t.startsWith('--backup=')) setCopyOpt(o, BACKS_UP.test(t) ? 'backup' : undefined)
   else setCopyOpt(o, COPY_OPTS[kind].opts[t])
@@ -1223,7 +1224,7 @@ function shortCopyOpts(o: CopyOptions, kind: CopyKind, t: string, next: Word | u
     const ch = t[j] as string
     if (COPY_OPTS[kind].valued.includes(ch)) {
       const value = t.slice(j + 1)
-      if (ch === 't') o.targetDir = value ? literal(value) : (next ?? null)
+      if (ch === 't') o.targetDir = value ? quotedLiteral(value) : (next ?? null)
       return value ? 0 : 1
     }
     setCopyOpt(o, COPY_OPTS[kind].opts[`-${ch}`])
@@ -1250,7 +1251,7 @@ function copy(mode: 'mv' | 'cp' | 'ln', name: string, args: Word[], dir: DirStat
   if (o.makesDirs) return
   const { pos, noTargetDir } = o
   // `ln [-f] TARGET` links into the working folder, under the target's own name.
-  const targetDir = o.targetDir ?? (mode === 'ln' && pos.length === 1 ? literal('.') : null)
+  const targetDir = o.targetDir ?? (mode === 'ln' && pos.length === 1 ? quotedLiteral('.') : null)
   const noClobber = o.backup || !o.replace
   let sources = pos
   let dest: Word[]
