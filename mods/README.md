@@ -51,9 +51,13 @@ a session loads it from a folder you own.
   into words, brace expansion, `$'...'`, `$HOME`, mktemp, heredocs, `$(...)`, `bash -c`,
   `find -delete`, `find | xargs rm`, and git commands that can discard work). `bin/judge.py` expands globs, resolves links, and asks git
   what is at stake. Its own checks: `python3 mods/blast-radius/bin/judge.test.py`.
-- A command is read the way the session's shell reads it: zsh when `CLAUDE_CODE_SHELL`,
-  or else `SHELL`, names zsh, so `F="a b"; rm $F` removes the one path `a b`; bash
-  otherwise, which splits it into `a` and `b`.
+- Unquoted variables are split into words the way the session's shell splits them: not
+  at all when `CLAUDE_CODE_SHELL` (or, when that names neither bash nor zsh, `SHELL`)
+  names zsh, so `F="a b"; rm $F` removes the one path `a b`; at spaces, tabs and
+  newlines otherwise, as bash does. A `CLAUDE_CODE_SHELL` naming neither is ignored, as
+  Claude Code ignores it. After a zsh `setopt`, `unsetopt`, `emulate` or `set -o`/`-y`
+  that may turn splitting on, later unquoted variables are unknown and held. Other
+  zsh-only syntax is not modeled.
 - It judges by where the files are, not where the command runs. A linked worktree
   inside the repository folder (`.worktrees/*`, `.claude/worktrees/*`) is an agent's
   scratch space, so `/run-tickets` agents undoing their test mutations with

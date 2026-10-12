@@ -917,7 +917,27 @@ function handle(cmd: Cmd, ctx: Ctx, piped: Cmd | null): void {
 
   const unwrapped = unwrap(words, ctx)
   if (unwrapped === null) return
+  if (ctx.zsh && changesZshSplitting(unwrapped.words)) {
+    // From here on the line may split its variables as bash does, or may not.
+    ctx.zsh = false
+    ctx.vars.set('IFS', { unknown: 'zsh options change on this line' })
+    return
+  }
   run(cmd, unwrapped.words, unwrapped.dir, ctx, piped)
+}
+
+// A zsh command that can turn word splitting on: any setopt, unsetopt or emulate with
+// arguments (setopt shwordsplit, unsetopt noshwordsplit, emulate sh, setopt -m '*split*'),
+// and a set naming the option (set -o sh_word_split), giving its letter (set -y), or
+// with a word that is only known when it runs.
+function changesZshSplitting(words: Word[]): boolean {
+  const head = cmdName(words[0])
+  if (head === 'setopt' || head === 'unsetopt' || head === 'emulate') return words.length > 1
+  if (head !== 'set') return false
+  return words.slice(1).some(w => {
+    const t = text(w)
+    return t === null || /^[-+][A-Za-z]*y/.test(t) || /^(no)?shwordsplit$/.test(t.toLowerCase().replace(/_/g, ''))
+  })
 }
 
 function redirect(r: Redir, ctx: Ctx, raw: string): void {

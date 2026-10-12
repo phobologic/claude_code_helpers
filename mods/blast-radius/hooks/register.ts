@@ -128,12 +128,14 @@ export function followCd(agent: Agent, endDir: Line['endDir'], base: string): Ag
   return { ...agent, lastCd: typeof from === 'string' ? `${from}/${endDir}` : from }
 }
 
-// The shell Claude Code runs Bash commands in: CLAUDE_CODE_SHELL when set, else the
-// user's SHELL. zsh reads a line without splitting its variables into words; any other
-// shell, or none named, is read as bash.
+// The shell Claude Code runs Bash commands in. Like Claude Code, it takes CLAUDE_CODE_SHELL
+// only when the path names bash or zsh, and otherwise the user's SHELL when that does, so
+// a CLAUDE_CODE_SHELL of /bin/sh or fish is ignored. zsh (zsh-5.9 too) reads a line
+// without splitting its variables into words; any other shell, or none named, is read as bash.
 async function sessionShell($: EngineInterface): Promise<Shell> {
-  const path = (await $.env.get('CLAUDE_CODE_SHELL')) || (await $.env.get('SHELL')) || ''
-  return path.split('/').pop() === 'zsh' ? 'zsh' : 'bash'
+  const usable = (p: string | undefined): string | undefined => (p && /bash|zsh/.test(p) ? p : undefined)
+  const path = usable(await $.env.get('CLAUDE_CODE_SHELL')) ?? usable(await $.env.get('SHELL')) ?? ''
+  return /^zsh/.test(path.split('/').pop() ?? '') ? 'zsh' : 'bash'
 }
 
 async function judge($: EngineInterface, effects: Effect[], agentId: string | undefined): Promise<Verdict> {

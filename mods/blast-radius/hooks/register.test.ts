@@ -93,6 +93,11 @@ const SHELL_CASES: [Record<string, string>, string[]][] = [
   [{ SHELL: '/bin/zsh' }, ['a b']],
   [{ SHELL: '/bin/bash', CLAUDE_CODE_SHELL: '/opt/homebrew/bin/zsh' }, ['a b']],
   [{ SHELL: '/bin/zsh', CLAUDE_CODE_SHELL: '' }, ['a b']],
+  // Claude Code ignores a CLAUDE_CODE_SHELL naming neither bash nor zsh, and runs SHELL.
+  [{ SHELL: '/bin/zsh', CLAUDE_CODE_SHELL: '/usr/bin/fish' }, ['a b']],
+  [{ SHELL: '/bin/zsh', CLAUDE_CODE_SHELL: '/bin/sh' }, ['a b']],
+  [{ SHELL: '/usr/local/bin/zsh-5.9' }, ['a b']],
+  [{ SHELL: '/bin/sh' }, ['a', 'b']],
   [{ SHELL: '/bin/bash' }, ['a', 'b']],
   [{ SHELL: '/bin/zsh', CLAUDE_CODE_SHELL: '/bin/bash' }, ['a', 'b']],
   [{ SHELL: '/home/zsh/bin/bash' }, ['a', 'b']],
