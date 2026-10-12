@@ -479,6 +479,7 @@ function braceExpand(s: string, depth: number): Braced {
 }
 
 // The values of a {a,b,...} list: each item split off at a , of its own level, expanded.
+// Each item makes at most MAX_VALUES, and braceExpand caps the list as a whole.
 function braceList(amble: string, depth: number): Braced {
   const values: string[] = []
   for (let start = 0; ; ) {
@@ -486,7 +487,6 @@ function braceList(amble: string, depth: number): Braced {
     const item = braceExpand(amble.slice(start, comma < 0 ? amble.length : comma), depth + 1)
     if ('unknown' in item) return item
     values.push(...item.values)
-    if (values.length > MAX_VALUES) return { unknown: 'has too many values to check' }
     if (comma < 0) return { values }
     start = comma + 1
   }
