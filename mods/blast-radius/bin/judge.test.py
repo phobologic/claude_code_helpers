@@ -87,8 +87,9 @@ class Sandbox:
     def p(self, *parts):
         return os.path.join(self.repo, *parts)
 
-    def judge(self, *effects, cwd=None, root=None, **extra):
-        env = {**os.environ, "HOME": self.home, "TMPDIR": self.tmp, "BLAST_RADIUS_TEMP_ROOTS": self.tmp}
+    def judge(self, *effects, cwd=None, root=None, home=None, temp=None, **extra):
+        temp = temp or self.tmp
+        env = {**os.environ, "HOME": home or self.home, "TMPDIR": temp, "BLAST_RADIUS_TEMP_ROOTS": temp}
         req = {"sessionRoot": root or self.repo, "cwd": cwd or self.repo, "effects": list(effects), **extra}
         r = subprocess.run(["python3", "-I", JUDGE], input=json.dumps(req), capture_output=True, text=True, env=env)
         return json.loads(r.stdout)
@@ -582,6 +583,7 @@ def ignored_case(s):
     """Where the volume ignores case, SRC is src and .GIT is .git."""
     write(s.p("src", "new.py"))
     expect("rm -rf SRC holds like rm -rf src", s.judge(delete("SRC")), [("uncommitted", "src/new.py")])
+    expect("  and so does rm -rf SRC/", s.judge(delete("SRC/")), [("uncommitted", "src/new.py")])
     os.remove(s.p("src", "new.py"))
     expect("rm -rf .GIT holds like rm -rf .git", s.judge(delete(".GIT")), [("git", ".git")])
     expect("overwriting .GIT/config holds", s.judge(overwrite(".GIT/config")), [("git", ".git/config")])
@@ -604,6 +606,45 @@ def ignored_case(s):
     expect("worktree remove --force named in another case holds its changes",
            s.judge(git("worktree", "remove", "--force", os.path.join(s.root, "WT-AWAY"))),
            [("uncommitted", os.path.join(away, "README.md"))])
+    spelled_by_the_caller(s)
+    spelled_by_git(s)
+
+
+def spelled_by_the_caller(s):
+    """HOME, the temp folder and the session's folder can arrive in another case too."""
+    home, temp = os.path.join(s.root, "HOME"), os.path.join(s.root, "TMP")
+    expect("with HOME in another case, memory files are free", s.judge(delete("~/.claude/projects/p/memory/m.md"), home=home), [])
+    expect("  and the home folder shows as ~", s.judge(delete("~/.zshrc"), home=home), [("outside", "~/.zshrc")])
+    write(os.path.join(s.tmp, "y"))
+    expect("with the temp folder in another case, its files are free", s.judge(delete(os.path.join(s.tmp, "y")), temp=temp), [])
+    plain = os.path.join(s.root, "plain")
+    write(os.path.join(plain, "f.txt"))
+    expect("outside git, a session folder in another case holds its files as the project's",
+           s.judge(delete("f.txt"), cwd=plain, root=os.path.join(s.root, "PLAIN")), [("uncommitted", os.path.join(plain, "f.txt"))])
+
+
+def spelled_by_git(s):
+    """git echoes some folders as they were written: core.worktree, and the main checkout
+    as a linked worktree recorded it before the folder was renamed."""
+    cw = os.path.join(s.root, "cw")
+    sh("git", "init", "-q", "-b", "main", cw, cwd=s.root)
+    write(os.path.join(cw, "f.txt"))
+    sh("git", "add", "-A", cwd=cw)
+    sh("git", "commit", "-q", "-m", "init", cwd=cw)
+    sh("git", "config", "core.worktree", os.path.join(s.root, "CW"), cwd=cw)
+    expect("with core.worktree in another case, deleting a committed file passes", s.judge(delete("f.txt"), cwd=cw, root=cw), [])
+
+    throwaway = os.path.join(s.root, "throwaway")
+    copy_repo = os.path.join(throwaway, "copy")
+    sh("git", "clone", "-q", s.repo, copy_repo, cwd=s.root)
+    sh("git", "checkout", "-q", "-b", "gone", cwd=copy_repo)
+    sh("git", "commit", "-q", "--allow-empty", "-m", "gone", cwd=copy_repo)
+    sh("git", "checkout", "-q", "main", cwd=copy_repo)
+    sh("git", "worktree", "add", "-q", "-b", "wt", os.path.join(throwaway, "wt"), cwd=copy_repo)
+    renamed = os.path.join(s.root, "THROWAWAY")
+    os.rename(throwaway, renamed)  # the worktree's .git still names throwaway/copy
+    expect("a throwaway copy renamed by case keeps its unmerged branch free to delete from its worktree",
+           s.judge(git("branch", "-D", "gone"), cwd=os.path.join(renamed, "wt"), temp=renamed), [])
 
 
 def kept_case(s):

@@ -343,7 +343,7 @@ def walk(ctx, top, protected, nested):
     seen = 0
     for dirpath, dirnames, filenames in os.walk(top):
         if ".git" in dirnames or ".git" in filenames:
-            real = ondisk(dirpath)
+            real = os.path.realpath(dirpath)
             if real in ctx.scratch:
                 dirnames[:] = []
                 continue
@@ -466,7 +466,7 @@ def judge_copy(ctx, base, eff):
     if eff["noClobber"]:
         return findings
     for d in [p for w in eff["dest"] for p in expand(ctx, base, w, must_exist=False)]:
-        rd = ondisk(d)
+        rd = os.path.realpath(d)
         if eff["intoDir"] or (os.path.isdir(rd) and not eff["noTargetDir"]):
             targets = [os.path.join(rd, os.path.basename(os.path.normpath(s))) for s in srcs]
         else:
