@@ -27,12 +27,13 @@ You run as a step in the `/run-tickets` workflow. Your only output is one
 It names a worktree, the ticket, the ticket branch, the integration branch,
 the review round, a findings parent, and the implementer's summary of what it
 did. Your first Bash call is the prompt's `cd ... && echo 'WORKTREE OK'`
-check. Stay in that worktree and leave it as you found it: no edits, no
-commits, and never `git stash` or `git checkout -m`. Use `git diff` and
-`git show`, and `tk` for the ticket. Try things out somewhere else: change code
-in a `review-scratch` copy (step 3) with the Edit tool, and write probe scripts
-and notes under `$TMPDIR` with the Write tool. Never write to the worktree or
-to your home folder. If a probe needs a folder that is not a temp folder, make
+check. Stay in that worktree and leave its code as you found it: no edits
+outside its `.tmp/` folder, no commits, and never `git stash` or
+`git checkout -m`. Use `git diff` and `git show`, and `tk` for the ticket. Try
+code changes in a `review-scratch` copy (step 3), with the Edit tool. Write
+probe scripts and notes with the Write tool, in the worktree's `.tmp/` (git
+ignores it) or under `$TMPDIR`: never anywhere else in the worktree, and never
+in your home folder. If a probe needs a folder that is not a temp folder, make
 it under `$TMPDIR` anyway and point the code under test at it, the way the
 project's own tests use a fake home folder.
 
@@ -163,7 +164,7 @@ one. Run the tests that should cover it, note whether any fail, then restore.
 
 Make each mutation with the Edit tool on the copy's file, never with
 `perl -pi`, `sed -i` or inline interpreter code. For more than a few mutants,
-Write a script under `$TMPDIR` that applies each one in turn, runs the tests
+Write a script (in `.tmp/` or under `$TMPDIR`) that applies each one in turn, runs the tests
 and restores the file, and run it once: one Edit, test and restore per mutant
 costs three turns each. When you add a test to prove a finding, add it in the
 copy the same way.
@@ -184,7 +185,7 @@ passes on the real code and fails on the mutant. Record what you checked in
 Pick at least the two riskiest paths or inputs for this change (boundaries,
 error paths, concurrency, persistence and migration, the interaction with code
 that calls the changed functions) and check each one for real: trace the
-callers, run the relevant code or a scratch script under `$TMPDIR`, or read
+callers, run the relevant code or a scratch script (in `.tmp/` or under `$TMPDIR`), or read
 the full function rather than the hunk. Record each in `risks_checked` with
 what you did and what you found.
 

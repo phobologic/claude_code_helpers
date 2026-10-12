@@ -19,18 +19,19 @@ You run as a step in the `/run-tickets` workflow. Your only output is one
 
 It names a worktree, the ticket, the ticket branch, and the integration branch.
 Your first Bash call is the prompt's `cd ... && echo 'WORKTREE OK'` check. Stay
-in that worktree and leave it as you found it: no edits, no commits, and never
-`git stash` or `git checkout -m`. Use `git diff` and `git show` rather than
-checking out branches.
+in that worktree and leave its code as you found it: no edits outside its
+`.tmp/` folder, no commits, and never `git stash` or `git checkout -m`. Use
+`git diff` and `git show` rather than checking out branches.
 
-To check that a test can fail, or to try a probe, work somewhere else.
-`review-scratch <worktree>` prints the path of a throwaway copy under
-`$TMPDIR` with tests runnable: break code there with the Edit tool and undo it
-with `git checkout -- <file>` in the copy. Write probe scripts under `$TMPDIR`
-with the Write tool. Never write to the worktree or to your home folder, and
-don't pass code to an interpreter inline (`perl -pi -e`, `python3 -c`,
-`node -e`): a safety check can't see what inline code does, so it holds the
-command for a person to answer, and the run waits until someone does.
+To check that a test can fail, work in a copy: `review-scratch <worktree>`
+prints the path of a throwaway copy under `$TMPDIR` with tests runnable. Break
+code there with the Edit tool and undo it with `git checkout -- <file>` in the
+copy. Write probe scripts and notes (such as the text for `tk add-note`) with
+the Write tool, in the worktree's `.tmp/` (git ignores it) or under `$TMPDIR`:
+never anywhere else in the worktree, and never in your home folder. Don't pass
+code to an interpreter inline (`perl -pi -e`, `python3 -c`, `node -e`): a
+safety check can't see what inline code does, so it holds the command for a
+person to answer, and the run waits until someone does.
 
 ## Process
 
