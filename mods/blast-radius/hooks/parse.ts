@@ -1373,27 +1373,32 @@ function rsync(args: Word[], dir: DirState, ctx: Ctx, raw: string): void {
   else emit(ctx, dir, paths, raw, d => ({ op: 'overwrite', dir: d, paths, cmd: short(raw) }))
 }
 
-// A here-string's text. bash 4+ and zsh pass its value whole; bash 3.2 splits its
-// unquoted variables and joins the words with spaces (F=$'rm -rf\nsrc'; bash <<< $F runs
-// rm -rf src). When the two differ, both are returned a line apart, so each is read; when
-// bash 3.2's can't be known, that is an unknown effect.
-function hereString(target: Word, ctx: Ctx, raw: string): string {
-  const v = expand(target, ctx, 'plain', false)
-  if ('unknown' in v) return target.raw
-  const whole = v.values.join(' ')
-  const split = expandAll(splitWords(target, ctx), ctx, 'plain')
-  if ('unknown' in split) {
-    ctx.out.push({ op: 'unknown', what: `here-string in bash 3.2: ${split.unknown}`, cmd: short(raw) })
-    return whole
-  }
-  const joined = split.values.join(' ')
-  return joined === whole ? whole : `${whole}\n${joined}`
+// What a command reads on stdin: each reading of it, and why bash 3.2's reading of a
+// here-string can't be known, when it can't.
+interface Stdin {
+  texts: string[]
+  unknown?: string
 }
 
-function stdinText(cmd: Cmd, ctx: Ctx): string | null {
+// A here-string's readings. bash 4+ and zsh pass its value whole; bash 3.2 splits its
+// unquoted variables and joins the words with spaces (F=$'rm -rf\nsrc'; bash <<< $F runs
+// rm -rf src). When the two differ, both are returned, and each is read on its own: one
+// reading's cd, variables or open heredoc never reach the other. When bash 3.2's can't be
+// known, only the whole value is returned, with the reason; a shell reader holds on it.
+function hereString(target: Word, ctx: Ctx): Stdin {
+  const v = expand(target, ctx, 'plain', false)
+  if ('unknown' in v) return { texts: [target.raw] }
+  const whole = v.values.join(' ')
+  const split = expandAll(splitWords(target, ctx), ctx, 'plain')
+  if ('unknown' in split) return { texts: [whole], unknown: split.unknown }
+  const joined = split.values.join(' ')
+  return { texts: joined === whole ? [whole] : [whole, joined] }
+}
+
+function stdinText(cmd: Cmd, ctx: Ctx): Stdin | null {
   for (const r of cmd.redirs) {
-    if (r.heredoc) return r.heredoc.quoted ? r.heredoc.body : heredocText(r.heredoc.body)
-    if (r.op === '<<<' && r.target) return hereString(r.target, ctx, cmd.raw)
+    if (r.heredoc) return { texts: [r.heredoc.quoted ? r.heredoc.body : heredocText(r.heredoc.body)] }
+    if (r.op === '<<<' && r.target) return hereString(r.target, ctx)
   }
   return null
 }
@@ -1417,8 +1422,22 @@ function shell(cmd: Cmd, name: string, args: Word[], ctx: Ctx, raw: string): voi
     if (t === '-o' || t === '+o') k += 1
     else if (t === null || !/^[-+]/.test(t)) return // a script: its commands are not on this line
   }
-  const body = stdinText(cmd, ctx)
-  if (body !== null) walk(body, inner())
+  walkStdin(cmd, ctx, raw, inner)
+}
+
+// A shell reading commands on stdin runs each reading of them, in a context of its own.
+function walkStdin(cmd: Cmd, ctx: Ctx, raw: string, inner: () => Ctx): void {
+  const stdin = stdinText(cmd, ctx)
+  if (stdin === null) return
+  if (stdin.unknown) ctx.out.push({ op: 'unknown', what: `here-string in bash 3.2: ${stdin.unknown}`, cmd: short(raw) })
+  for (const text of stdin.texts) walk(text, inner())
+}
+
+// An interpreter's code on stdin. It is only searched, so a bash 3.2 reading that can't be
+// known is no reason to hold.
+function stdinCode(cmd: Cmd, ctx: Ctx): string | null {
+  const stdin = stdinText(cmd, ctx)
+  return stdin === null ? null : stdin.texts.join('\n')
 }
 
 function interpreter(cmd: Cmd, name: string, args: Word[], ctx: Ctx, raw: string): void {
@@ -1440,7 +1459,7 @@ function interpreter(cmd: Cmd, name: string, args: Word[], ctx: Ctx, raw: string
     }
     if (t === '-m' || t === '-W' || t === '-X') k += 1
   }
-  if (code === null && !script) code = stdinText(cmd, ctx)
+  if (code === null && !script) code = stdinCode(cmd, ctx)
   if (code !== null && CODE_DELETES.test(code)) {
     ctx.out.push({ op: 'unknown', what: `inline ${name} code that deletes files`, cmd: short(raw) })
   }

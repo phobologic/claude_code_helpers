@@ -163,6 +163,7 @@ test('braces that make too many words, nest too deep or that shells read differe
   // rm -rf {.[..$'\x2c'g]it} deletes .git.
   expect(what("rm -rf {.[..$'\\x2c'g]it}")).toBe("{.[..$'\\x2c'g]it} has $'...' in braces, which bash 3.2 decodes first")
   expect(what("rm -rf {a..$'b'}")).toContain("has $'...' in braces")
+  expect(what("rm -rf {.[g$'\\x2c'..]it}")).toContain("has $'...' in braces")
   expect((only("rm {a,b$'\\x2c'c} {x$'\\x2c'y}") as { paths: string[] }).paths).toEqual(['a', 'b,c', '{x,y}'])
 })
 
@@ -210,6 +211,10 @@ test('an unquoted variable splits into words at spaces, tabs and newlines', () =
   expect(only("F=$'rm -rf\\nsrc'; bash <<< $F")).toMatchObject({ op: 'delete', paths: ['src'], recursive: true })
   expect(analyze("F=$'rm -rf\\nsrc'; bash <<< \"$F\"")).toEqual([])
   expect(only('F="rm  x"; bash <<< $F')).toMatchObject({ op: 'delete', paths: ['x'] })
+  // Each reading is its own script: the first one's cd or open heredoc never reaches the
+  // second, which bash 3.2 runs as `echo cd /tmp; rm -rf src` and `echo <<E ; rm -rf src`.
+  expect(analyze("F=$'echo\\ncd /tmp; rm -rf src'; bash <<< $F").map(e => (e as { dir: unknown }).dir)).toEqual(['/tmp', null])
+  expect(only("F=$'echo <<E\\n; rm -rf src'; bash <<< $F")).toMatchObject({ op: 'delete', dir: null, paths: ['src'] })
   // One that can't be expanded is checked as written.
   expect(only('python3 <<< "import shutil; shutil.rmtree($X)"')).toMatchObject({ op: 'unknown' })
   // Where bash 3.2's reading can't be known, that is unknown, and the whole value is read.
@@ -217,6 +222,9 @@ test('an unquoted variable splits into words at spaces, tabs and newlines', () =
     { op: 'unknown', what: 'here-string in bash 3.2: $IFS is set on this line, so how $F splits is unknown' },
     { op: 'delete', paths: ['x'] },
   ])
+  // An interpreter's code is only searched, so that is no reason to hold it.
+  expect(analyze("IFS=,; X='print(1)'; python3 <<< $X")).toEqual([])
+  expect(analyze("for f in 'print( 1 )' 'print(2)'; do python3 <<< $f; done")).toEqual([])
   // bash 3.2 goes to the first of several folders; later bash refuses, so nothing runs.
   expect(only('F="a b"; cd $F && rm x')).toMatchObject({ op: 'delete', dir: 'a', paths: ['x'] })
   // Tabs and newlines split as spaces do.
