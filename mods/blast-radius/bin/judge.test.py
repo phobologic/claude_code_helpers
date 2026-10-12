@@ -282,6 +282,9 @@ def owners(s):
     sh("git", "init", "-q", "--bare", s.p("build", "backup.git"), cwd=s.repo)
     expect("a file in a bare repository holds, though the folder around it is ignored",
            s.judge(delete("build/backup.git/HEAD")), [("uncommitted", "build/backup.git/HEAD")])
+    write(s.p("build", "backup.git", ".env"))
+    expect("  and so does a .env in it when the folder around it is deleted",
+           s.judge(delete("build")), [("uncommitted", "build/backup.git/.env")])
     shutil.rmtree(s.p("build", "backup.git"))
     os.makedirs(s.p("src", "fake", ".git"))
     write(s.p("src", "fake", "x.txt"))

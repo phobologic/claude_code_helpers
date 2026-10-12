@@ -272,8 +272,9 @@ def tracked(ctx, paths):
         by_owner.setdefault(owner_of(ctx, os.path.dirname(p)), set()).add(p)
     found = set()
     for owner, ps in by_owner.items():
-        out = git_out(["ls-files", "-z"], owner) if owner else None
-        found |= ps & {os.path.join(owner, e) for e in (out or "").split("\0") if e}
+        out = git_out(["ls-files", "-z"], owner) if owner else None  # no repository: nothing is tracked
+        if out:
+            found |= ps & {os.path.join(owner, e) for e in out.split("\0")}
     return found
 
 
