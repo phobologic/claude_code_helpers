@@ -20,6 +20,9 @@ The policy goes by where the affected files are, not where the command runs:
   data, a nested repository's history, commits on no other branch, stashes.
 - An agent's scratch worktree (a linked worktree inside the repository folder, other
   than the one the session runs in), temp folders and Claude's memory folders: free.
+  Only a worktree's own files are its alone: branches, stashes, reflogs and objects
+  belong to the whole repository, so git commands on them count where its main
+  checkout is, whichever worktree they run in.
 - Anywhere else: held.
 
 Run it with `python3 -I`, so nothing in the working directory is imported.
@@ -49,6 +52,12 @@ VENDORED = {
 }
 FIND_ACTIONS = {"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"}
 PLACEHOLDER = re.compile("\x01(\\w+)\x01")
+# Where files are free to lose (see Ctx.where).
+FREE = ("scratch", "temp")
+# git subcommands that change what every worktree of a repository shares rather than
+# one worktree's files. `worktree remove` isn't one: it is judged by the worktree it
+# removes.
+SHARED = {"stash", "branch", "reflog", "gc", "prune", "filter-branch", "filter-repo"}
 
 # git runs without the caller's repository overrides, and never takes index.lock for
 # a refresh, so a check never collides with an agent's own git command.
@@ -84,6 +93,16 @@ def toplevel(path):
     d = path if os.path.isdir(path) else os.path.dirname(path)
     t = git_out(["rev-parse", "--show-toplevel"], d)
     return os.path.realpath(t.strip()) if t and t.strip() else None
+
+
+def main_checkout(top):
+    """The main working tree of the repository `top` belongs to, which every one of its
+    worktrees shares branches, stashes and history with."""
+    listing = git_out(["worktree", "list", "--porcelain"], top) or ""
+    paths = [line[9:] for line in listing.splitlines() if line.startswith("worktree ")]
+    if not paths:
+        raise Unresolved(f"git worktree list failed in {top}, so whose branches and history these are is unknown")
+    return os.path.realpath(paths[0])
 
 
 def finding(kind, path, detail):
@@ -408,6 +427,8 @@ def spec_path(cwd, top, spec):
 
 def discard(ctx, top, cwd, pathspecs):
     """Tracked files with uncommitted changes that a discard of `pathspecs` (None: all) loses."""
+    if ctx.where(top) in FREE:
+        return []  # an agent's scratch checkout, or a throwaway copy
     specs = None if pathspecs is None else [spec_path(cwd, top, p) for p in pathspecs]
     found = []
     for path, what in changes(top, untracked=False):
@@ -579,7 +600,7 @@ def git_worktree(ctx, top, cwd, rest):
     if not pos:
         return []
     p = os.path.realpath(os.path.join(cwd, os.path.expanduser(pos[0])))
-    if not os.path.isdir(p) or ctx.where(p) in ("scratch", "temp"):
+    if not os.path.isdir(p) or ctx.where(p) in FREE:
         return []
     findings = []
     if any(a in ("-f", "--force") for a in rest):
@@ -622,8 +643,8 @@ GIT = {
 }
 
 
-def judge_git(ctx, base, eff):
-    args = [subst(ctx, a) for a in eff["argv"]]
+def git_start(base, args):
+    """The folder git runs in, after its options before the subcommand, and the subcommand's index."""
     cwd = base
     i = 0
     while i < len(args) and args[i].startswith("-"):
@@ -637,16 +658,26 @@ def judge_git(ctx, base, eff):
             raise Unresolved("git with --git-dir or --work-tree")
         else:
             i += 1
+    return os.path.realpath(cwd), i
+
+
+def judge_git(ctx, base, eff):
+    args = [subst(ctx, a) for a in eff["argv"]]
+    cwd, i = git_start(base, args)
     if i >= len(args):
         return []
-    cwd = os.path.realpath(cwd)
     top = toplevel(cwd) if os.path.isdir(cwd) else None
     if top is None:
         return []  # not a repository: git refuses
-    if ctx.where(top) in ("scratch", "temp"):
-        return []  # an agent's scratch checkout, or a throwaway copy
     handler = GIT.get(args[i])
-    return handler(ctx, top, cwd, args[i + 1 :]) if handler else []
+    if handler is None:
+        return []
+    # Each handler judges a worktree's own files by where they are (discard, git clean's
+    # deletes, the worktree remove takes). Shared state is free only when the whole
+    # repository is a throwaway copy, never because a scratch worktree runs the command.
+    if args[i] in SHARED and ctx.where(main_checkout(top)) in FREE:
+        return []
+    return handler(ctx, top, cwd, args[i + 1 :])
 
 
 # ---------- main ----------
