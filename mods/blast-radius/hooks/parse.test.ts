@@ -125,6 +125,7 @@ test('uv run, poetry run, flock and ionice are judged by the command they run', 
     'flock /tmp/l rm -rf ~/x',
     'flock -n -w 5 /tmp/l rm -rf ~/x',
     'flock -nE 3 --timeout 5 -- /tmp/l rm -rf ~/x',
+    'flock -- -lock rm -rf ~/x',
     "flock /tmp/l -c 'rm -rf ~/x'",
     "flock --conflict-exit-code=3 /tmp/l --command 'rm -rf ~/x'",
     'ionice -c3 rm -rf ~/x',
@@ -145,6 +146,7 @@ test('every wrapper skips its own options, in any form, to find its command', ()
     'sudo --user=root -- rm -rf /opt/x',
     'sudo -Eu root rm -rf /opt/x',
     'sudo -uroot -g wheel rm -rf /opt/x',
+    'sudo -u"$U" rm -rf /opt/x',
     'doas -u root rm -rf /opt/x',
     'nice -n5 rm -rf /opt/x',
     'nice --adjustment 5 rm -rf /opt/x',
@@ -153,6 +155,7 @@ test('every wrapper skips its own options, in any form, to find its command', ()
     'time -f %e rm -rf /opt/x',
     'command -- rm -rf /opt/x',
     'timeout --signal KILL -k 5 10 rm -rf /opt/x',
+    'timeout -k5s 10 rm -rf /opt/x',
     'stdbuf -o L -eL rm -rf /opt/x',
     'caffeinate -di -t 60 rm -rf /opt/x',
     'exec -a name rm -rf /opt/x',
@@ -163,7 +166,9 @@ test('every wrapper skips its own options, in any form, to find its command', ()
     "env -S'rm -rf /opt/x'",
     'sudo env --unset X timeout 5 nice -n 5 rm -rf /opt/x',
   ])
-  for (const command of ['command -v rm', 'command -pV rm', 'sudo -i', 'env -S']) {
+  expect(only('env -S "$CMD"')).toMatchObject({ op: 'unknown', what: 'env -S: $CMD is not set on this command line' })
+  // command -v and -V print where each name is found.
+  for (const command of ['command -v rm cp', 'command -pV rm cp', 'sudo -i', 'env -S']) {
     expect({ command, effects: analyze(command) }).toEqual({ command, effects: [] })
   }
 })
