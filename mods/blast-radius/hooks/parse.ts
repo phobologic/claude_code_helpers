@@ -959,13 +959,51 @@ function xargs(args: Word[], ctx: Ctx, piped: Cmd | null, raw: string): void {
 }
 
 const GIT_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--super-prefix'])
+// A subcommand's options that take a value. judge.py's GIT_VALUED is the same table.
+const GIT_VALUED = new Map([
+  ['checkout', ['-b', '-B', '--orphan']],
+  ['switch', ['-c', '-C', '--orphan']],
+  ['restore', ['-s', '--source']],
+  ['clean', ['-e', '--exclude']],
+  ['branch', ['-u', '--set-upstream-to']],
+])
+
+// A subcommand's arguments with short options combined in one word spelled out one per
+// word, as git reads them: -df is -d -f. An option in `valued` takes the rest of its word
+// as its value (-bname is -b name), or else the next word, which is kept as written. So
+// are long options, arguments, and every word from `--` on. judge.py's unbundle matches it.
+function unbundle(words: string[], valued: string[]): string[] {
+  const out: string[] = []
+  for (let k = 0; k < words.length; k += 1) {
+    const a = words[k] as string
+    if (a === '--') return [...out, ...words.slice(k)]
+    let takesNext = valued.includes(a)
+    if (/^-[^-]/.test(a)) {
+      for (let j = 1; j < a.length; j += 1) {
+        out.push(`-${a[j]}`)
+        if (valued.includes(`-${a[j]}`)) {
+          if (j + 1 < a.length) out.push(a.slice(j + 1))
+          else takesNext = true
+          break
+        }
+      }
+    } else {
+      out.push(a)
+    }
+    if (takesNext) {
+      out.push(...words.slice(k + 1, k + 2))
+      k += 1
+    }
+  }
+  return out
+}
 
 // Whether a git command can discard work at all, so the safe majority never reaches the judge.
 export function gitRisky(argv: string[]): boolean {
   let k = 0
   while (k < argv.length && (argv[k] as string).startsWith('-')) k += GIT_VALUE.has(argv[k] as string) ? 2 : 1
   const sub = argv[k]
-  const rest = argv.slice(k + 1)
+  const rest = unbundle(argv.slice(k + 1), GIT_VALUED.get(sub ?? '') ?? [])
   const has = (...flags: string[]): boolean => rest.some(a => flags.includes(a))
   switch (sub) {
     case 'reset':
@@ -985,7 +1023,7 @@ export function gitRisky(argv: string[]): boolean {
     case 'worktree':
       return rest[0] === 'remove'
     case 'rm':
-      return !has('--cached') && rest.some(a => a === '--force' || /^-[a-z]*f/.test(a))
+      return !has('--cached') && has('-f', '--force')
     case 'reflog':
       return rest[0] === 'expire' || rest[0] === 'delete'
     case 'gc':

@@ -440,6 +440,46 @@ def discard(ctx, top, cwd, pathspecs):
     return found
 
 
+# A subcommand's options that take a value. parse.ts's GIT_VALUED is the same table.
+GIT_VALUED = {
+    "checkout": ("-b", "-B", "--orphan"),
+    "switch": ("-c", "-C", "--orphan"),
+    "restore": ("-s", "--source"),
+    "clean": ("-e", "--exclude"),
+    "branch": ("-u", "--set-upstream-to"),
+}
+
+
+def unbundle(rest, valued=()):
+    """`rest` with short options combined in one word spelled out one per word, as git
+    reads them: -df is -d -f. An option in `valued` takes the rest of its word as its value
+    (-bname is -b name), or else the next word, which is kept as written. So are long
+    options, arguments, and every word from `--` on. parse.ts's unbundle matches it."""
+    out = []
+    i = 0
+    while i < len(rest):
+        a = rest[i]
+        i += 1
+        if a == "--":
+            return out + rest[i - 1 :]
+        takes_next = a in valued
+        if re.match(r"-[^-]", a):
+            for j in range(1, len(a)):
+                out.append("-" + a[j])
+                if "-" + a[j] in valued:
+                    if a[j + 1 :]:
+                        out.append(a[j + 1 :])
+                    else:
+                        takes_next = True
+                    break
+        else:
+            out.append(a)
+        if takes_next:
+            out += rest[i : i + 1]
+            i += 1
+    return out
+
+
 def positionals(rest, valued=()):
     """Arguments that aren't options, and those after `--`."""
     out = []
@@ -470,7 +510,7 @@ def git_reset(ctx, top, cwd, rest):
 
 def git_checkout(ctx, top, cwd, rest):
     force = any(a in ("-f", "--force") for a in rest)
-    pos, paths, dashdash = positionals(rest, ("-b", "-B", "--orphan"))
+    pos, paths, dashdash = positionals(rest, GIT_VALUED["checkout"])
     if dashdash:
         if pos and not paths:
             return []
@@ -493,13 +533,13 @@ def git_restore(ctx, top, cwd, rest):
     worktree = any(a in ("-W", "--worktree") for a in rest)
     if staged and not worktree:
         return []  # only unstages: the file keeps its content
-    pos, paths, _ = positionals(rest, ("-s", "--source"))
+    pos, paths, _ = positionals(rest, GIT_VALUED["restore"])
     specs = pos + paths
     return discard(ctx, top, cwd, specs) if specs else []
 
 
 def git_rm(ctx, top, cwd, rest):
-    if "--cached" in rest or not any(a == "--force" or re.match(r"^-[a-z]*f", a) for a in rest):
+    if "--cached" in rest or not any(a in ("-f", "--force") for a in rest):
         return []  # without -f git refuses to drop changes
     pos, paths, _ = positionals(rest)
     return discard(ctx, top, cwd, pos + paths)
@@ -522,22 +562,10 @@ def git_clean(ctx, top, cwd, rest):
             excludes.append(a)
         elif a in ("-n", "--dry-run"):
             dry = True
-        elif a == "--force":
+        elif a in ("-f", "--force"):
             force += 1
-        elif re.match(r"^-[a-zA-Z]+$", a):
-            letters = a[1:]
-            for j, ch in enumerate(letters):
-                if ch == "e":
-                    pattern = letters[j + 1 :]
-                    if not pattern and i + 1 < len(rest):
-                        i += 1
-                        pattern = rest[i]
-                    excludes += ["-e", pattern]
-                    break
-                force += ch == "f"
-                dry |= ch == "n"
-                if ch in "dxX":
-                    flags.append("-" + ch)
+        elif a in ("-d", "-x", "-X"):
+            flags.append(a)
         elif not a.startswith("-"):
             paths.append(a)
         i += 1
@@ -575,10 +603,8 @@ def git_branch(ctx, top, cwd, rest):
             delete = True
         elif a in ("-f", "--force"):
             force = True
-        elif re.match(r"^-[a-zA-Z]+$", a):
-            delete |= "d" in a or "D" in a
-            force |= "f" in a or "D" in a
-            remote |= "r" in a
+        elif a == "-D":
+            delete = force = True
         elif not a.startswith("-"):
             names.append(a)
     if not (delete and force) or remote:
@@ -680,7 +706,7 @@ def judge_git(ctx, base, eff):
     # repository is a throwaway copy, never because a scratch worktree runs the command.
     if args[i] in SHARED and ctx.where(main_checkout(top)) in FREE:
         return []
-    return handler(ctx, top, cwd, args[i + 1 :])
+    return handler(ctx, top, cwd, unbundle(args[i + 1 :], GIT_VALUED.get(args[i], ())))
 
 
 # ---------- main ----------

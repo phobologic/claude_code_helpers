@@ -217,6 +217,7 @@ def git_ops(s):
     expect("restore . holds", s.judge(git("restore", ".", dir="src")), [("uncommitted", "src/a.py")])
     expect("git -C reaches another folder", s.judge(git("-C", s.repo, "reset", "--hard", dir=s.outside)), [("uncommitted", "src/a.py")])
     expect("rm -f of a changed file holds", s.judge(git("rm", "-f", "src/a.py")), [("uncommitted", "src/a.py")])
+    combined_short_options(s)
     sh("git", "stash", "-q", cwd=s.repo)
     v = s.judge(git("stash", "drop"))
     check("stash drop holds", [f["kind"] for f in v["findings"]] == ["history"], v)
@@ -225,11 +226,15 @@ def git_ops(s):
 
     write(s.p("src", "new.py"))
     expect("clean -fd over untracked work holds", s.judge(git("clean", "-fd")), [("uncommitted", "src/new.py")])
+    expect("clean -fde new.py leaves it out", s.judge(git("clean", "-fde", "new.py")), [])
+    expect("clean -fdenew.py leaves it out too", s.judge(git("clean", "-fdenew.py")), [])
     os.remove(s.p("src", "new.py"))
     write(s.p("build", "out.o"))
     expect("clean -fdX of ignored build output passes", s.judge(git("clean", "-fdX")), [])
     write(s.p(".env"))
     expect("clean -fdx over an ignored .env holds", s.judge(git("clean", "-fdx")), [("uncommitted", ".env")])
+    expect("an -e value is a pattern, never options", s.judge(git("clean", "-fe", "-nx")), [])
+    expect("an --exclude value is a pattern, never options", s.judge(git("clean", "-f", "--exclude", "-nx")), [])
     os.remove(s.p(".env"))
     expect("clean -n is a dry run", s.judge(git("clean", "-n", "-fdx")), [])
 
@@ -241,8 +246,34 @@ def git_ops(s):
     sh("git", "checkout", "-q", "main", cwd=s.repo)
     expect("branch -D of unmerged work holds", s.judge(git("branch", "-D", "side")), [("history", "side")])
     expect("branch -d is left to git", s.judge(git("branch", "-d", "side")), [])
+    expect("branch -df of unmerged work holds", s.judge(git("branch", "-df", "side")), [("history", "side")])
+    expect("branch -fd of unmerged work holds", s.judge(git("branch", "-fd", "side")), [("history", "side")])
+    expect("branch -dq is left to git", s.judge(git("branch", "-dq", "side")), [])
+    expect("branch -rD is left alone (a fetch brings remote-tracking branches back)", s.judge(git("branch", "-rD", "side")), [])
     expect("gc --prune=now holds", s.judge(git("gc", "--prune=now")), [("history", "unreachable commits")])
     expect("a git subcommand with nothing to lose passes", s.judge(git("log", "-1")), [])
+    expect("prune -nv is a dry run", s.judge(git("prune", "-nv")), [])
+
+    write(s.p("-Sq"))
+    s.commit("a file named like options")
+    write(s.p("-Sq"), "changed\n")
+    expect("after --, a word like -Sq is a path, not options", s.judge(git("restore", "--", "-Sq")), [("uncommitted", "-Sq")])
+    sh("git", "rm", "-qf", "--", "-Sq", cwd=s.repo)
+    s.commit("drop it")
+
+
+def combined_short_options(s):
+    """git reads -fq as -f -q; src/a.py has a change to lose."""
+    lost = [("uncommitted", "src/a.py")]
+    expect("checkout -fq over a change holds", s.judge(git("checkout", "-fq")), lost)
+    expect("checkout -qf of a branch over a change holds", s.judge(git("checkout", "-qf", "main")), lost)
+    expect("checkout -bnew -fq holds: -bnew holds its own value", s.judge(git("checkout", "-bnew", "-fq")), lost)
+    expect("switch -qf over a change holds", s.judge(git("switch", "-qf", "main")), lost)
+    expect("switch -cf passes: f is the new branch's name", s.judge(git("switch", "-cf", "main")), [])
+    expect("restore -SW holds", s.judge(git("restore", "-SW", "src/a.py")), lost)
+    expect("restore -Sq only unstages", s.judge(git("restore", "-Sq", "src/a.py")), [])
+    expect("rm -qf of a changed file holds", s.judge(git("rm", "-qf", "src/a.py")), lost)
+    expect("rm -rq is left to git", s.judge(git("rm", "-rq", "src/a.py")), [])
 
 
 def worktrees(s):
@@ -276,6 +307,7 @@ def worktrees(s):
            s.judge(git("checkout", "--", "README.md"), cwd=away), [("uncommitted", os.path.join(away, "README.md"))])
     expect("worktree remove --force over its changes holds", s.judge(git("worktree", "remove", "--force", away)),
            [("uncommitted", os.path.join(away, "README.md"))])
+    expect("  and so does -ff", s.judge(git("worktree", "remove", "-ff", away)), [("uncommitted", os.path.join(away, "README.md"))])
     expect("from an agent's worktree, worktree remove --force of another worktree's changes holds",
            s.judge(git("worktree", "remove", "--force", away), cwd=slot), [("uncommitted", os.path.join(away, "README.md"))])
 
