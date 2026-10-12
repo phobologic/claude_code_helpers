@@ -852,7 +852,7 @@ Tickets created: <T>
 
 Suggested next steps:
   tk ready                          # see what's unblocked
-  /run-epic <epic-id>               # implement fixes
+  /run-tickets <epic-id>            # implement fixes
   tk show <id>                      # review individual tickets
 ```
 

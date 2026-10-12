@@ -1,6 +1,6 @@
 ---
 name: wrap-epic
-description: Ship a completed /run-tickets, /run-epic or /fix-tickets batch: merge the integration branch to main, prune worktrees, move leftover non-blocking findings to the repo's backlog epic, close the epic with a ship note, and report remaining work. Use only when the user types /wrap-epic.
+description: Ship a completed /run-tickets batch: merge the integration branch to main, prune worktrees, move leftover non-blocking findings to the repo's backlog epic, close the epic with a ship note, and report remaining work. Use only when the user types /wrap-epic.
 argument-hint: "[epic-id]"
 disable-model-invocation: true
 model: sonnet
@@ -8,8 +8,7 @@ model: sonnet
 
 # Wrap Epic
 
-Finalize a completed `/run-tickets`, `/run-epic` or `/fix-tickets` run: merge
-the integration branch into main, clean up, move findings that should not hold
+Finalize a completed `/run-tickets` run: merge the integration branch into main, clean up, move findings that should not hold
 the epic open to the repo's backlog, close the epic if nothing is left, and
 show what remains.
 

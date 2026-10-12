@@ -1,15 +1,15 @@
 # Claude Code Dotfiles
 
-Personal Claude Code dotfiles — global skills, multi-agent code review, agent team execution,
-language plugins, tool rules, and working style rules for `~/.claude/`.
+Personal Claude Code dotfiles — global skills, multi-agent code review, a workflow-driven
+ticket runner, language plugins, tool rules, and working style rules for `~/.claude/`.
 
 ## What's Here
 
 | Directory / File | Purpose |
 |-----------------|---------|
-| `skills/` | Global skills: `/spec`, `/run-epic`, `/run-epic-dag`, `/fix-tickets`, `/fix-tickets-dag`, `/wrap-epic`, `/review`, `/multi-review`, `/implement-ticket`, `/design-sprint`, `/playwright-explore`, `/epic-tree`, `/ticket-triage`, `/team-status`, `/setup-python-project`, `/setup-js-project`, `/setup-go-project`, `/use-railway`, `/use-sqlalchemy`, `/load-shared-rule` |
+| `skills/` | Global skills: `/spec`, `/run-tickets`, `/run-status`, `/analyze-runs`, `/wrap-epic`, `/review`, `/multi-review`, `/design-sprint`, `/playwright-explore`, `/epic-tree`, `/ticket-triage`, `/setup-python-project`, `/setup-js-project`, `/setup-go-project`, `/use-railway`, `/use-sqlalchemy`, `/load-shared-rule` |
 | `workflows/` | Saved Claude Code workflow scripts: `run-tickets` (launched by `/run-tickets`) |
-| `agents/` | Sub-agents: ticket-execution (implementer, ac-verifier, quality-reviewer, spec-critic), run-tickets workflow (ticket-implementer, ticket-verifier, ticket-reviewer), design-sprint (design-designer, design-evaluator), 5 code review agents, and code-critic (adversarial single-pass reviewer) |
+| `agents/` | Sub-agents: spec-critic (plan review for `/spec`), run-tickets workflow (ticket-implementer, ticket-verifier, ticket-reviewer), design-sprint (design-designer, design-evaluator), 5 code review agents, and code-critic (adversarial single-pass reviewer) |
 | `languages/` | Per-language Claude Code plugins (Go, Python, JS/SvelteKit) — auto-formatting hooks + coding rules |
 | `plugins/` | General-purpose Claude Code plugins — workflow automation and tool integrations |
 | `tools/` | Per-tool rule files (Railway, SQLAlchemy) — loaded via `.claude/rules/` symlinks |
@@ -68,18 +68,14 @@ are available globally:
 | Skill | Description |
 |-------|-------------|
 | `/spec [idea]` | Turn a rough idea into a phased plan with EARS ACs, adversarial review, and `tk` tickets. Reads the code and design docs first, then asks every product decision with a recommendation |
-| `/run-epic <epic-id>` | Execute a `tk` epic with an agent team (implementers + AC verifier + quality reviewer) |
-| `/fix-tickets <id> [id ...] \| <epic-id>` | Implement a set of tickets in parallel — designed for multi-review fix batches |
-| `/run-tickets <epic-id> \| <id> [id ...] [--resume]` | **Experimental.** Workflow-backed ticket runner: scheduling lives in `workflows/run-tickets-engine.js`, not an LLM team lead. Covers both `/run-epic` (AC verification when tickets have AC) and `/fix-tickets` (no AC) use cases. Asks you about decision-shaped tickets before dispatch, keeps tickets that share a file from running at once, and gates every merge on lint, types and tests. Watch with `/workflows`. Pre-existing medium and low findings go to the repo's backlog epic, so the epic can finish. Helpers: `bin/run-tickets-plan`, `bin/run-tickets-setup`, `bin/run-tickets-finish`, `bin/wrap-epic-plan`, `bin/worktree-reset`, `bin/tk-backlog`, `bin/review-scratch` (a throwaway copy of a branch for mutation testing) |
+| `/run-tickets <epic-id> \| <id> [id ...] [--resume]` | **Experimental.** The ticket runner: scheduling lives in `workflows/run-tickets-engine.js`, not an LLM team lead. Takes a spec'd epic, a batch of review findings, or a few backlog tickets, with AC verification only for tickets that have acceptance criteria. Asks you about decision-shaped tickets before dispatch, keeps tickets that share a file from running at once, and gates every merge on lint, types and tests. Watch with `/workflows`. Pre-existing medium and low findings go to the repo's backlog epic, so the epic can finish. Helpers: `bin/run-tickets-plan`, `bin/run-tickets-setup`, `bin/run-tickets-finish`, `bin/wrap-epic-plan`, `bin/worktree-reset`, `bin/tk-backlog`, `bin/review-scratch` (a throwaway copy of a branch for mutation testing) |
 | `/run-status [run-id]` | Ticket-by-ticket snapshot of a `/run-tickets` run, running or finished, with per-step timing (`bin/run-tickets-status`; `--list` for recent runs) |
 | `/review` | Code review of all uncommitted changes |
 | `/multi-review` | Parallel review by 5 specialized agents |
-| `/implement-ticket [id ...]` | Pick up and implement one or more `tk` tickets |
 | `/design-sprint [--scan] [-- guidance]` | Multi-agent GAN-style design sprint producing a frontend spec |
 | `/playwright-explore <url> [scenario:<name>] [roles:…] [time:…] [-- scenario]` | Spawn simulated users to explore a running app and file `tk` tickets |
 | `/epic-tree [--all] [epic-id ...]` | Show a tree of epics with open/closed ticket counts per level |
-| `/wrap-epic [epic-id]` | Ship a finished `/run-tickets`, `/run-epic` or `/fix-tickets`: merge, prune worktrees, move non-blocking findings to the backlog epic, close epic, report what's left |
-| `/team-status [epic-id]` | Read-only status snapshot for an in-flight `/run-epic`, `/fix-tickets`, or DAG variant |
+| `/wrap-epic [epic-id]` | Ship a finished `/run-tickets` batch: merge, prune worktrees, move non-blocking findings to the backlog epic, close epic, report what's left |
 | `/setup-python-project [name]` | Scaffold a new Python project with uv, ruff, pytest, and GitHub Actions CI |
 | `/setup-js-project [name]` | Scaffold a new SvelteKit project with Biome, Prettier, Vitest, and GitHub Actions CI |
 | `/setup-go-project [name]` | Scaffold a new Go project with Makefile, golangci-lint, GitHub Actions CI, and two-layer git hooks |
@@ -96,39 +92,33 @@ usage:
 **Feature kickoff** — turn an idea into running code:
 
 ```
-/spec "your idea"  →  /run-epic <epic-id>  →  /multi-review  →  /wrap-epic
+/spec "your idea"  →  /run-tickets <epic-id>  →  /multi-review  →  /wrap-epic
 ```
 
 **Backlog grooming** — work down the open ticket list:
 
 ```
-/epic-tree  →  /ticket-triage  →  /fix-tickets <ids…>  →  /wrap-epic
+/epic-tree  →  /ticket-triage  →  /run-tickets <ids…>  →  /wrap-epic
 ```
-
-`/fix-tickets` is meant to run in tight bursts — several batches back-to-back
-over an hour is normal. `/wrap-epic` ships each batch.
 
 **Post-review cleanup** — act on review findings:
 
 ```
-/multi-review  →  /fix-tickets <review-epic-id>  →  /wrap-epic
+/multi-review  →  /run-tickets <review-epic-id>  →  /wrap-epic
 ```
 
 `/multi-review` creates a `tk` epic with one child ticket per finding, which
-`/fix-tickets` can consume directly.
+`/run-tickets` can consume directly.
 
 **Build + validate + fix** — after a feature lands, poke it with simulated users:
 
 ```
-/run-epic  →  /playwright-explore  →  /ticket-triage  →  /fix-tickets  →  /wrap-epic
+/run-tickets  →  /playwright-explore  →  /ticket-triage  →  /run-tickets  →  /wrap-epic
 ```
 
-## Agent Team Workflow
+## Spec to Merge
 
-The `/spec` and `/run-epic` skills form a full spec-to-execution pipeline powered by
-Claude Code's [agent teams](https://docs.anthropic.com/en/docs/claude-code/sub-agents).
-
-### How it works
+`/spec` and `/run-tickets` form the spec-to-execution pipeline:
 
 ```
 /spec "your idea"
@@ -140,98 +130,29 @@ Claude Code's [agent teams](https://docs.anthropic.com/en/docs/claude-code/sub-a
    ├─ Presents approved plan for your sign-off
    └─ Creates tk epics + tickets with dependency wiring
          │
-/run-epic <epic-id>
+/run-tickets <epic-id>
    │
-   ├─ Creates integration branch (epic/<id>)
-   ├─ Spawns agent team:
-   │     implementer-1  (opus, git worktree isolation)
-   │     implementer-2  (opus, git worktree isolation)
-   │     ac-verifier    (sonnet, read-only)
-   │     quality-reviewer (sonnet, read-only)
-   ├─ Dispatches unblocked tickets to implementers in parallel
-   └─ Manages validation loop:
-         implement → AC verify → quality review → merge to integration branch
-         (any failure routes back to the implementer with specific feedback)
+   ├─ Plans the ticket graph and asks you about decision-shaped tickets
+   ├─ Sets up an integration branch and a pool of worktree slots
+   ├─ Runs the run-tickets-engine workflow; for each ticket, fresh agents:
+   │     ticket-implementer → ticket-verifier (when it has ACs) → ticket-reviewer
+   ├─ Merges passing tickets one at a time, each merge gated on lint, types and tests
+   └─ Records outcomes in tk, files findings, removes worktrees and merged branches
+         │
+/wrap-epic   (merge to main, move non-blocking findings to the backlog, close the epic)
 ```
 
-Each implemented ticket goes through a validation loop before merging:
+`/run-tickets` also takes a list of ticket IDs, so the same command covers a spec'd
+epic, a batch of `/multi-review` findings, or a few backlog tickets. Watch a run with
+`/workflows` or `/run-status`. The details are in `skills/run-tickets/SKILL.md` and
+this repo's `CLAUDE.md`.
 
-1. **Implementer** writes code + tests, commits to a ticket branch, signals "done"
-2. **AC verifier** checks each criterion from the ticket — binary PASS/FAIL
-3. **Quality reviewer** does adversarial review (correctness, security, reliability, perf) — creates `tk` finding tickets
-4. **Team lead** (`/run-epic`) merges clean tickets, routes failures back
-
-When all tickets pass, the integration branch is ready for `/multi-review` before merging to main.
-
-### Experimental DAG variants
-
-`/run-epic-dag` and `/fix-tickets-dag` are continuous-dispatch variants of `/run-epic`
-and `/fix-tickets`. They spawn a fixed agent pool at startup (up to 4 implementers,
-2 quality reviewers, and — for `/run-epic-dag` — 1 AC verifier) and dispatch tickets
-as soon as their dependencies clear, without wave boundaries. Pool size is right-sized
-to the open ticket count, so a single-ticket run gets 1 + 1 (+ 1). File issues in this
-repo for problems encountered during real-world use.
-
-### Setting up agent teams in Claude Code
-
-Agent teams require Claude Code's multi-agent features. No extra setup beyond
-`./install.sh` — the skill and agent files are symlinked into `~/.claude/` automatically.
-
-The `/run-epic` skill acts as **team lead**. There is no team object to create —
-a session has one implicit team, so the lead simply spawns each teammate with the
-`Agent` tool and a `name`, which is what lets it reach them via `SendMessage` and
-see them in `ListAgents`. Worktrees are pre-created with `worktree-init` before any
-agent spawns, and each implementer `cd`s to its own copy of the repo at startup.
-At the end the lead shuts down each teammate by name with a `shutdown_request`;
-there is no team-level teardown call.
-
-**Useful keyboard shortcuts while a team is running:**
-
-| Shortcut | Action |
-|----------|--------|
-| `Shift+Tab` | Toggle delegate mode (keeps team lead focused on orchestration) |
-| `Shift+↓` | Cycle through active teammates |
-
-### Execution agents
-
-| Agent | Role | Model | Isolation |
-|-------|------|-------|-----------|
-| **implementer** | Reads ticket, writes code + tests, commits | opus | worktree |
-| **ac-verifier** | Verifies implementation against EARS ACs — PASS/FAIL only | sonnet | none |
-| **quality-reviewer** | Adversarial review, creates `tk` finding tickets | sonnet | none |
-| **spec-critic** | Adversarial plan review (used by `/spec` before you see the plan) | sonnet | none |
-
-## Fix Tickets
-
-`/fix-tickets` is the companion to `/run-epic` for ad-hoc parallel implementation —
-primarily designed for acting on a batch of findings from `/multi-review`.
-
-**Key difference from `/run-epic`:** tickets don't need formal EARS acceptance criteria.
-There's no AC verifier in the loop — just implementers and quality reviewers.
-
-```bash
-/fix-tickets 42 43 44          # fix specific tickets
-/fix-tickets <epic-id>         # fix all open tickets in an epic
-```
-
-### How it works
-
-1. Loads tickets, filters out already-closed or in-progress ones
-2. Analyzes for file-level conflicts and groups into minimum waves (bias toward parallelism)
-3. Presents the grouping for your approval before doing anything
-4. Spawns up to 4 implementers + 2 quality reviewers — **all reused across every wave**
-5. Dispatches tickets to implementers via `SendMessage`; routes completions to reviewers
-6. Merges clean tickets to an integration branch (`fix/batch-<stamp>`); routes findings back
-7. On completion, suggests `git diff` and `/multi-review` before merging to main
-
-### When to use `/fix-tickets` vs `/run-epic`
-
-| | `/run-epic` | `/fix-tickets` |
-|---|---|---|
-| Tickets have | Formal EARS ACs | Prose descriptions |
-| Validation | AC verifier + quality reviewer | Quality reviewer only |
-| Source | `/spec`-generated epics | `/multi-review` findings, ad-hoc lists |
-| Input | Single epic ID | Multiple ticket IDs or an epic ID |
+| Agent | Role | Model |
+|-------|------|-------|
+| **spec-critic** | Adversarial plan review (used by `/spec` before you see the plan) | sonnet |
+| **ticket-implementer** | Implements one ticket, or one rework round, in its worktree slot | opus |
+| **ticket-verifier** | Binary check of each acceptance criterion, backed by quoted code and tests | sonnet |
+| **ticket-reviewer** | Adversarial diff review; files out-of-scope findings as `tk` tickets | opus |
 
 ## Review Skills
 
@@ -280,7 +201,7 @@ Tickets are markdown files stored in `.tickets/` (local-only, gitignored).
 `install.sh` installs two tk plugins into `~/.local/bin/`:
 
 **`tk show-multi <id> [id2 ...]`** — show multiple tickets at once, separated by `---`.
-Used extensively by `/implement-ticket` to batch-load ticket context efficiently.
+Handy for loading several tickets' context in one call.
 
 **`tk epic-status`** — overview of all open epics with their child tickets grouped by
 priority. Also shows unclaimed tickets not belonging to any epic.
@@ -314,20 +235,6 @@ tk set pbp-xxxx --parent none        # clear parent
 Supports: `--priority`, `--type`, `--status`, `--assignee`, `--parent`, `--tags`.
 Multiple flags apply in one call. Partial ID matching works as with other tk commands.
 
-### Workflow with `/implement-ticket`
-
-The `/implement-ticket` skill automates the full ticket lifecycle:
-
-1. With no arguments: shows ready (unblocked) work and suggests what to tackle next
-2. With IDs: loads those tickets, triages complexity, and walks through design → plan → implement → test → commit → close
-
-```bash
-/implement-ticket              # suggest next ticket from ready list
-/implement-ticket 42           # implement a specific ticket
-/implement-ticket 42 43        # implement multiple tickets sequentially
-/implement-ticket 42 -- skip the migration, just update the model
-```
-
 ## Design Sprint
 
 `/design-sprint` runs a multi-agent GAN-style design process to produce a frontend
@@ -357,7 +264,7 @@ Round 3: three designers detail (spacing, type, color, states)
 Scoring weights: Design Quality 35% · Originality 30% · Functionality 25% · Craft 10%
 
 Output is a markdown spec at `docs/design-spec.md` (or `--output` path) ready to hand
-to an implementer or use as a prompt for `/run-epic`.
+to `/spec`, which turns it into tickets for `/run-tickets`.
 
 ## Playwright Explore
 
@@ -475,14 +382,9 @@ for team agents. The plugin includes a `PreToolUse` hook (`agent-worktree-guard.
 that pre-created the worktree at `.worktrees/<agent-name>` before the agent spawned.
 The hook gates on the `Agent` call carrying **both** `isolation: "worktree"` and a
 non-empty `team_name`. Since `team_name` was removed from the tool, that gate never
-matches and the hook is a no-op on every spawn. The team skills do not depend on it —
-they pre-create every worktree explicitly with `worktree-init` — but the hook needs
-a new trigger condition (or removal) before it does anything again.
-
-To avoid collisions between concurrent sessions (or stale worktrees from crashed
-runs), the `/run-epic` and `/fix-tickets` skills append a short session-unique
-timestamp to implementer names (e.g. `implementer-1-483921`), which flows through
-to the worktree path.
+matches and the hook is a no-op on every spawn. `/run-tickets` does not depend on it —
+`bin/run-tickets-setup` pre-creates every worktree explicitly with `worktree-init` — but
+the hook needs a new trigger condition (or removal) before it does anything again.
 
 **Safety net:** the `SessionStart` hook retroactively symlinks `.worktreelinks` entries in worktrees created before the plugin was installed.
 

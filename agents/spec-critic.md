@@ -50,7 +50,7 @@ For each ticket's ACs, ask:
   endpoint, CLI command), at least one AC must name the pre-existing
   user-visible behavior of that file that must continue to work. Without one,
   the AC verifier has nothing to anchor against for the obvious behavior an
-  implementer can break in passing, and the quality reviewer ends up
+  implementer can break in passing, and the reviewer ends up
   improvising protections the spec failed to specify. Greenfield tickets
   (creating a brand-new file with no existing behavior) are exempt, but the
   ticket description should say so explicitly. **Flag missing regression ACs
@@ -94,7 +94,7 @@ Check the plan's `Shared rules` section against the tickets:
 ### 3. Dependency Correctness
 
 This is one of the highest-value checks. Over-serialization is the most common
-spec failure mode — it produces plans that look reasonable but force `/run-epic-dag`
+spec failure mode — it produces plans that look reasonable but force `/run-tickets`
 to execute one ticket at a time when it could run six in parallel.
 
 **Phase shape vs. content (the foundational/slice classification check):**

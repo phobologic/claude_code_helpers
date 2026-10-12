@@ -37,8 +37,9 @@ tickets it merged.
   branch_note   why branch is null, or null
   main_repo     {current_branch, dirty}; dirty means tracked changes
   worktrees     [{path, branch, dirty, other_run}] for registered worktrees
-                under <root>/.worktrees/ named implementer-*, fix-batch-*,
-                epic-dag-*, fix-dag-* or run-*. other_run is true when a
+                under <root>/.worktrees/ named run-* (or implementer-*,
+                fix-batch-*, epic-dag-*, fix-dag-*, left by the retired
+                agent-team runners). other_run is true when a
                 /run-tickets run record (.worktrees/run-<stamp>.json) lists
                 the path and integrates into a different branch: that
                 worktree belongs to another run, which may still be going
@@ -75,8 +76,9 @@ MAIN = "main"
 ORIGINS = ("regression", "worsened", "preexisting", "deferred-rework")
 ALWAYS_BLOCK = ("regression", "worsened", "deferred-rework", "needs-human")
 WORKTREE_PREFIXES = ("implementer-", "fix-batch-", "epic-dag-", "fix-dag-", "run-")
-# Merge commit subjects the runners write: run-tickets and run-epic use "Merge <id>: <title>",
-# fix-tickets uses "Fix <id>: <title>". git's own "Merge branch 'x'" has no colon after the id.
+# Merge commit subjects the runners write: run-tickets (and the retired run-epic) use
+# "Merge <id>: <title>", the retired fix-tickets used "Fix <id>: <title>", so epics from older
+# runs still wrap. git's own "Merge branch 'x'" has no colon after the id.
 MERGE_SUBJECT_RE = re.compile(r"^(?:Merge|Fix) ([\w.\-]+): ")
 SOURCE_RE = re.compile(r"\*\*Source ticket:?\*\*:?\s*`?([\w.\-]+)")
 FILES_RE = re.compile(r"\*\*Files\*\*\s*:?\s*(.+)")
