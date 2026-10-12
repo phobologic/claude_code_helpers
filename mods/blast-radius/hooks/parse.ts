@@ -68,7 +68,8 @@ interface Word {
 interface Redir {
   op: string
   target: Word | null
-  heredoc?: { delim: string; strip: boolean; body: string }
+  // quoted: any part of the delimiter is quoted, so bash leaves the body as written.
+  heredoc?: { delim: string; strip: boolean; quoted: boolean; body: string }
 }
 type Tok = ({ t: 'word'; w: Word } | { t: 'op'; op: string } | { t: 'redir'; r: Redir }) & {
   start: number
@@ -115,7 +116,8 @@ function lex(s: string): Tok[] {
           i = w.end
         }
         if (r.op === '<<' || r.op === '<<-') {
-          r.heredoc = { delim: r.target ? litText(r.target) : '', strip: r.op === '<<-', body: '' }
+          const quoted = /['"\\]/.test(r.target?.raw ?? '')
+          r.heredoc = { delim: r.target ? litText(r.target) : '', strip: r.op === '<<-', quoted, body: '' }
           pending.push(r)
         }
         toks.push({ t: 'redir', r, start, end: i })
@@ -149,6 +151,20 @@ function readHeredoc(s: string, i: number, r: Redir): number {
   }
   doc.body = lines.join('\n')
   return i
+}
+
+// An unquoted heredoc's body is expanded as a double-quoted string is, except that `"` is
+// plain text in it. Its $( ) and ` ` run before the command reads it.
+function heredocSubs(body: string): Part[] {
+  const parts: Part[] = []
+  for (let i = 0; i < body.length; ) i = readDouble(body, i, parts, () => {})
+  return parts
+}
+
+// The text a command reading an unquoted heredoc gets, as far as escapes go: bash drops
+// `\` before `\`, `$` and `` ` ``, and joins lines ending in `\`.
+function heredocText(body: string): string {
+  return body.replace(/\\([\\$`\n])/g, (_, c: string) => (c === '\n' ? '' : c))
 }
 
 function readWord(s: string, start: number): { word: Word; end: number } {
@@ -563,11 +579,20 @@ function assign(w: Word, ctx: Ctx): void {
 const KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'do', 'while', 'until', '!', '{', '}', 'fi', 'done', 'esac'])
 const DECLARE = new Set(['export', 'local', 'declare', 'typeset', 'readonly'])
 
+// What a command's own expansions run: $( ), ` ` and <( ) in its words, its redirect
+// targets and the body of a heredoc whose delimiter is unquoted.
+function substitutions(cmd: Cmd): string[] {
+  const parts = cmd.words.flatMap(w => w.parts)
+  for (const r of cmd.redirs) {
+    if (r.target) parts.push(...r.target.parts)
+    if (r.heredoc?.quoted === false) parts.push(...heredocSubs(r.heredoc.body))
+  }
+  return parts.flatMap(p => (p.kind === 'sub' && !p.arith ? [p.inner] : []))
+}
+
 function handle(cmd: Cmd, ctx: Ctx, piped: Cmd | null): void {
   // Commands inside $( ), ` ` and <( ) run too, each in a subshell of this one.
-  for (const w of [...cmd.words, ...cmd.redirs.flatMap(r => (r.target ? [r.target] : []))]) {
-    for (const p of w.parts) if (p.kind === 'sub' && !p.arith) walk(p.inner, child(ctx))
-  }
+  for (const inner of substitutions(cmd)) walk(inner, child(ctx))
   for (const r of cmd.redirs) redirect(r, ctx, cmd.raw)
 
   let words = cmd.words
@@ -1068,7 +1093,7 @@ function rsync(args: Word[], dir: DirState, ctx: Ctx, raw: string): void {
 
 function stdinText(cmd: Cmd, ctx: Ctx): string | null {
   for (const r of cmd.redirs) {
-    if (r.heredoc) return r.heredoc.body
+    if (r.heredoc) return r.heredoc.quoted ? r.heredoc.body : heredocText(r.heredoc.body)
     if (r.op === '<<<' && r.target) {
       const v = expand(r.target, ctx, 'plain')
       return 'unknown' in v ? r.target.raw : v.values.join(' ')
