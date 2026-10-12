@@ -11,6 +11,12 @@ link() {
   local dst="$2"
   if [[ -L "$dst" && "$(readlink "$dst")" == "$src" ]]; then
     echo "  ok:   $dst"
+  elif [[ -L "$dst" && "$(readlink "$dst")" == */.claude_global/* ]]; then
+    # Linked from the myhome repo's .claude_global/, where these files used to live.
+    local old
+    old="$(readlink "$dst")"
+    ln -sfn "$src" "$dst"
+    echo "  move: $dst -> $src (was $old)"
   elif [[ -e "$dst" ]]; then
     echo "  skip: $dst already exists (not a symlink to $src)"
   else
@@ -34,8 +40,10 @@ remove_obsolete() {
 
 remove_obsolete "$CLAUDE/commands" "$DOTFILES/commands" "migrated to skills/"
 
-# ~/.claude/CLAUDE.md and ~/.claude/settings.json are linked by the myhome repo
-# (.claude_global/), not here.
+# Everything Claude lives in this repo except ~/.claude/settings.json, which the
+# private myhome repo links: it holds private context (auto mode's description of
+# private repos), and Claude Code edits it in place, so it can't be in a public repo.
+link "$DOTFILES/CLAUDE.global.md"     "$CLAUDE/CLAUDE.md"
 link "$DOTFILES/tk.md"                "$CLAUDE/tk.md"
 link "$DOTFILES/agent-teams.md"       "$CLAUDE/agent-teams.md"
 link "$DOTFILES/skills"               "$CLAUDE/skills"

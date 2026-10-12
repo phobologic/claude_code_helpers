@@ -6,10 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This repository is the source of truth for most of `~/.claude/` — personal Claude Code dotfiles.
 It provides global skills, sub-agents, the run-tickets workflow, language plugins for
-auto-formatting, and tool rules for deployment and database conventions. The global
-`~/.claude/CLAUDE.md` (working style rules) and `~/.claude/settings.json` are not here:
-they live in the `myhome` repo under `.claude_global/`, whose `install.sh` links them, so
-they sync across machines. Edit them there.
+auto-formatting, tool rules for deployment and database conventions, the global
+`~/.claude/CLAUDE.md` (`CLAUDE.global.md`), and the global hooks. Everything Claude
+belongs here. The one exception is `~/.claude/settings.json`, which lives in the private
+`myhome` repo (`.claude_global/settings.json`, linked by that repo's `install.sh`): this
+repo is public on GitHub, the settings hold private context (auto mode's description of
+private repos), and Claude Code edits the file in place, so anything it adds later would
+be published. Edit settings there; put everything else here.
 
 ## Repository Structure
 
@@ -23,12 +26,16 @@ tools/          Per-tool rules files (railway, sqlalchemy) — loaded via .claud
 bin/            Utility scripts (tk plugins, etc.)
 tests/          Tests for the run-tickets workflow script and planner (plain node / python3)
 docs/           Documentation and migration guides
+hooks/          Global hook scripts, linked into ~/.claude/hooks/ (turned on by settings.json)
+CLAUDE.global.md  Global CLAUDE.md, symlinked to ~/.claude/CLAUDE.md
 install.sh      Sets up ~/.claude/ symlinks from scratch
 ```
 
 ## Installation
 
 Run `./install.sh` to configure `~/.claude/`:
+- `~/.claude/CLAUDE.md` → `CLAUDE.global.md`
+- `~/.claude/hooks/<name>.sh` → `hooks/<name>.sh`
 - `~/.claude/skills/` → `skills/`
 - `~/.claude/agents/` → `agents/`
 - `~/.claude/workflows/` → `workflows/`
@@ -151,7 +158,7 @@ python3 tests/run-tickets-scripts.test.py
 python3 tests/wrap-epic-plan.test.py
 ```
 
-The workflow test runs the real script with fake agents and checks scheduling (critical-path order, shared files as a tiebreak that never idles a slot), resolution reviews, merge gates, halts, and what each agent's prompt carries. It cannot check real agent behavior or how the merge prompt's git commands behave. The planner test checks that prose in `**Files**:` lines never parses as a path and that decision wording is flagged without false positives. The scripts test runs `run-tickets-setup` and `run-tickets-finish` against throwaway git repos with a fake `tk`, and the wrap-epic-plan test checks the blocking/movable/unfinished classification and branch resolution the same way. Keep sample text in all of them generic: this repo is pushed to GitHub, so no text from other projects.
+The workflow test runs the real script with fake agents and checks scheduling (critical-path order, shared files as a tiebreak that never idles a slot), resolution reviews, merge gates, halts, and what each agent's prompt carries. It cannot check real agent behavior or how the merge prompt's git commands behave. The planner test checks that prose in `**Files**:` lines never parses as a path and that decision wording is flagged without false positives. The scripts test runs `run-tickets-setup` and `run-tickets-finish` against throwaway git repos with a fake `tk`, and the wrap-epic-plan test checks the blocking/movable/unfinished classification and branch resolution the same way. Keep sample text in all of them generic: this repo is public (see Important Notes), so no text from other projects.
 
 ## Gate Tags
 
@@ -159,5 +166,8 @@ The workflow test runs the real script with fake agents and checks scheduling (c
 
 ## Important Notes
 
+- **This repo is public on GitHub.** Keep other projects out of it: no names, paths, ticket IDs, code or data from them in files, test fixtures, or commit messages. Describe what a run or project showed in general terms instead. Private Claude config (`~/.claude/settings.json`) stays in the private `myhome` repo (see Repository Purpose)
+- `CLAUDE.global.md` is symlinked to `~/.claude/CLAUDE.md`. It can't be named `CLAUDE.md` here, because then it would be loaded twice when working in this repo
+- `~/.claude/settings.json` is not in this repo (see Repository Purpose); there is no user-level `~/.claude/settings.local.json`
 - Review reports are generated in `.code-review/` directory
 - Local settings should be in `settings.local.json` (gitignored)
