@@ -1335,7 +1335,14 @@ function fedCtx(ctx: Ctx, dir: DirState, what: string): Ctx {
 function runFed(words: Word[], fed: Ctx, raw: string, listDir?: DirState): { recursive: boolean } | null {
   const u = unwrap(words, fed)
   if (u === null) return null
-  const name = cmdName(u.words[0]) ?? ''
+  // A command named by its input, whole or in part, is only known when it runs:
+  // `find -exec {}`, `xargs -J % %`, or `xargs -I m sudo rm m`, where sudo runs r<input>.
+  const head = u.words[0]
+  if (head !== undefined && isInput(head)) {
+    fed.out.push({ op: 'unknown', what: 'the name of the command it runs comes from its input', cmd: short(raw) })
+    return null
+  }
+  const name = cmdName(head) ?? ''
   const args = u.words.slice(1)
   // Only a word that is the input alone is one of the find's paths: `~/backup/{}` or
   // `{}.bak` is some other path, which the dry run does not show.
@@ -1515,14 +1522,27 @@ function expandsTo(w: Word, ctx: Ctx, s: string): boolean {
   return !('unknown' in v) && v.values.length === 1 && v.values[0] === s
 }
 
-// The words xargs runs, with its input where its options put it, or why that can't be read.
-function fedWords(words: Word[], o: XargsOpts, fed: Ctx): { words: Word[] } | { unknown: string } {
+// Whether a value the word expands to has `s` in it.
+function holdsText(w: Word, ctx: Ctx, s: string): boolean {
+  const v = expand(w, ctx, 'plain')
+  return !('unknown' in v) && v.values.some(t => t.includes(s))
+}
+
+// The words xargs runs (`words`: a command and its arguments, never none), with its input
+// where its options put it, or why that can't be read. `held` says why they are held even so.
+function fedWords(words: Word[], o: XargsOpts, fed: Ctx): { words: Word[]; held?: string } | { unknown: string } {
   if (o.unread) return { unknown: 'xargs options only known when it runs' }
   if (o.replace === null) return { words: withInput(words, null, fed) }
   const v = expand(o.replace, fed, 'plain')
   const token = 'unknown' in v || v.values.length !== 1 ? '' : (v.values[0] as string)
   if (token === '') return { unknown: 'what xargs -I or -J replaces is only known when it runs' }
-  if (!o.whole) return { words: withInput(words, token, fed) }
+  if (!o.whole) {
+    // BSD's -I leaves the command's name as written (`xargs -I m rm m` runs rm). GNU's
+    // puts the input there too, so a name with the text in it is only known when it runs.
+    const [name, ...rest] = words as [Word, ...Word[]]
+    const bsd = { words: [name, ...withInput(rest, token, fed)] }
+    return holdsText(name, fed, token) ? { ...bsd, held: 'the command xargs -I runs holds its replace text' } : bsd
+  }
   // BSD's -J puts the input in place of the first word that is the token, else after the words.
   const at = words.findIndex(w => expandsTo(w, fed, token))
   if (at < 0) return { words: withInput(words, null, fed) }
@@ -1532,11 +1552,14 @@ function fedWords(words: Word[], o: XargsOpts, fed: Ctx): { words: Word[] } | { 
 function xargs(args: Word[], dir: DirState, ctx: Ctx, piped: Cmd | null, raw: string): void {
   const o = xargsOpts(args)
   const fed = fedCtx(ctx, dir, 'what xargs passes comes from its input')
-  const words = fedWords(args.slice(o.k), o, fed)
+  // With no command given, xargs runs echo.
+  const command = o.k < args.length ? args.slice(o.k) : [literal('echo')]
+  const words = fedWords(command, o, fed)
   if ('unknown' in words) {
     ctx.out.push({ op: 'unknown', what: words.unknown, cmd: short(raw) })
     return
   }
+  if (words.held !== undefined) ctx.out.push({ op: 'unknown', what: words.held, cmd: short(raw) })
   // find ... | xargs rm: the find's own output is the list, so dry-run the find.
   const found = o.fromFile ? undefined : piped?.find
   const list = found && !isUnknown(found.dir) ? { dir: found.dir, argv: found.argv } : undefined

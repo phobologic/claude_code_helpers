@@ -702,6 +702,40 @@ test("xargs's options: where its command starts and where its input goes", () =>
   expect(only('find . -name x | xargs --arg-file=list rm')).toMatchObject(fromInput)
 })
 
+test("xargs -I's text in the command's name, or a name from the input, is held", () => {
+  // BSD's -I leaves the name as written and GNU's replaces in it too: the name is held,
+  // and the rest is read as BSD runs it.
+  const named = (cmd: string) => ({ op: 'unknown', what: 'the command xargs -I runs holds its replace text', cmd })
+  expect(analyze('ls | xargs -I m rm m')).toEqual([named('xargs -I m rm m'), { ...fromInput, cmd: 'xargs -I m rm m' }])
+  expect(analyze('ls | xargs -I t git branch -D t')).toEqual([
+    named('xargs -I t git branch -D t'),
+    { op: 'unknown', what: 'git with an argument only known when it runs', cmd: 'xargs -I t git branch -D t' },
+  ])
+  expect(analyze('ls | xargs -I r rm -rf build')).toEqual([named('xargs -I r rm -rf build'), { ...fromInput, cmd: 'xargs -I r rm -rf build' }])
+  expect(analyze('ls | xargs -I s sudo rm -rf build')).toEqual([
+    named('xargs -I s sudo rm -rf build'),
+    { op: 'delete', dir: null, paths: ['build'], recursive: true, cmd: 'xargs -I s sudo rm -rf build' },
+  ])
+  expect(analyze('ls | xargs -I{} {}')).toEqual([named('xargs -I{} {}')])
+  // The name as the shell leaves it: a variable's value, any of a loop's values.
+  expect(analyze('C=rm; ls | xargs -I r "$C" x')).toEqual([named('xargs -I r "$C" x')])
+  expect(analyze('for c in cp rm; do ls | xargs -I r "$c" x; done')).toContainEqual(named('xargs -I r "$c" x'))
+  expect(analyze('ls | xargs -I r "$X" x')).not.toContainEqual(named('xargs -I r "$X" x'))
+  // A name without the text is read as before.
+  expect(only('ls | xargs -I{} rm -rf {}')).toEqual({ ...fromInput, cmd: 'xargs -I{} rm -rf {}' })
+  // A command whose name comes from the input, here or behind a wrapper, is only known
+  // when it runs: -I's text in sudo's command, -J's exact word, find -exec's {}.
+  const fromName = (cmd: string) => ({ op: 'unknown', what: 'the name of the command it runs comes from its input', cmd })
+  expect(analyze('ls | xargs -I m sudo rm m')).toEqual([fromName('xargs -I m sudo rm m')])
+  expect(analyze('ls | xargs -J % % -rf build')).toEqual([fromName('xargs -J % % -rf build')])
+  expect(analyze('find . -exec {} \\;')).toEqual([fromName('find . -exec {} \\;')])
+  expect(analyze("find . -name '*.sh' -exec sudo {} +")).toEqual([fromName("find . -name '*.sh' -exec sudo {} +")])
+  // With no command xargs runs echo, its input as echo's arguments; an empty -exec runs nothing.
+  for (const command of ['ls | xargs', 'ls | xargs -J %', 'ls | xargs -I{}', 'ls | xargs -0r', 'find . -name x -exec \\;']) {
+    expect({ command, effects: analyze(command) }).toEqual({ command, effects: [] })
+  }
+})
+
 test('git commands that can discard work go to the judge; the rest never do', () => {
   expect(only('git checkout -- src/a.ts')).toEqual({ op: 'git', dir: null, argv: ['checkout', '--', 'src/a.ts'], cmd: 'git checkout -- src/a.ts' })
   expect(only('git -C ../other reset --hard')).toMatchObject({ argv: ['-C', '../other', 'reset', '--hard'] })
