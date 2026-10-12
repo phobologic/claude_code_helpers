@@ -41,7 +41,6 @@ const DELETE_CMDS = new Set(['rm', 'grm', 'unlink', 'shred', 'srm'])
 const COPY_CMDS: Record<string, 'mv' | 'cp' | 'ln'> = {
   mv: 'mv', gmv: 'mv', cp: 'cp', gcp: 'cp', install: 'cp', ginstall: 'cp', ln: 'ln', gln: 'ln',
 }
-const WRITE_CMDS = new Set([...Object.keys(COPY_CMDS), 'tee', 'dd', 'truncate', 'rsync'])
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh'])
 const INTERPRETERS = /^(python[0-9.]*|pypy[0-9.]*|node|nodejs|perl|ruby|deno|bun|php|osascript)$/
 // Inline code that deletes files: unknown, since its targets are only known when it runs.
@@ -671,7 +670,8 @@ function absDir(dir: DirState): string | null {
 
 function joinDir(dir: DirState, arg: string): DirState {
   if (isAbs(arg)) return arg
-  if (isUnknown(dir)) return dir
+  // A fresh object: a folder that moved never compares equal to the one it moved from.
+  if (isUnknown(dir)) return { unknown: dir.unknown }
   return dir === null ? arg : `${dir}/${arg}`
 }
 
@@ -952,71 +952,204 @@ function pathsOf(words: Word[], ctx: Ctx, raw: string): string[] | null {
   return v.values
 }
 
-const SUDO_VALUE = new Set(['-u', '-g', '-C', '-D', '-h', '-p', '-r', '-t', '-T', '-U'])
-const TIMEOUT_VALUE = new Set(['-s', '-k', '--signal', '--kill-after'])
+// ---------- wrappers ----------
 
-// Strips the wrappers that run another command unchanged (sudo, env, timeout, ...).
-function unwrap(words: Word[], ctx: Ctx): { words: Word[]; dir: DirState } | null {
-  let dir = ctx.dir
-  for (;;) {
-    const name = cmdName(words[0])
-    let k = 1
-    const opt = (): string | null => text(words[k])
-    if (name === 'sudo' || name === 'doas') {
-      while (opt()?.startsWith('-')) {
-        const t = opt() as string
-        k += SUDO_VALUE.has(t) ? 2 : 1
-        if (t === '--') break
-      }
-    } else if (name === 'env') {
-      while (k < words.length) {
-        const t = opt()
-        if (t === '--') {
-          k += 1
-          break
-        }
-        if (t === '-C' || t === '--chdir') {
-          const d = text(words[k + 1])
-          dir = d === null ? { unknown: 'env -C with an expansion' } : joinDir(dir, d)
-          k += 2
-        } else if (t?.startsWith('--chdir=')) {
-          dir = joinDir(dir, t.slice(8))
-          k += 1
-        } else if (t === '-S' || t === '--split-string') {
-          const v = words[k + 1] ? expand(words[k + 1] as Word, ctx, 'plain') : { values: [] }
-          if ('unknown' in v) ctx.out.push({ op: 'unknown', what: `env -S: ${v.unknown}`, cmd: '' })
-          else walk(v.values.join(' '), child(ctx))
-          return null
-        } else if (t === '-u' || t === '--unset') {
-          k += 2
-        } else if (t?.startsWith('-') || isAssign(words[k] as Word)) {
-          k += 1
-        } else {
-          break
-        }
-      }
-    } else if (name === 'command') {
-      if (opt() === '-v' || opt() === '-V') return null
-      if (opt() === '-p') k += 1
-    } else if (name === 'exec') {
-      while (opt()?.startsWith('-')) k += opt() === '-a' ? 2 : 1
-    } else if (name === 'time') {
-      if (opt() === '-p') k += 1
-    } else if (name === 'nice') {
-      if (opt() === '-n') k += 2
-      else if (/^(-\d+|--adjustment=.*)$/.test(opt() ?? '')) k += 1
-    } else if (name === 'timeout' || name === 'gtimeout') {
-      while (opt()?.startsWith('-')) k += TIMEOUT_VALUE.has(opt() as string) ? 2 : 1
-      k += 1 // the duration
-    } else if (name === 'stdbuf') {
-      while (opt()?.startsWith('-')) k += /^-[ioe]$/.test(opt() as string) ? 2 : 1
-    } else if (name === 'caffeinate') {
-      while (opt()?.startsWith('-')) k += opt() === '-t' || opt() === '-w' ? 2 : 1
-    } else if (name !== 'builtin' && name !== 'nohup' && name !== 'chronic' && name !== 'unbuffer') {
-      return { words, dir }
+// A command a wrapper runs and the folder it runs in; no words when it runs none.
+interface Wrapped {
+  words: Word[]
+  dir: DirState
+}
+type Wrapper = (words: Word[], dir: DirState, ctx: Ctx) => Wrapped
+
+// How a wrapper's own words are laid out before the command it runs.
+interface Grammar {
+  short?: string // short options whose value can be the next word: `-u root`, `-Eu root`
+  long?: string[] // long ones whose value can be the next word: `--user root`
+  chdir?: string[] // options whose value is the folder the command runs in
+  operands?: number // words between the options and the command: timeout's duration
+  sub?: string // the subcommand that runs a command (`uv run`); any other runs none
+  stdin?: string // the interpreter a lone `-` runs on stdin (`uv run -`)
+}
+
+interface Opt {
+  name: string // `-u` or `--user`, without its value
+  value?: Word | undefined // none for a flag, or for an option that ends the line
+}
+
+const literal = (s: string): Word => ({ parts: [{ kind: 'lit', text: s, quoted: false }], raw: s })
+
+// The word with its first n characters, all of them in its leading literal, cut off.
+function after(w: Word, n: number): Word {
+  const [head, ...rest] = w.parts as [Extract<Part, { kind: 'lit' }>, ...Part[]]
+  return { parts: [{ ...head, text: head.text.slice(n) }, ...rest], raw: w.raw }
+}
+
+// The options in one word (`-Eu`, `-uroot`, `--user=root`), and the name of a last one
+// whose value is the next word.
+function optionWord(w: Word, flag: string, g: Grammar): { opts: Opt[]; next: string | null } {
+  if (flag.startsWith('--')) {
+    const eq = flag.indexOf('=')
+    if (eq >= 0) return { opts: [{ name: flag.slice(0, eq), value: after(w, eq + 1) }], next: null }
+    return g.long?.includes(flag) ? { opts: [], next: flag } : { opts: [{ name: flag }], next: null }
+  }
+  const opts: Opt[] = []
+  for (let j = 1; j < flag.length; j += 1) {
+    const name = `-${flag[j]}`
+    if (g.short?.includes(flag[j] as string)) {
+      if (j + 1 === flag.length && w.parts.length === 1) return { opts, next: name }
+      opts.push({ name, value: after(w, j + 1) })
+      return { opts, next: null }
     }
-    words = words.slice(k)
-    if (words.length === 0) return null
+    opts.push({ name })
+  }
+  return { opts, next: null }
+}
+
+// The options from words[k], up to the first word that isn't one or just past `--`, and
+// the index after them. A lone `-` is an operand, as getopt reads it: env takes it as -i,
+// `uv run -` runs stdin as Python, and in zsh `exec -` is the `-` wrapper below.
+function readOpts(words: Word[], k: number, g: Grammar): { opts: Opt[]; k: number } {
+  const opts: Opt[] = []
+  while (k < words.length) {
+    const w = words[k] as Word
+    const head = w.parts[0]
+    const flag = head?.kind === 'lit' ? head.text : ''
+    if (!flag.startsWith('-') || text(w) === '-') break
+    k += 1
+    if (text(w) === '--') break
+    const found = optionWord(w, flag, g)
+    opts.push(...found.opts)
+    if (found.next !== null) {
+      opts.push({ name: found.next, value: words[k] })
+      k += 1
+    }
+  }
+  return { opts, k }
+}
+
+// The folder a wrapper's command runs in once its chdir options (`sudo -D`) are applied.
+function moveDir(dir: DirState, wrapper: string, opts: Opt[], chdir: string[]): DirState {
+  for (const o of opts) {
+    if (!chdir.includes(o.name)) continue
+    const d = text(o.value)
+    dir = d === null ? { unknown: `${wrapper} ${o.name} with an expansion` } : joinDir(dir, d)
+  }
+  return dir
+}
+
+// A wrapper whose words a Grammar describes.
+function grammar(g: Grammar): Wrapper {
+  return (words, dir) => {
+    let { opts, k } = readOpts(words, 1, g)
+    if (g.sub !== undefined) {
+      // `uv sync` and the like run nothing this file judges.
+      if (text(words[k]) !== g.sub) return { words: [], dir }
+      const more = readOpts(words, k + 1, g)
+      opts = opts.concat(more.opts)
+      k = more.k
+    }
+    const rest = words.slice(k + (g.operands ?? 0))
+    if (g.stdin !== undefined && text(rest[0]) === '-') rest.unshift(literal(g.stdin))
+    return { words: rest, dir: moveDir(dir, cmdName(words[0]) ?? '', opts, g.chdir ?? []) }
+  }
+}
+
+const ENV: Grammar = { short: 'CPSu', long: ['--chdir', '--split-string', '--unset'], chdir: ['-C', '--chdir'] }
+
+// env [options] [NAME=value ...] command, where -S's string is a command line of its own.
+function env(words: Word[], dir: DirState, ctx: Ctx): Wrapped {
+  const { opts, k } = readOpts(words, 1, ENV)
+  const split = opts.find(o => o.name === '-S' || o.name === '--split-string')
+  if (split) {
+    const v = split.value ? expand(split.value, ctx, 'plain') : { values: [] }
+    if ('unknown' in v) ctx.out.push({ op: 'unknown', what: `env -S: ${v.unknown}`, cmd: '' })
+    else walk(v.values.join(' '), child(ctx))
+    return { words: [], dir }
+  }
+  // A `-` right after the options means -i. env takes any word with `=` in it, once the
+  // shell has removed the quotes, as an assignment: `env "X=a b" cmd`.
+  let j = text(words[k]) === '-' ? k + 1 : k
+  while (j < words.length && litText(words[j] as Word).includes('=')) j += 1
+  return { words: words.slice(j), dir: moveDir(dir, 'env', opts, ENV.chdir ?? []) }
+}
+
+// command -v and -V only look the command up.
+function command(words: Word[], dir: DirState): Wrapped {
+  const { opts, k } = readOpts(words, 1, {})
+  return { words: opts.some(o => o.name === '-v' || o.name === '-V') ? [] : words.slice(k), dir }
+}
+
+const FLOCK: Grammar = { short: 'wE', long: ['--wait', '--timeout', '--conflict-exit-code'] }
+
+// flock [options] lockfile command..., or flock [options] lockfile -c 'command', which sh
+// runs. flock [options] fd runs nothing.
+function flock(words: Word[], dir: DirState): Wrapped {
+  const k = readOpts(words, 1, FLOCK).k + 1 // past the lock file
+  const c = text(words[k])
+  if (c === '-c' || c === '--command') return { words: [literal('sh'), literal('-c'), ...words.slice(k + 1)], dir }
+  return { words: words.slice(k), dir }
+}
+
+const SUDO: Grammar = {
+  short: 'aCcDghpRrTtUu',
+  long: ['--auth-type', '--close-from', '--login-class', '--chdir', '--group', '--host', '--prompt', '--chroot', '--role', '--type', '--command-timeout', '--other-user', '--user'],
+  chdir: ['-D', '--chdir'],
+}
+const TIMEOUT: Grammar = { short: 'ks', long: ['--kill-after', '--signal'], operands: 1 }
+// The options of uv run that take a value, from uv's CLI reference, global ones included.
+const UV: Grammar = {
+  sub: 'run',
+  short: 'CfiPpw',
+  long: [
+    '--allow-insecure-host', '--cache-dir', '--color', '--config-file', '--config-setting', '--config-settings',
+    '--config-settings-package', '--default-index', '--directory', '--env-file', '--exclude-newer',
+    '--exclude-newer-package', '--extra', '--extra-index-url', '--find-links', '--fork-strategy', '--group', '--index',
+    '--index-strategy', '--index-url', '--keyring-provider', '--link-mode', '--no-binary-package',
+    '--no-build-isolation-package', '--no-build-package', '--no-editable-package', '--no-extra', '--no-group',
+    '--no-sources-package', '--only-group', '--package', '--prerelease', '--prerelease-package', '--project', '--python',
+    '--python-platform', '--python-preference', '--refresh-package', '--reinstall-package', '--resolution',
+    '--trusted-host', '--upgrade-group', '--upgrade-package', '--with', '--with-editable', '--with-requirements',
+  ],
+  chdir: ['--directory'],
+  stdin: 'python',
+}
+// Poetry 2 runs the command in -C's folder; -P only says where the project is.
+const POETRY: Grammar = { sub: 'run', short: 'CP', long: ['--directory', '--project'], chdir: ['-C', '--directory'] }
+
+// Wrappers that run another command unchanged. npx, pnpm exec and uvx are not here: the
+// package binaries they run are unknown code either way.
+const WRAPPERS = new Map<string, Wrapper>([
+  ['sudo', grammar(SUDO)],
+  ['doas', grammar({ short: 'aCu' })],
+  ['env', env],
+  ['command', command],
+  ['exec', grammar({ short: 'a' })],
+  ['time', grammar({ short: 'fo', long: ['--format', '--output'] })],
+  ['nice', grammar({ short: 'n', long: ['--adjustment'] })],
+  ['timeout', grammar(TIMEOUT)],
+  ['gtimeout', grammar(TIMEOUT)],
+  ['stdbuf', grammar({ short: 'eio', long: ['--input', '--output', '--error'] })],
+  ['caffeinate', grammar({ short: 'tw' })],
+  ['ionice', grammar({ short: 'cnPpu', long: ['--class', '--classdata', '--pid', '--pgid', '--uid'] })],
+  ['flock', flock],
+  ['uv', grammar(UV)],
+  ['poetry', grammar(POETRY)],
+  ['builtin', grammar({})],
+  ['nohup', grammar({})],
+  ['chronic', grammar({})],
+  ['unbuffer', grammar({})],
+  // zsh's `-` precommand modifier: `- cmd` and `exec - cmd` run cmd with a - before its argv[0].
+  ['-', grammar({})],
+])
+
+// Strips the wrappers that run another command unchanged (sudo, env, timeout, uv run, ...).
+function unwrap(words: Word[], ctx: Ctx): Wrapped | null {
+  let w: Wrapped = { words, dir: ctx.dir }
+  for (;;) {
+    const wrapper = WRAPPERS.get(cmdName(w.words[0]) ?? '')
+    if (wrapper === undefined) return w
+    w = wrapper(w.words, w.dir, ctx)
+    if (w.words.length === 0) return null
   }
 }
 
@@ -1069,16 +1202,15 @@ function run(cmd: Cmd, words: Word[], dir: DirState, ctx: Ctx, piped: Cmd | null
   }
 
   if (DELETE_CMDS.has(name)) {
-    const { opts, args: targets } = split(args)
-    const recursive = name !== 'unlink' && opts.some(o => o === '--recursive' || /^-[^-]*[rR]/.test(o))
-    const paths = pathsOf(targets, local, raw)
+    const recursive = recursiveDelete(name, args)
+    const paths = pathsOf(split(args).args, local, raw)
     if (paths && paths.length > 0) {
       emit(ctx, dir, paths, raw, d => ({ op: 'delete', dir: d, paths, recursive, cmd: short(raw) }))
     }
     return
   }
   if (name === 'find') return find(cmd, args, dir, local)
-  if (name === 'xargs') return xargs(args, ctx, piped, raw)
+  if (name === 'xargs') return xargs(args, dir, local, piped, raw)
   if (name === 'git') return git(args, dir, local, raw)
   if (name in COPY_CMDS) return copy(COPY_CMDS[name] as 'mv' | 'cp' | 'ln', name, args, dir, local, raw)
   if (name === 'tee') {
@@ -1111,6 +1243,11 @@ function run(cmd: Cmd, words: Word[], dir: DirState, ctx: Ctx, piped: Cmd | null
     return
   }
   if (INTERPRETERS.test(name)) return interpreter(cmd, name, args, ctx, raw)
+}
+
+// Whether a delete command's options make it recursive.
+function recursiveDelete(name: string, args: Word[]): boolean {
+  return name !== 'unlink' && split(args).opts.some(o => o === '--recursive' || /^-[^-]*[rR]/.test(o))
 }
 
 function positionals(args: Word[], valued: Set<string>): Word[] {
@@ -1147,48 +1284,114 @@ function outputFile(args: Word[], short_: RegExp, long: string[], dir: DirState,
 const FIND_ACTIONS = new Set(['-exec', '-execdir', '-ok', '-okdir'])
 const FIND_WRITES: Record<string, number> = { '-fprint': 1, '-fprint0': 1, '-fls': 1, '-fprintf': 2 }
 
+// What xargs reads, or each path find -exec puts in place of {}: an argument only known
+// when it runs, held in a variable no command line can name. A shell or interpreter whose
+// code holds it, in whole or in part, is held as `sh -c "$CMD"` is.
+const INPUT = '<input>'
+const INPUT_RAW = '"$@"'
+const inputPart: Part = { kind: 'var', name: INPUT, quoted: true }
+const inputWord = (): Word => ({ parts: [inputPart], raw: INPUT_RAW })
+const isInput = (w: Word): boolean => w.parts.some(p => p.kind === 'var' && p.name === INPUT)
+// The word is the input and nothing else, as `{}` or xargs's own trailing input is.
+const isBareInput = (w: Word): boolean => {
+  const ps = w.parts.filter(p => !(p.kind === 'lit' && p.text === ''))
+  return ps.length === 1 && ps[0]?.kind === 'var' && ps[0].name === INPUT
+}
+
+// The words with the input in place of each `token` in them, or after them when `token`
+// is null. A variable whose value holds the token counts as that value: the shell expands
+// it before xargs looks for the token.
+function withInput(words: Word[], token: string | null, ctx: Ctx): Word[] {
+  if (token === null) return [...words, inputWord()]
+  const cut = (p: Extract<Part, { kind: 'lit' }>): Part[] => {
+    const [first = '', ...rest] = p.text.split(token)
+    return [{ ...p, text: first }, ...rest.flatMap(text => [inputPart, { ...p, text }])]
+  }
+  const fill = (p: Part): Part[] => {
+    if (p.kind === 'lit') return cut(p)
+    if (p.kind !== 'var') return [p]
+    const v = varValue(p.name, ctx)
+    if ('unknown' in v || !v.values.some(x => x.text.includes(token))) return [p]
+    const [one, ...more] = v.values
+    // Several values, some holding the token: the word is only known when it runs.
+    if (one === undefined || more.length > 0) return [p, inputPart]
+    return cut({ kind: 'lit', text: one.text, quoted: p.quoted })
+  }
+  return words.map(w => ({ parts: w.parts.flatMap(fill), raw: w.raw.split(token).join(INPUT_RAW) }))
+}
+
+// Where the command xargs or find -exec runs is read: a child process of the line's
+// shell, in `dir`, whose input `what` describes.
+function fedCtx(ctx: Ctx, dir: DirState, what: string): Ctx {
+  const fed = { ...child(ctx), dir }
+  fed.vars.set(INPUT, { unknown: what })
+  return fed
+}
+
+// Reads the command xargs or find -exec runs the way any command on the line is read,
+// wrappers such as sudo and env included. With `listDir`, its input is the paths a find
+// prints from that folder: a delete given them there leaves them to the find's dry run,
+// and the result says whether it recurses. Its other words are judged either way.
+function runFed(words: Word[], fed: Ctx, raw: string, listDir?: DirState): { recursive: boolean } | null {
+  const u = unwrap(words, fed)
+  if (u === null) return null
+  const name = cmdName(u.words[0]) ?? ''
+  const args = u.words.slice(1)
+  // Only a word that is the input alone is one of the find's paths: `~/backup/{}` or
+  // `{}.bak` is some other path, which the dry run does not show.
+  const listed = DELETE_CMDS.has(name) && u.dir === listDir && args.some(isBareInput)
+  const cmd: Cmd = { words: u.words, redirs: [], raw, inPipeline: true }
+  run(cmd, listed ? [...u.words.slice(0, 1), ...args.filter(w => !isBareInput(w))] : u.words, u.dir, fed, null)
+  return listed ? { recursive: recursiveDelete(name, args) } : null
+}
+
+interface FindPlan {
+  argv: string[]
+  deletes: boolean
+  recursive: boolean
+  writes: string[]
+}
+// Reads the command an -exec or -ok runs, and says whether it deletes the paths found.
+type FindExec = (action: string, sub: string[]) => { recursive: boolean } | null
+
 // A find's dry run: the same search, with each deleting action printing instead and
 // every other side effect dropped, so the judge can run it and see what would go.
-function findPlan(argv: string[]): { argv: string[]; deletes: boolean; recursive: boolean; writes: string[]; risky: string | null } {
-  let k = 0
-  const lead: string[] = []
-  while (k < argv.length && /^-[HLPEXdsx]$/.test(argv[k] as string)) lead.push(argv[k++] as string)
-  const roots: string[] = []
-  while (k < argv.length && !/^[-(!)]/.test(argv[k] as string)) roots.push(argv[k++] as string)
-  const out: string[] = []
-  let deletes = false
-  let recursive = false
-  let risky: string | null = null
-  const writes: string[] = []
-  for (; k < argv.length; k += 1) {
+function findPlan(argv: string[], exec: FindExec): FindPlan {
+  const plan: FindPlan = { argv: [], deletes: false, recursive: false, writes: [] }
+  for (let k = 0; k < argv.length; k += 1) {
     const a = argv[k] as string
     if (a === '-delete') {
-      deletes = true
-      out.push('-print')
+      plan.deletes = true
+      plan.argv.push('-print')
     } else if (FIND_ACTIONS.has(a)) {
-      let j = k + 1
-      while (j < argv.length && argv[j] !== ';' && argv[j] !== '+') j += 1
-      const sub = argv.slice(k + 1, j)
-      const name = (sub[0] ?? '').split('/').pop() ?? ''
-      if (DELETE_CMDS.has(name)) {
-        deletes = true
-        recursive ||= sub.some(s => /^-[^-]*[rR]/.test(s) || s === '--recursive')
-        out.push('-print')
-      } else {
-        if (WRITE_CMDS.has(name) || SHELLS.has(name) || INTERPRETERS.test(name)) risky = `find ${a} ${name}`
-        out.push('-true')
-      }
-      k = j
+      k = findAction(argv, k, plan, exec)
     } else if (a in FIND_WRITES) {
-      writes.push(argv[k + 1] ?? '')
-      out.push('-true')
+      plan.writes.push(argv[k + 1] ?? '')
+      plan.argv.push('-true')
       k += FIND_WRITES[a] as number
     } else {
-      out.push(a)
+      plan.argv.push(a)
     }
   }
-  return { argv: [...lead, ...roots, ...out], deletes, recursive, writes, risky }
+  return plan
 }
+
+// The -exec or -ok at argv[k], in the dry run: it prints when its command deletes the
+// paths found, and does nothing otherwise. Returns the index of its closing ; or +.
+function findAction(argv: string[], k: number, plan: FindPlan, exec: FindExec): number {
+  let j = k + 1
+  while (j < argv.length && argv[j] !== ';' && argv[j] !== '+') j += 1
+  const del = exec(argv[k] as string, argv.slice(k + 1, j))
+  plan.deletes ||= del !== null
+  plan.recursive ||= del?.recursive === true
+  plan.argv.push(del ? '-print' : '-true')
+  return j
+}
+
+// An argument find passes to what -exec runs, as the shell left it. Unquoted, so a glob
+// character in it is read as a pattern: the shell's quoting is gone by now, and the
+// pattern is the reading that holds more.
+const argWord = (s: string): Word => ({ parts: [{ kind: 'lit', text: s, quoted: false }], raw: s })
 
 function find(cmd: Cmd, args: Word[], dir: DirState, ctx: Ctx): void {
   const raw = cmd.raw
@@ -1197,11 +1400,15 @@ function find(cmd: Cmd, args: Word[], dir: DirState, ctx: Ctx): void {
     if (/-delete\b|-exec|-ok/.test(raw)) ctx.out.push({ op: 'unknown', what: `find: ${v.unknown}`, cmd: short(raw) })
     return
   }
-  const plan = findPlan(v.values)
+  // -execdir and -okdir run their command in the folder of each path found.
+  const plan = findPlan(v.values, (action, sub) => {
+    const where = action.endsWith('dir') ? { unknown: `each folder find ${action} runs in` } : dir
+    const fed = fedCtx(ctx, where, `{} in find ${action} is each path it finds`)
+    return runFed(withInput(sub.map(argWord), '{}', fed), fed, raw, fed.dir)
+  })
   if (plan.writes.length > 0) {
     emit(ctx, dir, plan.writes, raw, d => ({ op: 'overwrite', dir: d, paths: plan.writes.map(escapeGlob), cmd: short(raw) }))
   }
-  if (plan.risky) ctx.out.push({ op: 'unknown', what: `${plan.risky}: what it changes is only known when it runs`, cmd: short(raw) })
   if (plan.deletes) {
     emit(ctx, dir, [], raw, d => ({ op: 'find', dir: d, argv: plan.argv, recursive: plan.recursive, cmd: short(raw) }))
   } else {
@@ -1209,63 +1416,205 @@ function find(cmd: Cmd, args: Word[], dir: DirState, ctx: Ctx): void {
   }
 }
 
-const XARGS_VALUE = new Set(['-n', '-P', '-I', '-L', '-s', '-d', '-E', '-J', '-R', '-S', '--max-args', '--max-procs', '--replace', '--max-lines', '--max-chars', '--delimiter', '--eof'])
+// xargs options that take a value, joined (-n1, -I{}) or as the next word; GNU's -e and
+// -i, which take one only joined; and the long ones that take the next word when no `=`
+// gives it (--replace, --eof and --max-lines take one only after `=`).
+const XARGS_VALUE = 'adEIJLnPRsS'
+const XARGS_JOINED = 'ei'
+const XARGS_LONG_VALUE = new Set(['--arg-file', '--delimiter', '--max-args', '--max-chars', '--max-procs', '--process-slot-var'])
 
-function xargs(args: Word[], ctx: Ctx, piped: Cmd | null, raw: string): void {
-  let k = 0
-  let fromFile = false
-  while (k < args.length) {
-    const t = text(args[k])
-    if (t === null || !t.startsWith('-')) break
-    if (t === '-a' || t.startsWith('--arg-file')) fromFile = true
-    k += XARGS_VALUE.has(t) || t === '-a' ? 2 : 1
-  }
-  const rest = args.slice(k)
-  const name = cmdName(rest[0])
-  if (name === null) return
-  if (DELETE_CMDS.has(name)) {
-    const found = !fromFile && piped?.find
-    if (found && !isUnknown(found.dir)) {
-      // find ... | xargs rm: the find's own output is the list, so dry-run the find.
-      const argv = found.argv.map(a => (a === '-print0' || a === '-ls' ? '-print' : a))
-      const recursive = rest.some(w => /^-[^-]*[rR]/.test(text(w) ?? '') || text(w) === '--recursive')
-      ctx.out.push({ op: 'find', dir: found.dir, argv, recursive, cmd: short(raw) })
-    } else {
-      ctx.out.push({ op: 'unknown', what: `xargs ${name}: what it deletes comes from its input`, cmd: short(raw) })
+interface XargsOpts {
+  k: number // where the command starts
+  replace: Word | null // what the input replaces (-I, -J, -i, --replace), or null to add it after
+  whole: boolean // BSD's -J: the input replaces only the first word that is exactly `replace`
+  fromFile: boolean // the input comes from -a's file, not from stdin
+  unread: boolean // an option's expansion hides where the command starts (see xargsExpanded)
+}
+
+// An option word: it starts with a literal `-`, expansions after it or not.
+const isOption = (w: Word): boolean => {
+  const p = w.parts[0]
+  return p?.kind === 'lit' && p.text.startsWith('-')
+}
+
+function xargsOpts(args: Word[]): XargsOpts {
+  const o: XargsOpts = { k: 0, replace: null, whole: false, fromFile: false, unread: false }
+  for (let w = args[0]; w !== undefined && isOption(w); w = args[o.k]) {
+    o.k += 1
+    const t = text(w)
+    if (t === null) {
+      if (xargsExpanded(w, o)) continue
+      o.unread = true
+      break
     }
-  } else if (WRITE_CMDS.has(name) || SHELLS.has(name) || INTERPRETERS.test(name)) {
-    ctx.out.push({ op: 'unknown', what: `xargs ${name}: what it changes comes from its input`, cmd: short(raw) })
+    if (t.startsWith('--')) xargsLong(t, o)
+    else xargsShort(t, args, o)
+  }
+  return o
+}
+
+// The last of -I, -J, -i and --replace is the one xargs uses.
+function setReplace(o: XargsOpts, w: Word, whole: boolean): void {
+  o.replace = w
+  o.whole = whole
+}
+
+function xargsLong(t: string, o: XargsOpts): void {
+  const eq = t.indexOf('=')
+  const name = eq < 0 ? t : t.slice(0, eq)
+  if (name === '--replace') setReplace(o, argWord(eq < 0 ? '{}' : t.slice(eq + 1)), false)
+  if (name === '--arg-file') o.fromFile = true
+  if (eq < 0 && XARGS_LONG_VALUE.has(name)) o.k += 1
+}
+
+// Combined short options (-0r, -0n 1, -rI{}): flags, up to the first option that takes
+// a value, which is the rest of the word or else the next word.
+const XARGS_SHORT = new RegExp(`^-[^${XARGS_VALUE}${XARGS_JOINED}]*([${XARGS_VALUE}${XARGS_JOINED}])(.*)$`, 's')
+
+function xargsShort(t: string, args: Word[], o: XargsOpts): void {
+  const m = XARGS_SHORT.exec(t)
+  if (m === null) return // flags only
+  const ch = m[1] as string
+  const joined = m[2] as string
+  if (ch === 'i') setReplace(o, argWord(joined || '{}'), false)
+  if (XARGS_JOINED.includes(ch)) return
+  // A missing value reads as empty, which fedWords() holds.
+  const value = joined ? argWord(joined) : (args[o.k++] ?? argWord(''))
+  if (ch === 'I' || ch === 'J') setReplace(o, value, ch === 'J')
+  if (ch === 'a') o.fromFile = true
+}
+
+// An option word with an expansion in it, read from its literal head: `--opt=<exp>`, or
+// `-X<exp>` whose head reaches an option that takes a value, is one option whatever the
+// expansion holds (empty, n/P/L/s and the like end in an xargs error), so the command
+// still starts at the next word. False when the head can't say (`-$X`, `--$X`, `-0$X`).
+function xargsExpanded(w: Word, o: XargsOpts): boolean {
+  const first = w.parts[0] as Extract<Part, { kind: 'lit' }>
+  const head = first.text
+  const rest = (i: number): Word => ({ parts: [{ ...first, text: head.slice(i) }, ...w.parts.slice(1)], raw: w.raw })
+  if (head.startsWith('--')) {
+    const eq = head.indexOf('=')
+    if (eq < 0) return false
+    const name = head.slice(0, eq)
+    if (name === '--replace') setReplace(o, rest(eq + 1), false)
+    if (name === '--arg-file') o.fromFile = true
+    return true
+  }
+  const m = XARGS_SHORT.exec(head)
+  if (m === null) return false
+  const ch = m[1] as string
+  const at = head.length - (m[2] as string).length
+  if (ch === 'I' || ch === 'J' || ch === 'i') setReplace(o, rest(at), ch === 'J')
+  if (ch === 'a') o.fromFile = true
+  return true
+}
+
+// Whether the word expands to exactly `s`.
+function expandsTo(w: Word, ctx: Ctx, s: string): boolean {
+  const v = expand(w, ctx, 'plain')
+  return !('unknown' in v) && v.values.length === 1 && v.values[0] === s
+}
+
+// The words xargs runs, with its input where its options put it, or why that can't be read.
+function fedWords(words: Word[], o: XargsOpts, fed: Ctx): { words: Word[] } | { unknown: string } {
+  if (o.unread) return { unknown: 'xargs options only known when it runs' }
+  if (o.replace === null) return { words: withInput(words, null, fed) }
+  const v = expand(o.replace, fed, 'plain')
+  const token = 'unknown' in v || v.values.length !== 1 ? '' : (v.values[0] as string)
+  if (token === '') return { unknown: 'what xargs -I or -J replaces is only known when it runs' }
+  if (!o.whole) return { words: withInput(words, token, fed) }
+  // BSD's -J puts the input in place of the first word that is the token, else after the words.
+  const at = words.findIndex(w => expandsTo(w, fed, token))
+  if (at < 0) return { words: withInput(words, null, fed) }
+  return { words: [...words.slice(0, at), inputWord(), ...words.slice(at + 1)] }
+}
+
+function xargs(args: Word[], dir: DirState, ctx: Ctx, piped: Cmd | null, raw: string): void {
+  const o = xargsOpts(args)
+  const fed = fedCtx(ctx, dir, 'what xargs passes comes from its input')
+  const words = fedWords(args.slice(o.k), o, fed)
+  if ('unknown' in words) {
+    ctx.out.push({ op: 'unknown', what: words.unknown, cmd: short(raw) })
+    return
+  }
+  // find ... | xargs rm: the find's own output is the list, so dry-run the find.
+  const found = o.fromFile ? undefined : piped?.find
+  const list = found && !isUnknown(found.dir) ? { dir: found.dir, argv: found.argv } : undefined
+  const del = runFed(words.words, fed, raw, list?.dir)
+  if (del && list) {
+    const argv = list.argv.map(a => (a === '-print0' || a === '-ls' ? '-print' : a))
+    ctx.out.push({ op: 'find', dir: list.dir, argv, recursive: del.recursive, cmd: short(raw) })
   }
 }
 
 const GIT_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--super-prefix'])
+// A subcommand's options that take a value. judge.py's GIT_VALUED is the same table.
+const GIT_VALUED = new Map([
+  ['checkout', ['-b', '-B', '--orphan']],
+  ['switch', ['-c', '-C', '--orphan']],
+  ['restore', ['-s', '--source']],
+  ['clean', ['-e', '--exclude']],
+  ['branch', ['-u', '--set-upstream-to', '--sort', '--format', '--points-at']],
+])
+
+// A subcommand's arguments with short options combined in one word spelled out one per
+// word, as git reads them: -df is -d -f. An option in `valued` takes the rest of its word
+// as its value (-bname is -b name), or else the next word, which is kept as written. So
+// are long options, arguments, and every word from `--` on. judge.py's unbundle matches it.
+function unbundle(words: string[], valued: string[]): string[] {
+  const out: string[] = []
+  for (let k = 0; k < words.length; k += 1) {
+    const a = words[k] as string
+    if (a === '--') return [...out, ...words.slice(k)]
+    let takesNext = valued.includes(a)
+    if (/^-[^-]/.test(a)) {
+      for (let j = 1; j < a.length; j += 1) {
+        out.push(`-${a[j]}`)
+        if (valued.includes(`-${a[j]}`)) {
+          if (j + 1 < a.length) out.push(a.slice(j + 1))
+          else takesNext = true
+          break
+        }
+      }
+    } else {
+      out.push(a)
+    }
+    if (takesNext) {
+      out.push(...words.slice(k + 1, k + 2))
+      k += 1
+    }
+  }
+  return out
+}
 
 // Whether a git command can discard work at all, so the safe majority never reaches the judge.
 export function gitRisky(argv: string[]): boolean {
   let k = 0
   while (k < argv.length && (argv[k] as string).startsWith('-')) k += GIT_VALUE.has(argv[k] as string) ? 2 : 1
   const sub = argv[k]
-  const rest = argv.slice(k + 1)
+  const rest = unbundle(argv.slice(k + 1), GIT_VALUED.get(sub ?? '') ?? [])
   const has = (...flags: string[]): boolean => rest.some(a => flags.includes(a))
   switch (sub) {
     case 'reset':
       return has('--hard')
     case 'checkout':
-      return !has('-b', '-B', '--orphan') || has('-f', '--force')
+      // -b and --orphan make a new branch, which git refuses over one that exists; -B resets it.
+      return !has('-b', '--orphan') || has('-f', '--force')
     case 'restore':
       return !has('-S', '--staged') || has('-W', '--worktree')
     case 'switch':
-      return has('-f', '--force', '--discard-changes')
+      return has('-f', '--force', '--discard-changes', '-C', '--force-create') || rest.some(a => a.startsWith('--force-create='))
     case 'clean':
       return !has('-n', '--dry-run')
     case 'stash':
       return rest[0] === 'drop' || rest[0] === 'clear'
     case 'branch':
-      return has('-D') || (has('-d', '--delete') && has('-f', '--force'))
+      // Forced: -D deletes, -M and -C rename or copy over a branch, and -f with a name moves one.
+      return has('-f', '--force', '-D', '-M', '-C')
     case 'worktree':
       return rest[0] === 'remove'
     case 'rm':
-      return !has('--cached') && rest.some(a => a === '--force' || /^-[a-z]*f/.test(a))
+      return !has('--cached') && has('-f', '--force')
     case 'reflog':
       return rest[0] === 'expire' || rest[0] === 'delete'
     case 'gc':
@@ -1294,46 +1643,105 @@ function git(args: Word[], dir: DirState, ctx: Ctx, raw: string): void {
   emit(ctx, dir, [], raw, d => ({ op: 'git', dir: d, argv, cmd: short(raw) }))
 }
 
-function copy(mode: 'mv' | 'cp' | 'ln', name: string, args: Word[], dir: DirState, ctx: Ctx, raw: string): void {
-  let targetDir: Word | null = null
-  let noTargetDir = false
-  let noClobber = false
-  let force = false
-  const pos: Word[] = []
+// What an option of mv, cp, install or ln does about a destination that already exists:
+// `keep` it or `replace` it (the last of the two wins, as in BSD mv and cp and GNU mv;
+// GNU cp keeps on `-nf`, which this counts as replacing), `backup` it first so nothing is
+// lost, treat it as a file even when it is a folder (`noTargetDir`), or make folders and
+// copy nothing (`makesDirs`, install -d).
+type CopyOpt = 'keep' | 'replace' | 'backup' | 'noTargetDir' | 'makesDirs'
+type CopyKind = 'mv' | 'cp' | 'install' | 'ln'
+
+const COPY_SHARED: Record<string, CopyOpt> = {
+  '-b': 'backup', '--backup': 'backup', '-T': 'noTargetDir', '--no-target-directory': 'noTargetDir',
+}
+const MV_CP_OPTS: Record<string, CopyOpt> = {
+  ...COPY_SHARED, '-n': 'keep', '--no-clobber': 'keep', '-f': 'replace', '--force': 'replace', '-i': 'replace', '--interactive': 'replace',
+}
+// Each command's own options; `valued` are the short ones that take a value in every
+// version of it (BSD cp's and install's -S take none, so a path after one is still a path),
+// and `replaces` says whether an existing destination is replaced when no option says.
+const COPY_OPTS: Record<CopyKind, { opts: Record<string, CopyOpt>; valued: string; replaces: boolean }> = {
+  mv: { opts: MV_CP_OPTS, valued: 'tS', replaces: true },
+  cp: { opts: MV_CP_OPTS, valued: 't', replaces: true },
+  install: { opts: { ...COPY_SHARED, '-d': 'makesDirs', '--directory': 'makesDirs' }, valued: 'tmog', replaces: true },
+  // ln fails on a destination that exists unless -f, BSD's -F (which implies -f with -s)
+  // or a yes to -i has it replaced. Its -n and -h only stop it following a link to a folder.
+  ln: {
+    opts: { ...COPY_SHARED, '-f': 'replace', '--force': 'replace', '-F': 'replace', '-i': 'replace', '--interactive': 'replace' },
+    valued: 'tS',
+    replaces: false,
+  },
+}
+// --backup=none and =off make no backup, so only a value naming a kind of backup counts.
+const BACKS_UP = /^--backup=(t|numbered|existing|nil|simple|never)$/
+
+interface CopyOptions {
+  pos: Word[]
+  targetDir: Word | null
+  noTargetDir: boolean
+  replace: boolean
+  backup: boolean
+  makesDirs: boolean
+}
+
+// An option's value cut out of its word, as a word of its own; its glob characters stay literal.
+const quotedLiteral = (value: string): Word => ({ parts: [{ kind: 'lit', text: value, quoted: true }], raw: value })
+
+function setCopyOpt(o: CopyOptions, opt: CopyOpt | undefined): void {
+  if (opt === 'keep' || opt === 'replace') o.replace = opt === 'replace'
+  else if (opt === 'backup') o.backup = true
+  else if (opt === 'noTargetDir') o.noTargetDir = true
+  else if (opt === 'makesDirs') o.makesDirs = true
+}
+
+// One long option; returns how many of the following words it took as its value.
+function longCopyOpt(o: CopyOptions, kind: CopyKind, t: string, next: Word | undefined): number {
+  if (t === '--target-directory') {
+    o.targetDir = next ?? null
+    return 1
+  }
+  if (t.startsWith('--target-directory=')) o.targetDir = quotedLiteral(t.slice(19))
+  else if (/^--(suffix|mode|owner|group)$/.test(t)) return 1
+  else if (t.startsWith('--backup=')) setCopyOpt(o, BACKS_UP.test(t) ? 'backup' : undefined)
+  else setCopyOpt(o, COPY_OPTS[kind].opts[t])
+  return 0
+}
+
+// Combined short options (-fv, -t DIR, -tDIR); returns how many following words they took.
+function shortCopyOpts(o: CopyOptions, kind: CopyKind, t: string, next: Word | undefined): number {
+  for (let j = 1; j < t.length; j += 1) {
+    const ch = t[j] as string
+    if (COPY_OPTS[kind].valued.includes(ch)) {
+      const value = t.slice(j + 1)
+      if (ch === 't') o.targetDir = value ? quotedLiteral(value) : (next ?? null)
+      return value ? 0 : 1
+    }
+    setCopyOpt(o, COPY_OPTS[kind].opts[`-${ch}`])
+  }
+  return 0
+}
+
+function copyOptions(kind: CopyKind, args: Word[]): CopyOptions {
+  const o: CopyOptions = { pos: [], targetDir: null, noTargetDir: false, replace: COPY_OPTS[kind].replaces, backup: false, makesDirs: false }
   let ended = false
-  const valued = name.endsWith('install') ? 'tSmog' : 'tS'
   for (let k = 0; k < args.length; k += 1) {
     const w = args[k] as Word
     const t = text(w)
-    if (ended || t === null || !t.startsWith('-') || t === '-') {
-      pos.push(w)
-      continue
-    }
-    if (t === '--') ended = true
-    else if (t === '--target-directory') targetDir = args[++k] ?? null
-    else if (t.startsWith('--target-directory=')) targetDir = { parts: [{ kind: 'lit', text: t.slice(19), quoted: true }], raw: t }
-    else if (t === '--no-target-directory') noTargetDir = true
-    else if (t === '--no-clobber' || t.startsWith('--backup')) noClobber = true
-    else if (t === '--force') force = true
-    else if (/^--(suffix|mode|owner|group)$/.test(t)) k += 1
-    else if (!t.startsWith('--')) {
-      // Combined short options: -fv, -t DIR, -tDIR.
-      for (let j = 1; j < t.length; j += 1) {
-        const ch = t[j] as string
-        if (valued.includes(ch)) {
-          const value = t.slice(j + 1)
-          const valueWord = value ? { parts: [{ kind: 'lit' as const, text: value, quoted: true }], raw: value } : (args[++k] ?? null)
-          if (ch === 't') targetDir = valueWord
-          break
-        }
-        if (ch === 'T') noTargetDir = true
-        if (ch === 'n' || ch === 'b') noClobber = true
-        if (ch === 'f') force = true
-        if (ch === 'd' && name.endsWith('install')) return // install -d makes folders
-      }
-    }
+    if (ended || t === null || !t.startsWith('-') || t === '-') o.pos.push(w)
+    else if (t === '--') ended = true
+    else if (t.startsWith('--')) k += longCopyOpt(o, kind, t, args[k + 1])
+    else k += shortCopyOpts(o, kind, t, args[k + 1])
   }
-  if (mode === 'ln' && !force) noClobber = true
+  return o
+}
+
+function copy(mode: 'mv' | 'cp' | 'ln', name: string, args: Word[], dir: DirState, ctx: Ctx, raw: string): void {
+  const o = copyOptions(name.endsWith('install') ? 'install' : mode, args)
+  if (o.makesDirs) return
+  const { pos, noTargetDir } = o
+  // `ln [-f] TARGET` links into the working folder, under the target's own name.
+  const targetDir = o.targetDir ?? (mode === 'ln' && pos.length === 1 ? quotedLiteral('.') : null)
+  const noClobber = o.backup || !o.replace
   let sources = pos
   let dest: Word[]
   if (targetDir) {
@@ -1410,13 +1818,7 @@ function shell(cmd: Cmd, name: string, args: Word[], ctx: Ctx, raw: string): voi
     const t = text(args[k])
     if (t !== null && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(t)) {
       const body = args[k + 1]
-      if (!body) return
-      const v = expand(body, ctx, 'plain')
-      if ('unknown' in v) {
-        if (opaque(body.raw)) ctx.out.push({ op: 'unknown', what: v.unknown, cmd: short(raw) })
-      } else {
-        for (const s of v.values) walk(s, inner())
-      }
+      if (body) shellCode(body, ctx, raw, inner)
       return
     }
     if (t === '-o' || t === '+o') k += 1
@@ -1440,26 +1842,42 @@ function stdinCode(cmd: Cmd, ctx: Ctx): string | null {
   return stdin === null ? null : stdin.texts.join('\n')
 }
 
-function interpreter(cmd: Cmd, name: string, args: Word[], ctx: Ctx, raw: string): void {
-  let code: string | null = null
-  let script = false
+// A shell's -c code: read as commands when it can be expanded, else held when it could
+// do anything. Each value is walked in a context of its own from inner().
+function shellCode(body: Word, ctx: Ctx, raw: string, inner: () => Ctx): void {
+  const v = expand(body, ctx, 'plain')
+  if (!('unknown' in v)) {
+    for (const s of v.values) walk(s, inner())
+  } else if (isInput(body) || opaque(body.raw)) {
+    // Code with xargs's or -exec's input in it is held wherever the input sits.
+    ctx.out.push({ op: 'unknown', what: v.unknown, cmd: short(raw) })
+  }
+}
+
+const CODE_FLAGS = new Set(['-c', '-e', '-E', '--eval', '-r'])
+
+// Where an interpreter's code comes from: the word after -c, -e and kin, a script, or
+// else stdin.
+function codeSource(name: string, args: Word[]): { code: Word | undefined } | 'script' | 'stdin' {
   for (let k = 0; k < args.length; k += 1) {
     const t = text(args[k])
-    if (t !== null && ['-c', '-e', '-E', '--eval', '-r'].includes(t)) {
-      code = args[k + 1]?.raw ?? ''
-      break
-    }
-    if (name === 'deno' && t === 'eval') {
-      code = args[k + 1]?.raw ?? ''
-      break
-    }
-    if (t === null || !t.startsWith('-')) {
-      script = true
-      break
-    }
+    if ((t !== null && CODE_FLAGS.has(t)) || (name === 'deno' && t === 'eval')) return { code: args[k + 1] }
+    if (t === null || !t.startsWith('-')) return 'script'
     if (t === '-m' || t === '-W' || t === '-X') k += 1
   }
-  if (code === null && !script) code = stdinCode(cmd, ctx)
+  return 'stdin'
+}
+
+function interpreter(cmd: Cmd, name: string, args: Word[], ctx: Ctx, raw: string): void {
+  const src = codeSource(name, args)
+  const word = typeof src === 'object' ? src.code : undefined
+  // Code made from xargs's or -exec's input could do anything: held as `sh -c` with it is.
+  const fromInput = word !== undefined && isInput(word) ? expand(word, ctx, 'plain') : null
+  if (fromInput !== null && 'unknown' in fromInput) {
+    ctx.out.push({ op: 'unknown', what: fromInput.unknown, cmd: short(raw) })
+    return
+  }
+  const code = typeof src === 'object' ? (word?.raw ?? '') : src === 'stdin' ? stdinCode(cmd, ctx) : null
   if (code !== null && CODE_DELETES.test(code)) {
     ctx.out.push({ op: 'unknown', what: `inline ${name} code that deletes files`, cmd: short(raw) })
   }
