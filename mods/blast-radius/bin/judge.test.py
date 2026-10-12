@@ -678,6 +678,8 @@ def worktrees_by_name(s, slot, away):
 
     expect("worktree remove --force by its last name holds over its changes", remove("wt-away"), lost)
     expect("  and so does its name after --", s.judge(git("worktree", "remove", "--force", "--", "wt-away")), lost)
+    expect("worktree remove with no name passes, since git refuses it", s.judge(git("worktree", "remove", "--force")), [])
+    expect("  and so does one with nothing after --", s.judge(git("worktree", "remove", "--force", "--")), [])
     expect("  and so does its last two names", remove(os.path.join(os.path.basename(s.root), "wt-away")), lost)
     expect("  and its name in another case, which git matches where core.ignorecase is set", remove("WT-AWAY"), lost)
     os.makedirs(s.p("wt-away"))
