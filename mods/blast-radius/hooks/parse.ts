@@ -665,7 +665,7 @@ interface Grammar {
 
 interface Opt {
   name: string // `-u` or `--user`, without its value
-  value: Word | null
+  value?: Word | undefined // none for a flag, or for an option that ends the line
 }
 
 const literal = (s: string): Word => ({ parts: [{ kind: 'lit', text: s, quoted: false }], raw: s })
@@ -682,7 +682,7 @@ function optionWord(w: Word, flag: string, g: Grammar): { opts: Opt[]; next: str
   if (flag.startsWith('--')) {
     const eq = flag.indexOf('=')
     if (eq >= 0) return { opts: [{ name: flag.slice(0, eq), value: after(w, eq + 1) }], next: null }
-    return g.long?.includes(flag) ? { opts: [], next: flag } : { opts: [{ name: flag, value: null }], next: null }
+    return g.long?.includes(flag) ? { opts: [], next: flag } : { opts: [{ name: flag }], next: null }
   }
   const opts: Opt[] = []
   for (let j = 1; j < flag.length; j += 1) {
@@ -692,7 +692,7 @@ function optionWord(w: Word, flag: string, g: Grammar): { opts: Opt[]; next: str
       opts.push({ name, value: after(w, j + 1) })
       return { opts, next: null }
     }
-    opts.push({ name, value: null })
+    opts.push({ name })
   }
   return { opts, next: null }
 }
@@ -712,7 +712,7 @@ function readOpts(words: Word[], k: number, g: Grammar): { opts: Opt[]; k: numbe
     const found = optionWord(w, flag, g)
     opts.push(...found.opts)
     if (found.next !== null) {
-      opts.push({ name: found.next, value: words[k] ?? null })
+      opts.push({ name: found.next, value: words[k] })
       k += 1
     }
   }
@@ -723,7 +723,7 @@ function readOpts(words: Word[], k: number, g: Grammar): { opts: Opt[]; k: numbe
 function moveDir(dir: DirState, wrapper: string, opts: Opt[], chdir: string[]): DirState {
   for (const o of opts) {
     if (!chdir.includes(o.name)) continue
-    const d = o.value === null ? null : text(o.value)
+    const d = text(o.value)
     dir = d === null ? { unknown: `${wrapper} ${o.name} with an expansion` } : joinDir(dir, d)
   }
   return dir

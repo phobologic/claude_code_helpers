@@ -168,7 +168,7 @@ test('every wrapper skips its own options, in any form, to find its command', ()
   ])
   expect(only('env -S "$CMD"')).toMatchObject({ op: 'unknown', what: 'env -S: $CMD is not set on this command line' })
   // command -v and -V print where each name is found.
-  for (const command of ['command -v rm cp', 'command -pV rm cp', 'sudo -i', 'env -S']) {
+  for (const command of ['command -v rm cp', 'command -pV rm cp', 'sudo -i', 'env -S', 'env A=1 B=2']) {
     expect({ command, effects: analyze(command) }).toEqual({ command, effects: [] })
   }
 })
