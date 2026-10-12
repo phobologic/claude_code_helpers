@@ -1240,21 +1240,29 @@ function run(cmd: Cmd, words: Word[], dir: DirState, ctx: Ctx, piped: Cmd | null
   if (name === 'curl') return outputFile(args, /^-[a-zA-Z]*o$/, ['--output'], dir, local, raw)
   if (name === 'wget') return outputFile(args, /^-[a-zA-Z]*O$/, ['--output-document'], dir, local, raw)
   if (SHELLS.has(name)) return shell(cmd, name, args, local, raw)
-  if (name === 'eval') {
-    // An eval behind a wrapper (handle() reads a bare one), or one xargs or find -exec
-    // runs. Those start a program, and there is no eval program, though builtin, time,
-    // bash's command and zsh's `-` run the shell's own. Its text is read either way, in a
-    // context of its own, so what it sets never reaches the rest of the line.
-    evalText(args, local, raw, true)
-    return
-  }
+  if (name === 'eval') return wrappedEval(args, local, ctx, raw)
   if (INTERPRETERS.test(name)) return interpreter(cmd, name, args, ctx, raw)
+}
+
+// An eval behind a wrapper (handle() reads a bare one), or one xargs or find -exec runs.
+// sudo, env and nohup find no eval program and run nothing, but builtin, time, bash's
+// command and zsh's `-` run the shell's own, which keeps what it sets. So its text is
+// read in a context of its own, and every variable it changes is unknown to the rest of
+// the line: right whichever of the two runs it.
+function wrappedEval(args: Word[], local: Ctx, ctx: Ctx, raw: string): void {
+  const inner: Ctx = { ...child(local), depth: local.depth }
+  evalText(args, inner, raw, false)
+  for (const [k, val] of inner.vars) {
+    if (local.vars.get(k) !== val) ctx.vars.set(k, { unknown: `$${k} is set by ${short(raw)}, which may run in this shell` })
+  }
 }
 
 // eval's words, joined with spaces, read as a command line. eval is a builtin, so the
 // line's shell runs it: a cd, pushd or variable in it lasts, as it would written in the
 // eval's place. In a `subshell` (a pipeline stage, say) nothing it sets outlives it.
-function evalText(args: Word[], ctx: Ctx, raw: string, subshell: boolean): void {
+// bash and zsh skip a leading `--`, as eval's end of options.
+function evalText(words: Word[], ctx: Ctx, raw: string, subshell: boolean): void {
+  const args = text(words[0]) === '--' ? words.slice(1) : words
   const v = expandAll(args, ctx, 'plain')
   if ('unknown' in v) {
     const written = args.map(w => w.raw).join(' ')

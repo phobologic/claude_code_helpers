@@ -388,6 +388,10 @@ test("eval runs its text in the line's shell, so a cd, pushd or variable in it l
   expect(only('eval "D=/opt"; rm -rf "$D/x"')).toMatchObject({ dir: null, paths: ['/opt/x'] })
   // Its words are joined with spaces into one command line.
   expect(dirOf('eval cd /tmp; rm -rf x')).toBe('/tmp')
+  // A leading `--` ends eval's options and is not part of the text.
+  expect(dirOf('cd /tmp; eval -- "cd ~"; rm -rf Documents')).toBe('~')
+  // Its text is read once, from where the line was.
+  expect(analyze('eval "cd a; rm -rf x"')).toEqual([{ op: 'delete', dir: 'a', paths: ['x'], recursive: true, cmd: 'rm -rf x' }])
   // Text that can't be read is held when it looks destructive.
   expect(only('eval "rm -rf $X"')).toMatchObject({ op: 'unknown', what: 'eval: $X is not set on this command line' })
   // As a cd in its place would: through pushd and popd, an if, a nested eval and a
@@ -406,7 +410,7 @@ test("eval runs its text in the line's shell, so a cd, pushd or variable in it l
   expect(endOf('eval "echo abcd cdrom $W"')).toBe(null)
 })
 
-test('an eval in a pipeline stage or behind a wrapper sets nothing for the rest of the line', () => {
+test('an eval in a pipeline stage sets nothing for the rest of the line, and one behind a wrapper leaves what it sets unknown', () => {
   expect(dirOf('eval "cd /tmp" | cat; rm -rf x')).toBe(null)
   expect(dirOf('cat | eval "cd /tmp"; rm -rf x')).toBe(null)
   expect(endOf('eval "cd /srv" | cat')).toBe(null)
@@ -414,7 +418,17 @@ test('an eval in a pipeline stage or behind a wrapper sets nothing for the rest 
   expect(only('eval "D=/opt" | cat; rm -rf "$D/x"')).toMatchObject({ op: 'unknown', what: '$D is not set on this command line' })
   // sudo, nohup and env find no eval program, so it runs nothing, but its text is judged.
   expect(dirOf('sudo eval "cd /tmp"; rm -rf x')).toBe(null)
-  expect(only('nohup eval "D=/opt"; rm -rf "$D/x"')).toMatchObject({ op: 'unknown', what: '$D is not set on this command line' })
+  // builtin, command, time and zsh's `-` run the shell's eval, which keeps what it sets,
+  // so a variable a wrapped eval changes is unknown either way, and others keep their value.
+  expect(only('nohup eval "D=/opt"; rm -rf "$D/x"')).toMatchObject({
+    op: 'unknown',
+    what: '$D is set by nohup eval "D=/opt", which may run in this shell',
+  })
+  for (const w of ['builtin', 'command', 'time', '-']) {
+    expect(only(`D=/tmp; ${w} eval "D=~"; rm -rf "$D"`)).not.toMatchObject({ op: 'delete', paths: ['/tmp'] })
+  }
+  expect(only('D=/tmp; builtin eval "E=1"; rm -rf "$D"')).toMatchObject({ op: 'delete', paths: ['/tmp'] })
+  expect(only('D=/tmp; builtin eval "unset D"; rm -rf "$D"')).toMatchObject({ op: 'unknown' })
   expect(endOf('env eval "cd $W"')).toBe(null)
   expect(only('sudo eval "rm -rf ~/x"')).toMatchObject({ op: 'delete', dir: null, paths: ['~/x'] })
   // Measured from the folder the wrapper would run it in, like any wrapped command.
