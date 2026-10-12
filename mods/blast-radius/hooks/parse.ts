@@ -638,9 +638,17 @@ function splitWords(w: Word, ctx: Ctx): Word[] {
 // A word with its empty text parts ('' and "", the only text that can be empty) taken out
 // when it has other parts. They only keep a word from being dropped, and once the words
 // are split that is settled; left in, one would hide an option's leading `-`
-// (`sudo ""-u root`) or read as its value (`sudo -u"" root`).
+// (`sudo ""-u root`) or read as its value (`sudo -u"" root`). The text on each side of one
+// is joined again, as readWord's lit() would have joined it, since an option is read from
+// the word's first part alone: `sudo -""u root` runs `-u`, and `dd o""f=x` writes x.
 function withoutNulls(w: Word): Word {
-  const parts = w.parts.filter(p => !(p.kind === 'lit' && p.text === ''))
+  const parts: Part[] = []
+  for (const p of w.parts) {
+    if (p.kind === 'lit' && p.text === '') continue
+    const last = parts[parts.length - 1]
+    if (p.kind === 'lit' && last?.kind === 'lit' && last.quoted === p.quoted) parts[parts.length - 1] = { ...last, text: last.text + p.text }
+    else parts.push(p)
+  }
   return parts.length > 0 ? { parts, raw: w.raw } : w
 }
 

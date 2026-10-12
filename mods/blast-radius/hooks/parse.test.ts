@@ -334,6 +334,8 @@ test('a write to any other device is an overwrite, so the judge sees it', () => 
   })
   expect(only('echo x | tee /dev/sda')).toMatchObject({ op: 'overwrite', paths: ['/dev/sda'] })
   expect(only('cd /dev && dd if=x of=disk2')).toMatchObject({ op: 'overwrite', dir: '/dev', paths: ['disk2'] })
+  expect(only('dd if=x o""f=/dev/disk2')).toMatchObject({ op: 'overwrite', paths: ['/dev/disk2'] })
+  expect(only('dd if=x of""=/dev/disk2')).toMatchObject({ op: 'overwrite', paths: ['/dev/disk2'] })
   // A body that can't be expanded is checked by its text: a sink is harmless, a disk is not.
   expect(analyze('bash -c "echo $X > /dev/null"')).toEqual([])
   expect(analyze('bash -c "echo $X >/dev/stderr; echo $Y"')).toEqual([])
@@ -467,6 +469,11 @@ test('every wrapper skips its own options, in any form, to find its command', ()
     'sudo ""-u root rm -rf /opt/x',
     "sudo ''-u root rm -rf /opt/x",
     'X=; sudo ""$X-u root rm -rf /opt/x',
+    // One inside an option leaves the text on each side of it as one option.
+    'sudo -""u root rm -rf /opt/x',
+    'sudo -E""u root rm -rf /opt/x',
+    "sudo -E''u root rm -rf /opt/x",
+    'sudo --user""=root rm -rf /opt/x',
     'doas -u root rm -rf /opt/x',
     'nice -n5 rm -rf /opt/x',
     'nice --adjustment 5 rm -rf /opt/x',
