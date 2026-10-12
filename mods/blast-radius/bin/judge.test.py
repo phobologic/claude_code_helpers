@@ -7,14 +7,23 @@ sandbox stands in for the machine: HOME is a folder in it, and only its tmp/ cou
 as a temp folder, so "outside the repository" is somewhere the test owns.
 """
 
+import importlib.util
 import json
 import os
 import shutil
 import subprocess
 import tempfile
+import threading
+from types import SimpleNamespace
+from unittest import mock
 
 JUDGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "judge.py")
+_spec = importlib.util.spec_from_file_location("judge", JUDGE)
+judge_module = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(judge_module)
 GIT_ENV = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+REAL_GIT = shutil.which("git")
+TIMEOUT = 60
 
 failures = 0
 
@@ -82,11 +91,26 @@ class Sandbox:
     def p(self, *parts):
         return os.path.join(self.repo, *parts)
 
-    def judge(self, *effects, cwd=None, root=None, **extra):
+    def judge(self, *effects, cwd=None, root=None, git_log=None, **extra):
+        """The verdict; with `git_log`, each git command the judge runs is logged there."""
         env = {**os.environ, "HOME": self.home, "TMPDIR": self.tmp, "BLAST_RADIUS_TEMP_ROOTS": self.tmp}
+        if git_log:
+            env["PATH"] = self.git_shim(git_log) + os.pathsep + env["PATH"]
         req = {"sessionRoot": root or self.repo, "cwd": cwd or self.repo, "effects": list(effects), **extra}
-        r = subprocess.run(["python3", "-I", JUDGE], input=json.dumps(req), capture_output=True, text=True, env=env)
+        try:
+            r = subprocess.run(["python3", "-I", JUDGE], input=json.dumps(req), capture_output=True, text=True, env=env, timeout=TIMEOUT)
+        except subprocess.TimeoutExpired:
+            return {"hold": None, "findings": [{"kind": "timeout", "path": "", "detail": f"judge.py ran over {TIMEOUT}s"}], "notes": []}
         return json.loads(r.stdout)
+
+    def git_shim(self, log):
+        shim = os.path.join(self.root, "shim")
+        os.makedirs(shim, exist_ok=True)
+        with open(os.path.join(shim, "git"), "w") as f:
+            f.write(f'#!/bin/sh\necho "$*" >> "{log}"\nexec "{REAL_GIT}" "$@"\n')
+        os.chmod(os.path.join(shim, "git"), 0o755)
+        open(log, "w").close()
+        return shim
 
     def done(self):
         shutil.rmtree(self.root, ignore_errors=True)
@@ -101,6 +125,20 @@ def expect(name, v, want):
     check(name, got == sorted(want), f"got {got} {v['findings']}")
 
 
+def git_calls(log, sub):
+    """How many logged git commands ran the subcommand `sub`."""
+    with open(log) as f:
+        return sum(sub in line.split() for line in f)
+
+
+def load_judge():
+    """judge.py as a module, for the checks that need to stand in for the file system."""
+    spec = importlib.util.spec_from_file_location("blast_radius_judge", JUDGE)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def main():
     s = Sandbox()
     try:
@@ -109,8 +147,12 @@ def main():
         outside(s)
         overwrites_and_copies(s)
         finds(s)
+        many_paths(s)
+        owners(s)
+        tracked_files(s)
         git_ops(s)
         worktrees(s)
+        other_repos(s)
         subagent_folders(s)
         odd_cases(s)
     finally:
@@ -122,6 +164,7 @@ def main():
 def deletes(s):
     expect("deleting a committed, unchanged file passes", s.judge(delete("README.md")), [])
     write(s.p("src", "new.py"))
+    expect("an untracked file elsewhere doesn't hold a delete", s.judge(delete("README.md")), [])
     expect("deleting an untracked file holds", s.judge(delete("src/new.py")), [("uncommitted", "src/new.py")])
     expect("deleting a folder holding an untracked file holds", s.judge(delete("src")), [("uncommitted", "src/new.py")])
     os.remove(s.p("src", "new.py"))
@@ -229,7 +272,38 @@ def overwrites_and_copies(s):
     expect("a new file outside the repository is free", s.judge(overwrite("~/new.txt")), [])
     expect("overwriting a file in the repository is free", s.judge(overwrite("README.md")), [])
     expect("overwriting git's own files holds", s.judge(overwrite(".git/config")), [("git", ".git/config")])
-    expect("/dev is never a file to lose", s.judge(overwrite("/dev/null")), [])
+    for sink in ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/fd/1", "/dev/fd/3"):
+        expect(f"writing to {sink} loses nothing", s.judge(overwrite(sink)), [])
+    expect("cp to /dev/stdout loses nothing", s.judge(copy("cp", ["README.md"], "/dev/stdout")), [])
+    v = s.judge(overwrite("/dev/zero"))
+    expect("writing to any other device holds, as outside the repository", v, [("outside", "/dev/zero")])
+    check("  and says it is a device", any("(a device)" in f["detail"] for f in v["findings"]), v["findings"])
+    if os.path.exists("/dev/disk2"):  # the disk from the bug report, where this machine has one
+        v = s.judge(overwrite("/dev/disk2"))
+        expect("dd of=/dev/disk2 holds", v, [("outside", "/dev/disk2")])
+        check("  and says it is a device", any("(a device)" in f["detail"] for f in v["findings"]), v["findings"])
+        expect("cp onto /dev/disk2 holds", s.judge(copy("cp", ["README.md"], "/dev/disk2")), [("outside", "/dev/disk2")])
+    # Checked on the pattern itself: a real lstat through macOS's /dev/fd/.. fails now and then under load.
+    check("only a number after /dev/fd/ is a stream",
+          judge_module.SINK.fullmatch("/dev/fd/../zero") is None and judge_module.SINK.fullmatch("/dev/fd/12") is not None)
+    for spelling in ("/dev//null", "/dev/./null", os.path.relpath("/dev/null", s.repo)):
+        expect(f"another spelling of /dev/null loses nothing ({spelling})", s.judge(overwrite(spelling)), [])
+    # On Linux /dev/stdout resolves through /proc/self/fd/1 to whatever stdout is, perhaps a file
+    # outside; the path as written still marks it as the command's own stream.
+    class OutsideCtx:
+        def where(self, rp):
+            return "outside"
+
+        def show(self, rp):
+            return rp
+
+    with mock.patch.object(judge_module.os.path, "realpath", return_value=os.path.join(s.outside, "notes.txt")):
+        got = judge_module.judge_overwrite(OutsideCtx(), "/dev/stdout")
+    check("/dev/stdout is free wherever it resolves", got == [], got)
+    # A terminal such as /dev/ttyp0 or /dev/ttyS0, where the machine has one: only /dev/tty itself is free.
+    near = next((n for n in sorted(os.listdir("/dev")) if n.startswith("tty") and n[3:].isalnum()), None)
+    if near:
+        expect(f"/dev/{near} is not /dev/tty", s.judge(overwrite(f"/dev/{near}")), [("outside", f"/dev/{near}")])
     expect("mv onto an existing file outside holds", s.judge(copy("mv", ["README.md"], "~/.zshrc")), [("outside", "~/.zshrc")])
     write(os.path.join(s.outside, "README.md"))
     expect("mv into a folder that has the name holds", s.judge(copy("mv", ["README.md"], s.outside)), [("outside", os.path.join(s.outside, "README.md"))])
@@ -246,6 +320,120 @@ def finds(s):
     os.remove(s.p("src", "b.py"))
     v = s.judge(find(".", "-name", "x", "-delete"))
     check("a find that still has an action is never run", v["findings"][0]["kind"] == "unknown", v)
+
+
+def many_paths(s):
+    log = os.path.join(s.root, "git.log")
+    for i in range(40):
+        write(s.p("src", f"p{i}", "__pycache__", "m.pyc"))
+        write(s.p("src", f"p{i}", ".env"))
+    expect("a find listing 40 ignored files in 40 folders passes", s.judge(find("src", "-name", "*.pyc", "-print"), git_log=log), [])
+    n = git_calls(log, "rev-parse")
+    check("  asking git for the repository once per repository, not once per path", n < 5, f"{n} rev-parse calls")
+    v = s.judge(find("src", "-name", ".env", "-print"), git_log=log)
+    expect("a find listing 40 ignored .env files holds each one", v, [("uncommitted", f"src/p{i}/.env") for i in range(40)])
+    n = git_calls(log, "ls-files")
+    check("  with one ls-files for the repository, not one per file", n == 1, f"{n} ls-files calls")
+    for i in range(40):
+        shutil.rmtree(s.p("src", f"p{i}"))
+
+    j = load_judge()
+    ctx = SimpleNamespace(owners={}, scratch=[], notes=[], show=lambda p: p)
+    levels = [s.p("build"), s.p("build", "a"), s.p("build", "a", "b"), s.p("build", "a", "b", "c")]
+    write(os.path.join(levels[-1], "f.txt"))
+    write(s.p("build", "a", ".env"))
+    walked = []
+    real_walk, limit = j.walk, j.WALK_LIMIT
+    j.walk = lambda ctx, top, protected, nested: walked.append(top) or real_walk(ctx, top, protected, nested)
+    try:
+        protected, _ = j.search(ctx, s.repo, [(p, True) for p in reversed(levels)])
+        check("a delete of every level of a folder walks the folder once", walked == levels[:1], walked)
+        check("  and still finds what is deeper in it", protected == [s.p("build", "a", ".env")], protected)
+        walked.clear()
+        j.WALK_LIMIT = 0
+        j.search(ctx, s.repo, [(p, True) for p in levels])
+        check("a folder too large to search fully doesn't stand in for the folders inside it", walked == levels, walked)
+    finally:
+        j.walk, j.WALK_LIMIT = real_walk, limit
+    shutil.rmtree(s.p("build", "a"))
+    check("covered: a path inside a root", j.covered("/a/b/c", {"/a/b"}))
+    check("covered: a root itself", j.covered("/a/b", {"/a/b"}))
+    check("covered: a name sharing a root's prefix is not inside it", not j.covered("/a/bc", {"/a/b"}))
+    check("covered: a root's parent is not inside it", not j.covered("/a", {"/a/b"}))
+
+
+def owners(s):
+    """The repository a deleted path is judged by is the one git finds from its folder."""
+    os.makedirs(s.p("build", "dep"))
+    sh("git", "init", "-q", s.p("build", "dep"), cwd=s.repo)
+    write(s.p("build", "dep", "new.txt"))
+    v = s.judge(delete("build/dep/new.txt"))
+    check("a file in a nested repository is judged by it, not by the ignored folder around it",
+          v["hold"] and all(f["path"].startswith("build/dep") for f in v["findings"]), v)
+    shutil.rmtree(s.p("build", "dep"))
+    sh("git", "init", "-q", "--bare", s.p("build", "backup.git"), cwd=s.repo)
+    expect("a file in a bare repository holds, though the folder around it is ignored",
+           s.judge(delete("build/backup.git/HEAD")), [("uncommitted", "build/backup.git/HEAD")])
+    write(s.p("build", "backup.git", ".env"))
+    expect("  and so does a .env in it when the folder around it is deleted",
+           s.judge(delete("build")), [("uncommitted", "build/backup.git/.env")])
+    shutil.rmtree(s.p("build", "backup.git"))
+    os.makedirs(s.p("src", "fake", ".git"))
+    write(s.p("src", "fake", "x.txt"))
+    expect("an empty .git folder is no repository, as git sees it", s.judge(delete("src/fake/x.txt")), [("uncommitted", "src/fake/x.txt")])
+    shutil.rmtree(s.p("src", "fake"))
+
+    j = load_judge()
+    mount = s.p("build", "mnt")
+    os.makedirs(os.path.join(mount, "x"))
+    real_stat, real_toplevel = os.stat, j.toplevel
+
+    def stat(p, *a, **kw):  # the mount and what is in it are on another file system
+        st = real_stat(p, *a, **kw)
+        return os.stat_result((*st[:2], st.st_dev + 1, *st[3:])) if isinstance(p, str) and j.under(p, mount) else st
+
+    os.stat = stat
+    j.toplevel = lambda path: None if path == mount else real_toplevel(path)  # git stops at the mount
+    try:
+        got = j.owner_of(SimpleNamespace(owners={}), os.path.join(mount, "x"))
+    finally:
+        os.stat, j.toplevel = real_stat, real_toplevel
+    check("a folder on another file system gets git's own answer there, not its parent's", got is None, got)
+    shutil.rmtree(mount)
+    ctx = SimpleNamespace(owners={})
+    os.makedirs(s.p("src", "deep"))
+    first = j.owner_of(ctx, s.p("src", "deep"))
+    os.rmdir(s.p("src", "deep"))
+    looks, real_lstat = [], os.lstat
+    os.stat = lambda p, *a, **kw: looks.append(p) or real_stat(p, *a, **kw)
+    os.lstat = lambda p, *a, **kw: looks.append(p) or real_lstat(p, *a, **kw)
+    try:
+        again = j.owner_of(ctx, s.p("src"))
+    finally:
+        os.stat, os.lstat = real_stat, real_lstat
+    check("a folder passed on the way up is answered later without looking at the disk",
+          first == again == s.repo and not looks, (first, again, looks))
+    out = []
+    t = threading.Thread(target=lambda: out.append(j.owner_of(SimpleNamespace(owners={}), "/")), daemon=True)
+    t.start()
+    t.join(TIMEOUT)
+    check("looking for the repository stops at /", out == [None], out)
+
+
+def tracked_files(s):
+    write(s.p("src", ".env"))
+    sh("git", "add", "-f", "src/.env", cwd=s.repo)
+    s.commit("a tracked .env")
+    write(s.p("src", "sub", ".env"))
+    write(s.p("src", "local.db"))
+    v = s.judge(delete("src/.env", "src/sub/.env", "src/local.db"))
+    expect("a committed .env passes, while an ignored one holds", v, [("uncommitted", "src/sub/.env"), ("uncommitted", "src/local.db")])
+    check("  and an untracked .db says it is untracked, not ignored",
+          [f["detail"] for f in v["findings"] if f["path"] == "src/local.db"] == ["untracked"], v["findings"])
+    shutil.rmtree(s.p("src", "sub"))
+    os.remove(s.p("src", "local.db"))
+    sh("git", "rm", "-q", "src/.env", cwd=s.repo)
+    s.commit("drop the tracked .env")
 
 
 def git_ops(s):
@@ -321,6 +509,13 @@ def worktrees(s):
            [("uncommitted", os.path.join(away, "README.md"))])
     expect("from an agent's worktree, worktree remove --force of another worktree's changes holds",
            s.judge(git("worktree", "remove", "--force", away), cwd=slot), [("uncommitted", os.path.join(away, "README.md"))])
+    expect("deleting a worktree outside the repository folder holds over its changes", s.judge(delete(away)),
+           [("uncommitted", os.path.join(away, "README.md"))])
+    write(os.path.join(away, ".env"))
+    sh("git", "add", "-f", ".env", cwd=away)
+    write(os.path.join(away, "sub", ".env"))
+    expect("worktree remove holds the ignored .env in it, not the one git has",
+           s.judge(git("worktree", "remove", away)), [("uncommitted", os.path.join(away, "sub", ".env"))])
 
     copy_repo = os.path.join(s.tmp, "review-scratch")
     sh("git", "clone", "-q", s.repo, copy_repo, cwd=s.root)
@@ -368,8 +563,9 @@ def throwaway_history(s, copy_repo):
     copy_wt = os.path.join(s.root, "copy-wt")
     sh("git", "worktree", "add", "-q", "-b", "copy-wt", copy_wt, cwd=copy_repo)
     write(os.path.join(copy_wt, "README.md"), "kept outside\n")
-    expect("a throwaway copy's worktree kept outside a temp folder still holds its changes on remove --force",
-           s.judge(git("worktree", "remove", "--force", copy_wt), cwd=copy_repo), [("uncommitted", os.path.join(copy_wt, "README.md"))])
+    # Not one of the session's worktrees, so the judge holds it without running git there.
+    expect("a throwaway copy's worktree kept outside a temp folder still holds on remove --force",
+           s.judge(git("worktree", "remove", "--force", copy_wt), cwd=copy_repo), [("history", copy_wt)])
 
     other = os.path.join(s.root, "other-repo")
     sh("git", "init", "-q", "-b", "main", other, cwd=s.root)
@@ -384,6 +580,107 @@ def throwaway_history(s, copy_repo):
     sh("git", "checkout", "-q", "--detach", "main", cwd=other_wt)
     expect("a worktree in a temp folder still holds its repository's unmerged branch",
            s.judge(git("branch", "-D", "work"), cwd=other_wt), [("history", "work")])
+
+
+def other_repos(s):
+    # A repository's config can name commands that git status runs (core.fsmonitor, a
+    # clean filter for a changed file). Each trap below appends to `marker` if git runs
+    # one, so a check that runs git in that repository shows up.
+    marker = os.path.join(s.root, "ran")
+    fsmonitor = os.path.join(s.root, "traps", "fsmonitor.sh")
+    clean = os.path.join(s.root, "traps", "clean.sh")
+    write(fsmonitor, f"#!/bin/sh\necho fsmonitor >> '{marker}'\n")
+    write(clean, f"#!/bin/sh\necho clean >> '{marker}'\nexec cat\n")
+    os.chmod(fsmonitor, 0o755)
+    os.chmod(clean, 0o755)
+
+    def trap(repo):
+        """Commits a .txt file run through a clean filter, then sets both traps."""
+        write(os.path.join(repo, ".gitattributes"), "*.txt filter=trap\n")
+        write(os.path.join(repo, "a.txt"))
+        sh("git", "add", "-A", cwd=repo)
+        sh("git", "commit", "-q", "-m", "trap", cwd=repo)
+        sh("git", "config", "core.fsmonitor", fsmonitor, cwd=repo)
+        sh("git", "config", "filter.trap.clean", clean, cwd=repo)
+
+    def touch(path):
+        """Same size, new content: git status has to run the clean filter to tell."""
+        write(path, "y\n")
+
+    def ran():
+        if not os.path.exists(marker):
+            return ""
+        with open(marker) as f:
+            return f.read()
+
+    def judged(*effects, **kw):
+        if os.path.exists(marker):
+            os.remove(marker)
+        return s.judge(*effects, **kw)
+
+    pkg = s.p("build", "pkg")  # say, an archive extracted into the project
+    sh("git", "init", "-q", pkg, cwd=s.repo)
+    trap(pkg)
+    touch(os.path.join(pkg, "a.txt"))
+    expect("deleting inside a nested repository holds without running git there", judged(delete("build/pkg/*")),
+           [("history", "build/pkg")])
+    check("  and its config ran nothing", not ran(), ran())
+    shutil.rmtree(pkg)
+
+    other = os.path.join(s.root, "other")
+    sh("git", "init", "-q", "-b", "main", other, cwd=s.root)
+    write(os.path.join(other, ".env"))
+    trap(other)
+    wt = s.p("build", "box", "wt")
+    sh("git", "worktree", "add", "-q", "-b", "wt", wt, cwd=other)
+    touch(os.path.join(wt, "a.txt"))
+    # Its .env is reported as git-ignored: the session's git is asked, never the other repository's.
+    expect("a folder holding another repository's worktree holds without running git there", judged(delete("build/box")),
+           [("history", "build/box/wt"), ("uncommitted", "build/box/wt/.env")])
+    check("  and its config ran nothing", not ran(), ran())
+    expect("worktree remove of a folder that isn't the session's worktree holds without running git there",
+           judged(git("worktree", "remove", "--force", "build/box/wt")), [("history", "build/box/wt")])
+    check("  and its config ran nothing", not ran(), ran())
+    shutil.rmtree(s.p("build", "box"))
+    shutil.rmtree(other)
+
+    write(s.p("src", "new.py"))
+    sh("git", "config", "core.fsmonitor", fsmonitor, cwd=s.repo)
+    expect("the session's own repository is still checked", judged(delete("src/new.py")), [("uncommitted", "src/new.py")])
+    check("  without starting its file monitor", not ran(), ran())
+    sh("git", "config", "--unset", "core.fsmonitor", cwd=s.repo)
+    os.remove(s.p("src", "new.py"))
+
+    outer = os.path.join(s.root, "wt-outer")
+    inner = os.path.join(outer, "box", "inner")
+    sh("git", "worktree", "add", "-q", "-b", "outer", outer, cwd=s.repo)
+    sh("git", "worktree", "add", "-q", "-b", "inner", inner, cwd=s.repo)
+    write(os.path.join(inner, "new.txt"))
+    expect("a session worktree nested in another is still checked", s.judge(delete("box"), cwd=outer),
+           [("uncommitted", inner), ("uncommitted", os.path.join(inner, "new.txt"))])
+    sh("git", "worktree", "remove", "--force", inner, cwd=s.repo)
+    sh("git", "worktree", "remove", "--force", outer, cwd=s.repo)
+
+    slot = s.p(".worktrees", "slot-env")
+    sh("git", "worktree", "add", "-q", "-b", "slot-env", slot, cwd=s.repo)
+    write(os.path.join(slot, ".env"))
+    sh("git", "add", "-f", ".env", cwd=slot)
+    sh("git", "commit", "-q", "-m", "env", cwd=slot)
+    expect("a committed .env in the worktree a session runs in is asked of that worktree",
+           s.judge(delete(".env"), cwd=slot, root=slot), [])
+    write(s.p(".env"))
+    sh("git", "add", "-f", ".env", cwd=s.repo)
+    sh("git", "commit", "-q", "-m", "main env", cwd=s.repo)
+    expect("a committed .env in another session worktree is asked of that worktree",
+           s.judge(delete(s.p(".env")), cwd=slot, root=slot), [])
+    sh("git", "rm", "-q", "-f", ".env", cwd=s.repo)
+    sh("git", "commit", "-q", "-m", "drop env", cwd=s.repo)
+    sh("git", "worktree", "remove", "--force", slot, cwd=s.repo)
+
+    os.makedirs(s.p("build", "plain"))
+    expect("worktree remove of a plain folder passes, since git refuses it",
+           s.judge(git("worktree", "remove", "build/plain")), [])
+    os.rmdir(s.p("build", "plain"))
 
 
 def subagent_folders(s):
