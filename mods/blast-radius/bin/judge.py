@@ -86,6 +86,47 @@ def toplevel(path):
     return os.path.realpath(t.strip()) if t and t.strip() else None
 
 
+def could_stop_git(d):
+    """Whether git, looking for the repository from `d` or a folder inside it, could stop at `d`.
+
+    git stops at a folder holding `.git`, at one that is itself a bare repository (it
+    holds HEAD), at /, and where the folder above is on another file system.
+    """
+    if os.path.lexists(os.path.join(d, ".git")) or os.path.lexists(os.path.join(d, "HEAD")):
+        return True
+    parent = os.path.dirname(d)
+    return parent == d or os.stat(d).st_dev != os.stat(parent).st_dev
+
+
+def owner_of(ctx, d):
+    """The working copy holding the real folder `d`, as `toplevel` finds it.
+
+    A folder where git can't stop has its parent's answer, so git runs once per folder
+    where the answer can change (each repository's top, mostly) rather than once per
+    path. `d` must be a real path, so its parents are the folders git walks.
+    """
+    chain = []
+    while d not in ctx.owners:
+        if could_stop_git(d):
+            ctx.owners[d] = toplevel(d)
+            break
+        chain.append(d)
+        d = os.path.dirname(d)
+    for c in chain:
+        ctx.owners[c] = ctx.owners[d]
+    return ctx.owners[d]
+
+
+def covered(path, roots):
+    """Whether `path` is one of the set `roots` or inside one: one lookup per folder above it."""
+    while path not in roots:
+        parent = os.path.dirname(path)
+        if parent == path:
+            return False
+        path = parent
+    return True
+
+
 def finding(kind, path, detail):
     return {"kind": kind, "path": path, "detail": detail}
 
@@ -127,6 +168,7 @@ class Ctx:
         # Linked worktrees inside the repository folder are agents' scratch space.
         self.scratch = [w for w in self.worktrees[1:] if under(w, self.main) and w != self.top] if self.main else []
         self.notes = []
+        self.owners = {}  # folder -> the working copy git finds from it (owner_of)
 
     def where(self, rp):
         if ".git" in rp.split("/"):
@@ -223,9 +265,16 @@ def is_protected(name):
     return name not in NOT_PROTECTED and any(fnmatchcase(name, p) for p in PROTECTED)
 
 
-def tracked(path):
-    out = git_out(["--literal-pathspecs", "ls-files", "-z", "--", os.path.basename(path)], os.path.dirname(path))
-    return bool(out)
+def tracked(ctx, paths):
+    """Which of `paths` are in git's index: one `git ls-files` per repository holding them."""
+    by_owner = {}
+    for p in paths:
+        by_owner.setdefault(owner_of(ctx, os.path.dirname(p)), set()).add(p)
+    found = set()
+    for owner, ps in by_owner.items():
+        out = git_out(["ls-files", "-z"], owner) if owner else None
+        found |= ps & {os.path.join(owner, e) for e in (out or "").split("\0") if e}
+    return found
 
 
 def changes(repo, untracked):
@@ -306,7 +355,7 @@ def judge_deletes(ctx, items):
         elif w == "nogit":
             findings.append(finding("uncommitted", ctx.show(rp), "not in a git repository, so it can't be restored"))
         elif w == "inside":
-            owner = toplevel(os.path.dirname(rp)) or (rp if rp in ctx.worktrees else None)
+            owner = owner_of(ctx, os.path.dirname(rp)) or (rp if rp in ctx.worktrees else None)
             if owner is None:
                 findings.append(finding("uncommitted", ctx.show(rp), "not in git, so it can't be restored"))
             else:
@@ -316,30 +365,40 @@ def judge_deletes(ctx, items):
     return findings
 
 
-def judge_in_repo(ctx, owner, entries):
-    findings = []
-    targets = [rp for rp, _ in entries]
-    lost = {}
-    for path, what in changes(owner, untracked=True):
-        if any(under(path, t) for t in targets):
-            lost[path] = what
+def search(ctx, owner, entries):
+    """Protected files and nested repositories in the deleted `entries`, as walk finds them."""
     protected, nested = [], []
-    for rp, isdir in entries:
+    searched = set()  # folders walked in full: nothing inside them needs a second walk
+    for rp, isdir in sorted(entries):  # a folder sorts before what is inside it
         if VENDORED & set(os.path.relpath(rp, owner).split("/")):
             continue  # installed files: rebuilt, never kept
         if not isdir:
             if is_protected(os.path.basename(rp)):
                 protected.append(rp)
+        elif covered(rp, searched):
+            continue
         elif walk(ctx, rp, protected, nested):
             ctx.notes.append(f"{ctx.show(rp)} is too large to search fully for .env files and nested repositories.")
+        else:
+            searched.add(rp)
+    return protected, nested
+
+
+def judge_in_repo(ctx, owner, entries):
+    findings = []
+    targets = {rp for rp, _ in entries}
+    lost = {path: what for path, what in changes(owner, untracked=True) if covered(path, targets)}
+    protected, nested = search(ctx, owner, entries)
     for repo, kind in nested:
         if kind == "repo":
             findings.append(finding("history", ctx.show(repo), "a separate git repository: its history would be deleted"))
         else:
             for path, what in changes(repo, untracked=True):
                 lost[path] = what
-    for path in protected:
-        if path not in lost and not tracked(path):
+    unsure = [p for p in protected if p not in lost]
+    known = tracked(ctx, unsure)
+    for path in unsure:
+        if path not in known:
             lost[path] = "ignored by git, so it can't be restored"
     findings += [finding("uncommitted", ctx.show(p), what) for p, what in sorted(lost.items())]
     return findings
@@ -586,7 +645,8 @@ def git_worktree(ctx, top, cwd, rest):
         findings += [finding("uncommitted", ctx.show(path), what) for path, what in changes(p, untracked=True)]
     protected = []
     walk(ctx, p, protected, [])
-    findings += [finding("uncommitted", ctx.show(f), "ignored by git, so it can't be restored") for f in protected if not tracked(f)]
+    known = tracked(ctx, protected)
+    findings += [finding("uncommitted", ctx.show(f), "ignored by git, so it can't be restored") for f in protected if f not in known]
     return findings
 
 
