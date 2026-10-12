@@ -18,6 +18,12 @@ The policy goes by where the affected files are, not where the command runs:
 - The session's repository: held only when work would be lost that git can't give
   back: untracked or modified files, ignored files that look like secrets or local
   data, a nested repository's history, commits on no other branch, stashes.
+- Another repository inside it (a clone, a submodule, an extracted archive with its
+  own .git): deleting in it is always held. Delete checks run git only in the session's
+  own worktrees, since git run in another repository reads that repository's config,
+  which can run commands (core.fsmonitor, clean filters) before the person is even
+  asked. git commands that name another repository are still checked by running git
+  there (cc-8res).
 - An agent's scratch worktree (a linked worktree inside the repository folder, other
   than the one the session runs in), and what temp folders and Claude's memory folders
   hold: free. A temp or memory folder itself is held like anywhere else.
@@ -34,6 +40,7 @@ import glob
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -53,7 +60,13 @@ VENDORED = {
     "DerivedData", "site-packages",
 }
 FIND_ACTIONS = {"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"}
+# Where a write loses nothing: the null device, the terminal and the command's own
+# streams. Any other /dev path (a disk, say) is judged like any file outside the repository.
+SINK = re.compile(r"/dev/(?:null|stdout|stderr|tty|fd/[0-9]+)")
 PLACEHOLDER = re.compile("\x01(\\w+)\x01")
+SEPARATE = "a separate git repository: its work can't be checked"
+# How hooks/parse.ts escapeGlob() marks a quoted glob character: [*], [?] or [[].
+ESCAPED = re.compile(r"\[([*?[])\]")
 # Where files are free to lose (see Ctx.where).
 FREE = ("scratch", "temp")
 # git subcommands that change what every worktree of a repository shares rather than
@@ -108,8 +121,11 @@ def decode(b):
 
 
 def git(args, cwd, timeout=60):
+    # A check never starts the repository's file monitor, a command its config names.
+    # Clean filters can't be switched off this way, which is why delete checks only run
+    # git in the session's own worktrees (see judge_deletes).
     try:
-        return subprocess.run(["git", *args], cwd=cwd, env=GIT_ENV, capture_output=True, timeout=timeout)
+        return subprocess.run(["git", "-c", "core.fsmonitor=false", *args], cwd=cwd, env=GIT_ENV, capture_output=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired):
         return None
 
@@ -234,11 +250,18 @@ def base_dir(ctx, d):
 
 def expand(ctx, base, word, must_exist=True):
     w = subst(ctx, word)
+    words = [w]
     if glob.has_magic(w):
         pattern = w if os.path.isabs(w) else os.path.join(glob.escape(base), w)
-        return sorted(glob.glob(pattern))  # like bash: * skips dotfiles
-    p = w if os.path.isabs(w) else os.path.join(base, w)
-    return [p] if not must_exist or os.path.lexists(p) else []
+        found = sorted(glob.glob(pattern))  # like bash: * skips dotfiles
+        if found:
+            return found
+        # Like bash, a pattern that matches nothing is passed on as it is, so `rm -rf
+        # app/[id]` removes the folder named [id]. A quoted glob character arrives as
+        # [*], which can't be told from a typed [*], so both readings are judged.
+        words = sorted({w, ESCAPED.sub(r"\1", w)})
+    paths = [p if os.path.isabs(p) else os.path.join(base, p) for p in words]
+    return [p for p in paths if not must_exist or os.path.lexists(p)]
 
 
 def resolve_delete(p):
@@ -253,6 +276,9 @@ def resolve_delete(p):
 def describe(rp):
     if os.path.islink(rp):
         return "a symlink"
+    mode = os.lstat(rp).st_mode
+    if stat.S_ISBLK(mode) or stat.S_ISCHR(mode):
+        return "a device"  # its size says nothing about what is on it
     if not os.path.isdir(rp):
         return "a file, " + size(os.lstat(rp).st_size)
     files, total, capped = 0, 0, False
@@ -275,8 +301,12 @@ def is_protected(name):
     return name not in NOT_PROTECTED and any(fnmatchcase(name, p) for p in PROTECTED)
 
 
-def tracked(path):
-    out = git_out(["--literal-pathspecs", "ls-files", "-z", "--", os.path.basename(path)], os.path.dirname(path))
+def tracked(ctx, path):
+    # Asked of the session's innermost worktree holding `path`, never from the file's
+    # own folder: git there could find another repository (a folder laid out as a bare
+    # repository needs no .git) and run its config.
+    repo = max((w for w in ctx.worktrees if under(path, w)), key=len)
+    out = git_out(["--literal-pathspecs", "ls-files", "-z", "--", os.path.relpath(path, repo)], repo)
     return bool(out)
 
 
@@ -369,6 +399,9 @@ def judge_deletes(ctx, items):
 
 
 def judge_in_repo(ctx, owner, entries):
+    if owner not in ctx.worktrees:
+        # A repository nested in the session's: git status there would run its config.
+        return [finding("history", ctx.show(owner), SEPARATE)]
     findings = []
     targets = [rp for rp, _ in entries]
     lost = {}
@@ -384,23 +417,33 @@ def judge_in_repo(ctx, owner, entries):
                 protected.append(rp)
         elif walk(ctx, rp, protected, nested):
             ctx.notes.append(f"{ctx.show(rp)} is too large to search fully for .env files and nested repositories.")
-    for repo, kind in nested:
-        if kind == "repo":
-            findings.append(finding("history", ctx.show(repo), "a separate git repository: its history would be deleted"))
-        else:
-            for path, what in changes(repo, untracked=True):
-                lost[path] = what
+    findings += judge_nested(ctx, nested, lost)
     for path in protected:
-        if path not in lost and not tracked(path):
+        if path not in lost and not tracked(ctx, path):
             lost[path] = "ignored by git, so it can't be restored"
     findings += [finding("uncommitted", ctx.show(p), what) for p, what in sorted(lost.items())]
     return findings
 
 
+def judge_nested(ctx, nested, lost):
+    """Findings for the repositories walk() found; a session worktree's changes go into `lost`."""
+    findings = []
+    for repo, kind in nested:
+        if kind == "repo":
+            findings.append(finding("history", ctx.show(repo), "a separate git repository: its history would be deleted"))
+        elif repo in ctx.worktrees:
+            for path, what in changes(repo, untracked=True):
+                lost[path] = what
+        else:
+            # Its .git file can point at any git folder, whose config git status would run.
+            findings.append(finding("history", ctx.show(repo), SEPARATE))
+    return findings
+
+
 def judge_overwrite(ctx, p):
-    if p.startswith("/dev/"):
-        return []
     rp = ondisk(p)  # a write goes through links to their target
+    if SINK.fullmatch(p) or SINK.fullmatch(rp):  # /dev//null and kin are still the null device
+        return []
     if not os.path.exists(rp):
         return []
     w = ctx.where(rp)
@@ -637,12 +680,16 @@ def git_worktree(ctx, top, cwd, rest):
     p = ondisk(os.path.join(cwd, os.path.expanduser(pos[0])))
     if not os.path.isdir(p) or ctx.where(p) in FREE:
         return []
+    if p not in ctx.worktrees:
+        if not os.path.lexists(os.path.join(p, ".git")):
+            return []  # not a working tree: git refuses
+        return [finding("history", ctx.show(p), SEPARATE)]  # git status there would run its config
     findings = []
     if any(a in ("-f", "--force") for a in rest):
         findings += [finding("uncommitted", ctx.show(path), what) for path, what in changes(p, untracked=True)]
     protected = []
     walk(ctx, p, protected, [])
-    findings += [finding("uncommitted", ctx.show(f), "ignored by git, so it can't be restored") for f in protected if not tracked(f)]
+    findings += [finding("uncommitted", ctx.show(f), "ignored by git, so it can't be restored") for f in protected if not tracked(ctx, f)]
     return findings
 
 

@@ -74,11 +74,39 @@ test('variables set on the line, loops and mktemp expand; others are unknown', (
   expect(only('while read -r f; do rm "$f"; done < list')).toMatchObject({ op: 'unknown' })
 })
 
-test('redirects that truncate are overwrites; appends, fds and /dev are not', () => {
+test('redirects that truncate are overwrites; appends, fds and /dev/null and kin are not', () => {
   expect(only('echo hi > out.txt 2>&1')).toMatchObject({ op: 'overwrite', paths: ['out.txt'] })
   expect(only('echo hi >| ~/.zshrc')).toMatchObject({ op: 'overwrite', paths: ['~/.zshrc'] })
   expect(only('cmd &> run.log')).toMatchObject({ op: 'overwrite', paths: ['run.log'] })
   expect(only('cmd > "$OUT"')).toMatchObject({ op: 'unknown' })
+  expect(only('cat image > /dev/disk2')).toMatchObject({ op: 'overwrite', paths: ['/dev/disk2'] })
+  expect(only('cmd > /dev/fd/../disk2')).toMatchObject({ op: 'overwrite', paths: ['/dev/fd/../disk2'] })
+  expect(only('cmd > /dev/nullx')).toMatchObject({ op: 'overwrite', paths: ['/dev/nullx'] })
+  expect(only('cmd > build/dev/null')).toMatchObject({ op: 'overwrite', paths: ['build/dev/null'] })
+})
+
+test('writes to /dev/null, /dev/stdout, /dev/stderr, /dev/tty and /dev/fd/N change nothing', () => {
+  for (const sink of ['/dev/null', '/dev/stdout', '/dev/stderr', '/dev/tty', '/dev/fd/3']) {
+    for (const command of [`cmd > ${sink}`, `cmd >&${sink}`, `echo x | tee ${sink}`, `dd if=/dev/zero of=${sink}`, `curl -o ${sink} https://example.com`]) {
+      expect({ command, effects: analyze(command) }).toEqual({ command, effects: [] })
+    }
+  }
+})
+
+test('a write to any other device is an overwrite, so the judge sees it', () => {
+  expect(only('dd if=/dev/zero of=/dev/disk2')).toEqual({
+    op: 'overwrite', dir: null, paths: ['/dev/disk2'], cmd: 'dd if=/dev/zero of=/dev/disk2',
+  })
+  expect(only('echo x | tee /dev/sda')).toMatchObject({ op: 'overwrite', paths: ['/dev/sda'] })
+  expect(only('cd /dev && dd if=x of=disk2')).toMatchObject({ op: 'overwrite', dir: '/dev', paths: ['disk2'] })
+  // A body that can't be expanded is checked by its text: a sink is harmless, a disk is not.
+  expect(analyze('bash -c "echo $X > /dev/null"')).toEqual([])
+  expect(analyze('bash -c "echo $X >/dev/stderr; echo $Y"')).toEqual([])
+  expect(analyze('bash -c "echo $X > /dev/null && echo $Y"')).toEqual([])
+  expect(analyze('eval echo $X \\>/dev/null')).toEqual([])
+  expect(only('bash -c "echo $X > /dev/disk2"')).toMatchObject({ op: 'unknown' })
+  expect(only('bash -c "echo $X > /dev/null2"')).toMatchObject({ op: 'unknown' })
+  expect(analyze('bash -c "x=`cmd $Y 2>/dev/null`"')).toEqual([])
 })
 
 test('heredoc bodies are text, except where a shell or interpreter reads them', () => {
