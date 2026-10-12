@@ -312,15 +312,21 @@ test('a zsh line that may turn word splitting on reads later unquoted variables 
     'set -- yes',
     'set -- shwordsplitter',
     'set -- foo.yml',
+    'set -- my_shwordsplit',
     'echo options[shwordsplit]=on',
     'typeset -g opts[shwordsplit]=on',
+    'myoptions[shwordsplit]=on',
+    '{ setopt; }',
   ]
   for (const opt of unchanged) {
     const line = `${opt}; F="a b"; rm $F`
     expect([line, analyzeLine(line, 'zsh').effects]).toMatchObject([line, [{ op: 'delete', paths: ['a b'] }]])
   }
   // bash has none of these, so its reading stays.
-  expect(analyzeLine('setopt shwordsplit; F="a b"; rm $F').effects).toMatchObject([{ op: 'delete', paths: ['a', 'b'] }])
+  for (const opt of ['setopt shwordsplit', 'options[shwordsplit]=on']) {
+    const line = `${opt}; F="a b"; rm $F`
+    expect([line, analyzeLine(line).effects]).toMatchObject([line, [{ op: 'delete', paths: ['a', 'b'] }]])
+  }
 })
 
 test('splitting that depends on the pass or on a changed $IFS is unknown', () => {
