@@ -1240,7 +1240,10 @@ function run(cmd: Cmd, words: Word[], dir: DirState, ctx: Ctx, piped: Cmd | null
   if (name === 'curl') return outputFile(args, /^-[a-zA-Z]*o$/, ['--output'], dir, local, raw)
   if (name === 'wget') return outputFile(args, /^-[a-zA-Z]*O$/, ['--output-document'], dir, local, raw)
   if (SHELLS.has(name)) return shell(cmd, name, args, local, raw)
-  if (name === 'eval') return wrappedEval(args, local, raw)
+  if (name === 'eval') {
+    wrappedEval(args, local, raw)
+    return
+  }
   if (INTERPRETERS.test(name)) return interpreter(cmd, name, args, ctx, raw)
 }
 
