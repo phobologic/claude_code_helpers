@@ -415,6 +415,9 @@ def ignored_case(s):
     write(os.path.join(caps, "README.md"), "mutant\n")
     expect("an agent's worktree git recorded in another case is still scratch",
            s.judge(git("checkout", "--", "README.md"), cwd=caps), [])
+    expect("the worktree a session runs in keeps full protection when named as git recorded it",
+           s.judge(delete(s.p(".WORKTREES", "caps", "README.md")), cwd=caps, root=caps),
+           [("uncommitted", ".worktrees/caps/README.md")])
     away = os.path.join(s.root, "wt-away")
     expect("worktree remove --force named in another case holds its changes",
            s.judge(git("worktree", "remove", "--force", os.path.join(s.root, "WT-AWAY"))),

@@ -90,9 +90,7 @@ def spelled(path):
     folder lists it. A volume that ignores case opens src for SRC, but realpath keeps the
     spelling it was given, and every check compares paths as strings."""
     out = "/"
-    for name in path.split("/"):
-        if not name:
-            continue
+    for name in filter(None, path.split("/")):
         exact, folded = names_in(out)
         if name not in exact and os.path.lexists(os.path.join(out, name)):
             name = folded.get(name.casefold(), name)
