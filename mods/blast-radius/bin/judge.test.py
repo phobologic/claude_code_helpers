@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+from unittest import mock
 
 JUDGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "judge.py")
 _spec = importlib.util.spec_from_file_location("judge", JUDGE)
@@ -194,6 +195,18 @@ def overwrites_and_copies(s):
           judge_module.SINK.fullmatch("/dev/fd/../zero") is None and judge_module.SINK.fullmatch("/dev/fd/12") is not None)
     for spelling in ("/dev//null", "/dev/./null", os.path.relpath("/dev/null", s.repo)):
         expect(f"another spelling of /dev/null loses nothing ({spelling})", s.judge(overwrite(spelling)), [])
+    # On Linux /dev/stdout resolves through /proc/self/fd/1 to whatever stdout is, perhaps a file
+    # outside; the path as written still marks it as the command's own stream.
+    class OutsideCtx:
+        def where(self, rp):
+            return "outside"
+
+        def show(self, rp):
+            return rp
+
+    with mock.patch.object(judge_module.os.path, "realpath", return_value=os.path.join(s.outside, "notes.txt")):
+        got = judge_module.judge_overwrite(OutsideCtx(), "/dev/stdout")
+    check("/dev/stdout is free wherever it resolves", got == [], got)
     # A terminal such as /dev/ttyp0 or /dev/ttyS0, where the machine has one: only /dev/tty itself is free.
     near = next((n for n in sorted(os.listdir("/dev")) if n.startswith("tty") and n[3:].isalnum()), None)
     if near:
