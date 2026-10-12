@@ -296,7 +296,7 @@ function ansiC(body: string): string {
       if (hex !== undefined) return String.fromCharCode(Number.parseInt(hex, 16))
       const code = Number.parseInt(u ?? U ?? '', 16)
       if (!Number.isNaN(code)) return code <= 0x10ffff ? String.fromCodePoint(code) : m
-      if (ctl !== undefined) return ctl === '?' ? '\x7f' : String.fromCharCode(ctl.toUpperCase().charCodeAt(0) & 0x1f)
+      if (ctl !== undefined) return ctl === '?' ? '\x7f' : String.fromCharCode(ctl.charCodeAt(0) & 0x1f)
       return C_ESCAPES[other as string] ?? m
     },
   )
@@ -437,8 +437,8 @@ function gobble(s: string, i: number, want: '{' | '}' | ','): number {
     else if ((c === '$' || c === '<' || c === '>') && n === '(') i = closeParen(s, i + 2)
     else {
       if (c === want && level === 0 && ready) {
-        // Like bash, a { that starts the text and ends it, or is followed by }, is plain.
-        if (!(c === '{' && i === 0 && (n === undefined || n === '}'))) return i
+        // Like bash, a {} at the start of the text opens nothing.
+        if (!(c === '{' && i === 0 && n === '}')) return i
       } else if (c === '{') level += 1
       else if (c === '}' && level > 0) level -= 1
       else if (want === '}' && level === 0 && (c === ',' || (c === '.' && n === '.' && s[i + 2] !== '}'))) ready = true
@@ -465,10 +465,7 @@ function braceExpand(s: string, depth: number): Braced {
     const post = rest.slice(close + 1)
     // As in bash, any , not escaped makes a list; without one it is a sequence or plain.
     let alts: Braced | null = /^(?:\\[^]|[^\\,])*,/.test(amble) ? braceList(amble, depth) : sequence(amble)
-    if (alts === null) {
-      if (post === '') break
-      alts = { values: [rest.slice(open, close + 1)] }
-    }
+    alts ??= { values: [rest.slice(open, close + 1)] }
     if ('unknown' in alts) return alts
     const pre = rest.slice(0, open)
     const values = alts.values
@@ -508,8 +505,7 @@ function sequence(amble: string): Braced | null {
   if (step !== undefined || padded || mixed || huge) return { unknown: "has a brace sequence Blast Radius doesn't expand" }
   const count = Math.abs(to - from) + 1
   if (count > MAX_VALUES) return { unknown: 'has too many values to check' }
-  const dir = to >= from ? 1 : -1
-  const values = Array.from({ length: count }, (_, k) => from + k * dir)
+  const values = Array.from({ length: count }, (_, k) => from + k * Math.sign(to - from))
   return { values: values.map(n => (numbers ? String(n) : String.fromCharCode(n))) }
 }
 
@@ -544,8 +540,8 @@ function splitWords(w: Word, ctx: Ctx): Word[] {
   let parts: Part[] = []
   let kept = false // something quoted or not empty is in the word being built
   w.parts.forEach((p, i) => {
-    const value = values[i]
-    if (value === null || value === undefined) {
+    const value = values[i] ?? null
+    if (value === null) {
       parts.push(p)
       kept = true
       return

@@ -82,6 +82,9 @@ test('braces expand into the words bash makes of them, for every command', () =>
   expect(paths('rm {a,b{c,d}} {a,b}{1,2}')).toEqual(['a', 'bc', 'bd', 'a1', 'a2', 'b1', 'b2'])
   expect(paths('rm f{1..3} {c..a} {3..1}')).toEqual(['f1', 'f2', 'f3', 'c', 'b', 'a', '3', '2', '1'])
   expect(paths('rm {a,"b c"} {\\,a,b}')).toEqual(['a', 'b c', ',a', 'b'])
+  expect(paths("rm {$'it\\'s',b} {a{b,c}} {{d,e}")).toEqual(["it's", 'b', '{ab}', '{ac}', '{d', '{e'])
+  // A } closes only after a , or .. at its own level; a {} that starts the text opens nothing.
+  expect(paths('rm {a},b} {a..},c} {a.},d} a{},e}')).toEqual(['a}', 'b', 'a..}', 'c', 'a.}', 'd', 'a}', 'ae'])
   // An empty word goes, unless something quoted is in it.
   expect(paths("rm {,a} ''{,b}")).toEqual(['a', '', 'b'])
   // Braces are expanded before options and positions are read.
@@ -112,6 +115,13 @@ test('braces that are quoted, escaped, unclosed or hold no list or sequence stay
   expect(paths('X={a,b}; rm "$X"')).toEqual(['{a,b}'])
   expect(paths('export X={a,b}; rm "$X"')).toEqual(['b'])
   expect(paths('rm -rf ${HOME:-{a,b}}')).toEqual([HOME])
+  // An escaped , makes no list, so the braces stay.
+  expect(paths('rm {1..2\\,x}')).toEqual(['{1..2,x}'])
+  // Braces inside a substitution are its command's own: they make one word, not two.
+  const what = (command: string) => (only(command) as { what: string }).what
+  expect(what('rm -rf $(mktemp {-d,-q})')).toBe('$(mktemp {-d,-q}) is only known when it runs')
+  expect(what('rm -rf `mktemp {-d,-q}`')).toBe('$(mktemp {-d,-q}) is only known when it runs')
+  expect(what('rm -rf <(mktemp {-d,-q})')).toBe('$(mktemp {-d,-q}) is only known when it runs')
 })
 
 test('braces that make too many words, nest too deep or that shells read differently are unknown', () => {
@@ -120,6 +130,7 @@ test('braces that make too many words, nest too deep or that shells read differe
   expect(only('rm -rf x{1..64}')).toMatchObject({ op: 'delete' })
   expect(only('rm -rf x{64..1}')).toMatchObject({ op: 'delete' })
   expect(what('rm {a,b}{c,d}{e,f}{g,h}{i,j}{k,l}{m,n}')).toBe('{a,b}{c,d}{e,f}{g,h}{i,j}{k,l}{m,n} has too many values to check')
+  expect((only('rm {a,b}{c,d}{e,f}{g,h}{i,j}{k,l}') as { paths: string[] }).paths.length).toBe(64)
   const list = Array.from({ length: 65 }, (_, k) => `f${k}`).join(',')
   expect(what(`rm {${list}}`)).toContain('has too many values to check')
   expect(only(`rm {${list.split(',').slice(0, 64).join(',')}}`)).toMatchObject({ op: 'delete' })
@@ -137,7 +148,7 @@ test("$'...' is decoded as bash decodes it", () => {
   expect(paths("rm $'a\\nb\\tc' $'it\\'s' $'\\\\' $'\\\"' $'\\?' $'\\a\\b\\e\\E\\f\\r\\v'")).toEqual([
     'a\nb\tc', "it's", '\\', '"', '[?]', '\x07\b\x1b\x1b\f\r\v',
   ])
-  expect(paths("rm $'\\cA' $'\\c?' $'\\ca' $'\\777'")).toEqual(['\x01', '\x7f', '\x01', '\xff'])
+  expect(paths("rm $'\\cA' $'\\c?' $'\\ca' $'\\777' $'\\U0010ffff'")).toEqual(['\x01', '\x7f', '\x01', '\xff', '\u{10ffff}'])
   // A NUL ends the text; escapes bash doesn't know, or with no digits, stay as written.
   expect(paths("rm $'a\\0b' $'\\q' $'\\x' $'\\u' $'\\U110000'")).toEqual(['a', '\\q', '\\x', '\\u', '\\U110000'])
   // Its glob characters are quoted, and inside double quotes it is plain text.
@@ -151,6 +162,7 @@ test('an unquoted variable splits into words at spaces, tabs and newlines', () =
   expect(paths('F="src/x.py src/y.py"; rm "$F"')).toEqual(['src/x.py src/y.py'])
   expect(paths("F=$'a\\tb\\nc'; rm $F")).toEqual(['a', 'b', 'c'])
   expect(paths('F=" a b "; rm x${F}y')).toEqual(['x', 'a', 'b', 'y'])
+  expect(paths('F=" a b "; rm $F')).toEqual(['a', 'b'])
   expect(paths('F="a  b"; rm $F$F')).toEqual(['a', 'ba', 'b'])
   expect(paths('F="a b"; rm {x,y}$F')).toEqual(['xa', 'b', 'ya', 'b'])
   expect(paths('F="-rf build"; rm $F')).toEqual(['build'])
@@ -165,6 +177,7 @@ test('an unquoted variable splits into words at spaces, tabs and newlines', () =
   // Assignments, declaration builtins, here-strings and redirect targets never split.
   expect(paths('F="a b"; X=$F; rm "$X"')).toEqual(['a b'])
   expect(paths('F="a b"; export X=$F; rm "$X"')).toEqual(['a b'])
+  expect(paths('F="X=a Y=b"; export $F; rm "$X" "$Y"')).toEqual(['a', 'b'])
   expect(only('F="a b"; echo x > $F')).toMatchObject({ op: 'overwrite', paths: ['a b'] })
   expect(analyze("F=$'rm a\\nrm b'; bash <<< $F").map(e => (e as { paths: string[] }).paths)).toEqual([['a'], ['b']])
   // bash 3.2 goes to the first of several folders; later bash refuses, so nothing runs.
@@ -176,7 +189,9 @@ test('splitting that depends on the pass or on a changed $IFS is unknown', () =>
   expect(what('for f in "a b" c; do rm $f; done')).toBe('$f has several values that split into words')
   expect(only('for f in "a b" c; do rm "$f"; done')).toMatchObject({ op: 'delete', paths: ['a b', 'c'] })
   expect(only('for f in a c; do rm $f; done')).toMatchObject({ op: 'delete', paths: ['a', 'c'] })
+  expect(only('for f in "a b" c; do echo x > $f; done')).toMatchObject({ op: 'overwrite', paths: ['a b', 'c'] })
   expect(what('IFS=:; F=a:b; rm $F')).toBe('$IFS is set on this line, so how $F splits is unknown')
+  expect(what('IFS=:; F="a b"; rm $F')).toBe('$IFS is set on this line, so how $F splits is unknown')
   expect(only('IFS=:; F="a b"; rm "$F"')).toMatchObject({ op: 'delete', paths: ['a b'] })
   expect(only('IFS=:; F="a b"; echo x > $F')).toMatchObject({ op: 'overwrite', paths: ['a b'] })
 })
