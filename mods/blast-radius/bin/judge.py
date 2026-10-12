@@ -187,9 +187,11 @@ def covered(path, roots):
 
 def listed_worktrees(top):
     """The worktrees of the repository `top` belongs to, as git recorded their paths, the
-    main one first; [] when git fails."""
-    listing = git_out(["worktree", "list", "--porcelain"], top) or ""
-    return [line[9:] for line in listing.splitlines() if line.startswith("worktree ")]
+    main one first; [] when git fails. -z keeps a path that holds a newline whole; git
+    before 2.36 has no -z, and there the listing is read by lines."""
+    listing = git_out(["worktree", "list", "--porcelain", "-z"], top)
+    lines = listing.split("\0") if listing is not None else (git_out(["worktree", "list", "--porcelain"], top) or "").splitlines()
+    return [line[9:] for line in lines if line.startswith("worktree ")]
 
 
 def main_checkout(top):
@@ -897,12 +899,13 @@ def deleted_branches(top, names):
 def git_worktree(ctx, top, cwd, rest):
     if not rest or rest[0] != "remove":
         return []
-    pos, _, _ = positionals(rest[1:])
-    if not pos:
+    pos, after, _ = positionals(rest[1:])
+    names = pos + after  # git takes the worktree after -- too
+    if not names:
         return []
     force = any(a in ("-f", "--force") for a in rest)
     # A name git finds no worktree for is refused, so it loses nothing.
-    return [f for p in sorted(removed_worktrees(top, cwd, pos[0])) for f in worktree_removal(ctx, p, force)]
+    return [f for p in sorted(removed_worktrees(top, cwd, names[0])) for f in worktree_removal(ctx, p, force)]
 
 
 def removed_worktrees(top, cwd, name):

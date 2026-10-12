@@ -677,6 +677,7 @@ def worktrees_by_name(s, slot, away):
         return s.judge(git("worktree", "remove", "--force", name), **kw)
 
     expect("worktree remove --force by its last name holds over its changes", remove("wt-away"), lost)
+    expect("  and so does its name after --", s.judge(git("worktree", "remove", "--force", "--", "wt-away")), lost)
     expect("  and so does its last two names", remove(os.path.join(os.path.basename(s.root), "wt-away")), lost)
     expect("  and its name in another case, which git matches where core.ignorecase is set", remove("WT-AWAY"), lost)
     os.makedirs(s.p("wt-away"))
@@ -698,6 +699,16 @@ def worktrees_by_name(s, slot, away):
     expect("  and passes where no worktree is at that path, since git refuses it", remove("feat"), [])
     expect("worktree remove of part of a name passes, since git matches whole names", remove("away"), [])
     expect("worktree remove of a name no worktree has passes, since git refuses it", remove("nope"), [])
+    os.symlink(away, s.p("to-away"))
+    expect("worktree remove of a link to a worktree goes to the worktree it points to", remove("to-away"), lost)
+    os.remove(s.p("to-away"))
+    nl = os.path.join(s.root, "wt\nnl")
+    sh("git", "worktree", "add", "-q", "-b", "nl", nl, cwd=s.repo)
+    write(os.path.join(nl, "n.txt"))
+    nl_lost = [("uncommitted", os.path.join(nl, "n.txt"))]
+    expect("worktree remove of a worktree whose path holds a newline holds by its path", remove(nl), nl_lost)
+    expect("  and by its last name", remove("wt\nnl"), nl_lost)
+    sh("git", "worktree", "remove", "--force", nl, cwd=s.repo)
     os.remove(os.path.join(away, "precious.txt"))
     for path in (mine, twin, host):
         sh("git", "worktree", "remove", "--force", path, cwd=s.repo)
@@ -725,6 +736,16 @@ def worktrees_by_name(s, slot, away):
         except j.Unresolved:
             got = "unknown"
     check("a worktree list git can't give leaves the worktree unknown, never passed", got == "unknown", got)
+    real_out = j.git_out
+
+    def no_z(args, cwd):
+        return None if "-z" in args else real_out(args, cwd)
+
+    with mock.patch.object(j, "git_out", no_z):
+        got = j.listed_worktrees(s.repo)
+    want = real_out(["worktree", "list", "--porcelain"], s.repo).splitlines()
+    want = [line[9:] for line in want if line.startswith("worktree ")]
+    check("a git with no worktree list -z still lists the worktrees, read by lines", got == want and len(got) > 1, got)
 
 
 # Commands on a repository's history whatever its worktrees hold: each one holds from
@@ -1000,6 +1021,9 @@ def ignored_case(s):
     write(os.path.join(caps, "README.md"), "mutant\n")
     expect("an agent's worktree git recorded in another case is still scratch",
            s.judge(git("checkout", "--", "README.md"), cwd=caps), [])
+    expect("worktree remove --force of it by its last name passes, judged as on disk",
+           s.judge(git("worktree", "remove", "--force", "caps")), [])
+    expect("  and by its path as on disk", s.judge(git("worktree", "remove", "--force", ".worktrees/caps")), [])
     expect("the worktree a session runs in keeps full protection when named as git recorded it",
            s.judge(delete(s.p(".WORKTREES", "caps", "README.md")), cwd=caps, root=caps),
            [("uncommitted", ".worktrees/caps/README.md")])
