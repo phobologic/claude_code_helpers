@@ -713,6 +713,10 @@ def worktrees_by_name(s, slot, away):
     with mock.patch.object(j, "listed_worktrees", return_value=[main, feat]):
         got = j.removed_worktrees(main, main, os.path.join("..", "x", "FEAT"))
     check("a path in another case finds the worktree git finds where it ignores case", got == {feat}, got)
+    lower = os.path.join(made_up, "y", "feat")
+    with mock.patch.object(j, "listed_worktrees", return_value=[main, feat, lower]):
+        got = j.removed_worktrees(main, main, "feat")
+    check("a name two worktrees end in only ignoring case is the one with that case where git keeps case", got == {lower}, got)
     with mock.patch.object(j, "listed_worktrees", return_value=[]):
         try:
             got = j.removed_worktrees(main, main, "feat")
