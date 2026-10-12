@@ -190,6 +190,8 @@ test('git short options combined in one word count one by one, as git reads them
     ['branch', '-dq', 'x'],
     ['checkout', '-qb', 'new'],
     ['checkout', '-bfix'],
+    // A cluster with a non-letter still splits: -q -b, and fix/x is -b's value.
+    ['checkout', '-qbfix/x'],
     ['switch', '-cf', 'main'],
     ['restore', '-Sq', 'a'],
     ['restore', '-SsWIP', 'a'],
