@@ -40,28 +40,24 @@ Spawn all four reviewers in parallel as **background agents**. Each agent receiv
 Agent({
   prompt: "TEAM_MODE=true REVIEW_CMD=<review_cmd> -- Review ONLY files in .code-review/changed-files.txt",
   subagent_type: "code-reviewer-1",
-  model: "sonnet",
   name: "reviewer-logic"
 })
 
 Agent({
   prompt: "TEAM_MODE=true REVIEW_CMD=<review_cmd> -- Review ONLY files in .code-review/changed-files.txt",
   subagent_type: "code-reviewer-2",
-  model: "sonnet",
   name: "reviewer-perf"
 })
 
 Agent({
   prompt: "TEAM_MODE=true REVIEW_CMD=<review_cmd> -- Review ONLY files in .code-review/changed-files.txt",
   subagent_type: "code-reviewer-3",
-  model: "sonnet",
   name: "reviewer-structure"
 })
 
 Agent({
   prompt: "TEAM_MODE=true REVIEW_CMD=<review_cmd> -- Review ONLY files in .code-review/changed-files.txt",
   subagent_type: "security-reviewer",
-  model: "sonnet",
   name: "reviewer-security"
 })
 ```

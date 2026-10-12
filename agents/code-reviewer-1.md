@@ -2,6 +2,7 @@
 name: code-reviewer-1
 description: Reviews code for logical errors, best practices, and architecture issues
 model: opus
+effort: xhigh
 ---
 
 # Code Reviewer 1

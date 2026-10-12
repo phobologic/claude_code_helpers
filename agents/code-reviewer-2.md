@@ -2,6 +2,7 @@
 name: code-reviewer-2
 description: Reviews code for performance issues, efficiency, and resource usage
 model: opus
+effort: xhigh
 ---
 
 # Code Reviewer 2
