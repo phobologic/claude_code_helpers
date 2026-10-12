@@ -111,6 +111,7 @@ def main():
         git_ops(s)
         worktrees(s)
         subagent_folders(s)
+        new_folders(s)
         odd_cases(s)
     finally:
         s.done()
@@ -249,6 +250,15 @@ def worktrees(s):
     expect("the worktree a session runs in keeps full protection",
            s.judge(git("checkout", "--", "src/a.py"), cwd=slot, root=slot), [("uncommitted", ".worktrees/slot-1/src/a.py")])
     sh("git", "checkout", "--", "src/a.py", cwd=s.repo)
+    expect("from an agent's worktree, branch -D of shared unmerged work holds",
+           s.judge(git("branch", "-D", "side"), cwd=slot), [("history", "side")])
+    write(s.p("README.md"), "stash me\n")
+    sh("git", "stash", "-q", cwd=s.repo)
+    expect("from an agent's worktree, dropping the shared stash holds",
+           s.judge(git("stash", "drop"), cwd=slot), [("history", "stash@{0}")])
+    sh("git", "stash", "drop", "-q", cwd=s.repo)
+    expect("from an agent's worktree, gc --prune=now holds",
+           s.judge(git("gc", "--prune=now"), cwd=slot), [("history", "unreachable commits")])
 
     away = os.path.join(s.root, "wt-away")
     sh("git", "worktree", "add", "-q", "-b", "away", away, cwd=s.repo)
@@ -262,6 +272,13 @@ def worktrees(s):
     sh("git", "clone", "-q", s.repo, copy_repo, cwd=s.root)
     write(os.path.join(copy_repo, "README.md"), "mutant\n")
     expect("a throwaway copy under a temp folder is free", s.judge(git("checkout", "--", "README.md"), cwd=copy_repo), [])
+    sh("git", "checkout", "-q", "--", "README.md", cwd=copy_repo)
+    sh("git", "checkout", "-q", "-b", "mine", cwd=copy_repo)
+    write(os.path.join(copy_repo, "mine.txt"))
+    sh("git", "add", "-A", cwd=copy_repo)
+    sh("git", "commit", "-q", "-m", "mine", cwd=copy_repo)
+    sh("git", "checkout", "-q", "main", cwd=copy_repo)
+    expect("  and so is its own history", s.judge(git("branch", "-D", "mine"), cwd=copy_repo), [])
 
 
 def subagent_folders(s):
@@ -287,9 +304,37 @@ def subagent_folders(s):
            s.judge(delete("README.md", dir=s.repo), lostCwd="the subagent ran cd -"), [])
 
 
+def held(name, v):
+    check(name, [f["kind"] for f in v["findings"]] == ["unknown"], v)
+
+
+def new_folders(s):
+    new = os.path.join(s.tmp, "new", "g1")
+    expect("a folder that doesn't exist yet has nothing to lose", s.judge(delete("x", dir="no/such/dir")), [])
+    expect("  a glob there matches nothing", s.judge(delete("*", dir=new)), [])
+    expect("  git checkout in a new temp folder passes", s.judge(git("checkout", "-q", "side", dir=new)), [])
+    expect("  an absolute path from it is still judged", s.judge(delete(os.path.join(s.outside, "notes.txt"), dir=new)),
+           [("outside", os.path.join(s.outside, "notes.txt"))])
+    held("  a path that climbs out of it holds", s.judge(delete("../../x", dir=new)))
+    v = s.judge(find(".", "-name", "x", "-print", dir=new))
+    held("  find there holds, since it can't be dry-run", v)
+    check("  and says why", "doesn't exist yet" in v["findings"][0]["detail"], v["findings"])
+    held("  git on history there holds (a new worktree shares it)", s.judge(git("branch", "-D", "side", dir=new)))
+    write(s.p("src", "a.py"), "changed\n")
+    held("  git reset --hard in a new subfolder of the checkout holds", s.judge(git("reset", "--hard", dir="no/such")))
+    held("  so does git -C into one", s.judge(git("-C", "no/such", "reset", "--hard")))
+    sh("git", "checkout", "--", "src/a.py", cwd=s.repo)
+    link = os.path.join(s.tmp, "link")
+    held("  a folder the command links there holds", s.judge(copy("ln", [s.repo], link), delete("*", dir=link)))
+    held("  git in one holds too", s.judge(copy("ln", [s.repo], link), git("reset", "--hard", dir=link)))
+    moved = os.path.join(s.tmp, "moved")
+    held("  a folder the command moves there holds", s.judge(copy("mv", [s.outside], moved), delete("*", dir=os.path.join(moved, "dir"))))
+    copied = os.path.join(s.tmp, "copied")
+    expect("  a folder the command copies real files to passes", s.judge(copy("cp", ["src"], copied), delete("*", dir=copied)), [])
+    held("  a copy of a link holds", s.judge(copy("cp", ["link"], copied), delete("*", dir=copied)))
+
+
 def odd_cases(s):
-    v = s.judge(delete("x", dir="no/such/dir"))
-    check("a cd into a folder that doesn't exist holds", [f["kind"] for f in v["findings"]] == ["unknown"], v)
     v = s.judge({"op": "unknown", "what": "xargs rm: what it deletes comes from its input", "cmd": "ls | xargs rm"})
     check("an unknown effect holds", v["hold"] and v["findings"][0]["cmd"] == "ls | xargs rm", v)
     plain = os.path.join(s.root, "plain")

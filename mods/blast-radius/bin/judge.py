@@ -20,7 +20,12 @@ The policy goes by where the affected files are, not where the command runs:
   data, a nested repository's history, commits on no other branch, stashes.
 - An agent's scratch worktree (a linked worktree inside the repository folder, other
   than the one the session runs in), temp folders and Claude's memory folders: free.
+  In a scratch worktree, a git command on branches, stashes or objects is judged like
+  anywhere else, since every worktree shares them (free_checkout).
 - Anywhere else: held.
+A folder that doesn't exist yet holds only what the command makes, so an effect there
+is judged by what can still reach existing files: links and moves the command puts
+there, `..`, and git's repository (new_folder, git_new_folder).
 
 Run it with `python3 -I`, so nothing in the working directory is imported.
 """
@@ -127,6 +132,7 @@ class Ctx:
         # Linked worktrees inside the repository folder are agents' scratch space.
         self.scratch = [w for w in self.worktrees[1:] if under(w, self.main) and w != self.top] if self.main else []
         self.notes = []
+        self.placed = placed(self, req.get("effects", []))
 
     def where(self, rp):
         if ".git" in rp.split("/"):
@@ -187,6 +193,35 @@ def expand(ctx, base, word, must_exist=True):
         return sorted(glob.glob(pattern))  # like bash: * skips dotfiles
     p = w if os.path.isabs(w) else os.path.join(base, w)
     return [p] if not must_exist or os.path.lexists(p) else []
+
+
+def placed(ctx, effects):
+    """Where the command puts links or moved files: a folder that doesn't exist yet
+    there may turn out to hold files that exist somewhere else now."""
+    out = []
+    for eff in effects:
+        if eff.get("op") != "copy":
+            continue
+        try:
+            base = base_dir(ctx, eff.get("dir"))
+            srcs = [p for w in eff["sources"] for p in expand(ctx, base, w, must_exist=False)]
+            dests = [p for w in eff["dest"] for p in expand(ctx, base, w, must_exist=False)]
+        except Unresolved:
+            continue  # the effect itself holds
+        if eff["mode"] == "cp" and not any(os.path.islink(s) for s in srcs):
+            continue  # a copy of real files: deleting it loses nothing
+        out += [os.path.realpath(d) for d in dests]
+    return out
+
+
+def new_folder(ctx, path):
+    """Raises when a folder that doesn't exist yet may be a link or moved files."""
+    if any(under(path, p) for p in ctx.placed):
+        raise Unresolved(f"it runs in {ctx.show(path)}, where this command puts a link or moves files, so it can't be checked")
+
+
+def climbs(word):
+    return not os.path.isabs(word) and os.path.normpath(word).split("/")[0] == ".."
 
 
 def resolve_delete(p):
@@ -620,6 +655,34 @@ GIT = {
     "worktree": git_worktree, "reflog": git_reflog, "gc": git_gc, "prune": git_prune,
     "filter-branch": git_filter, "filter-repo": git_filter,
 }
+# Commands that discard only files in the checkout they run in. The rest reach the
+# repository's history, which a worktree shares with every other one.
+WORK_TREE = {"reset", "checkout", "switch", "restore", "rm", "clean"}
+
+
+def free_checkout(ctx, top, sub):
+    """Whether git `sub` in the checkout at `top` is free: a throwaway copy in a temp
+    folder (the session's own worktrees never count as temp), or an agent's scratch
+    worktree for a command on its files only, since its branches and stashes are the
+    session repository's."""
+    w = ctx.where(top)
+    return w == "temp" or (w == "scratch" and sub in WORK_TREE)
+
+
+def git_new_folder(ctx, cwd, sub):
+    """Git in a folder that doesn't exist yet, so whose files are all ones this command
+    makes (git init, git clone, git worktree add). A working-tree command there loses
+    nothing unless the folder is new inside a checkout that already has work."""
+    new_folder(ctx, cwd)
+    if sub not in GIT:
+        return []
+    known = cwd
+    while not os.path.isdir(known):
+        known = os.path.dirname(known)
+    top = toplevel(known)
+    if (sub in WORK_TREE) if top is None else free_checkout(ctx, top, sub):
+        return []
+    raise Unresolved(f"git {sub} in {ctx.show(cwd)}, a folder that doesn't exist yet, so it can't be checked")
 
 
 def judge_git(ctx, base, eff):
@@ -640,11 +703,13 @@ def judge_git(ctx, base, eff):
     if i >= len(args):
         return []
     cwd = os.path.realpath(cwd)
-    top = toplevel(cwd) if os.path.isdir(cwd) else None
+    if not os.path.isdir(cwd):
+        return git_new_folder(ctx, cwd, args[i])
+    top = toplevel(cwd)
     if top is None:
         return []  # not a repository: git refuses
-    if ctx.where(top) in ("scratch", "temp"):
-        return []  # an agent's scratch checkout, or a throwaway copy
+    if free_checkout(ctx, top, args[i]):
+        return []
     handler = GIT.get(args[i])
     return handler(ctx, top, cwd, args[i + 1 :]) if handler else []
 
@@ -659,7 +724,14 @@ def judge(ctx, eff):
             return [finding("unknown", "", eff.get("what", "can't tell what it changes"))]
         base = base_dir(ctx, eff.get("dir"))
         if not os.path.isdir(base):
-            return [finding("unknown", ctx.show(base), "it runs in a folder that doesn't exist yet, so it can't be checked")]
+            # Nothing is in it yet, so a relative path that stays inside names only what
+            # the command makes itself. Git is judged by the repository around it.
+            new_folder(ctx, os.path.realpath(base))
+            if op == "find":
+                return [finding("unknown", ctx.show(base), "find runs in a folder that doesn't exist yet, so it can't be dry-run")]
+            words = eff.get("paths", []) + eff.get("sources", []) + eff.get("dest", [])
+            if any(climbs(subst(ctx, w)) for w in words):
+                return [finding("unknown", ctx.show(base), "a path climbs out of a folder that doesn't exist yet, so it can't be checked")]
         if op == "delete":
             return judge_deletes(ctx, [(p, eff["recursive"]) for w in eff["paths"] for p in expand(ctx, base, w)])
         if op == "overwrite":

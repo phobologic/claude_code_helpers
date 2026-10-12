@@ -54,8 +54,15 @@ a session loads it from a folder you own.
 - It judges by where the files are, not where the command runs. A linked worktree
   inside the repository folder (`.worktrees/*`, `.claude/worktrees/*`) is an agent's
   scratch space, so `/run-tickets` agents undoing their test mutations with
-  `git checkout -- <file>` are never asked about. The worktree the session itself runs
-  in, and worktrees kept outside the repository folder, get full protection.
+  `git checkout -- <file>` are never asked about. Git commands there on branches,
+  stashes or objects (`branch -D`, `stash drop`, `gc --prune=now`) are still judged,
+  since every worktree shares them. The worktree the session itself runs in, and
+  worktrees kept outside the repository folder, get full protection.
+- A folder that doesn't exist yet (`mkdir -p x && cd x && ...`) holds only what the
+  command makes, so what runs there passes. It still holds when the command links or
+  moves files there, a path climbs out with `..`, or a git command could reach work or
+  history that exists now (a new subfolder of a checkout, `git branch -D` in a worktree
+  the command adds).
 - Ignored files are free to delete except `.env*` (not `.env.example` and kin),
   `*.db`, `*.sqlite` and `*.sqlite3`. Folders like `node_modules` and `.venv` are never
   searched.
