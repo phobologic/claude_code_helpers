@@ -263,6 +263,9 @@ def branch_moves(s):
     for argv in (["branch", "-D", "merged", "side"], ["branch", "-df", "merged", "side"], ["branch", "--delete", "--force", "merged", "side"]):
         expect(f"{say(argv)} judges every branch it deletes", s.judge(git(*argv)), lost)
     expect("branch -f -u only sets the upstream", s.judge(git("branch", "-f", "-u", "main", "side")), [])
+    expect("branch -f side -u main only sets the upstream", s.judge(git("branch", "-f", "side", "-u", "main")), [])
+    expect("branch -fl only lists", s.judge(git("branch", "-fl", "side")), [])
+    expect("branch -f --list only lists", s.judge(git("branch", "-f", "--list", "side")), [])
     expect("branch -f --set-upstream-to= only sets the upstream", s.judge(git("branch", "-f", "--set-upstream-to=main", "side")), [])
     expect("branch -fudev reads dev as -u's value", s.judge(git("branch", "-fudev", "side")), [])
     expect("branch -f with no name only lists", s.judge(git("branch", "-f")), [])
