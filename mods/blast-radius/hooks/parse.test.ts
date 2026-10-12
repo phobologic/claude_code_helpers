@@ -224,4 +224,5 @@ test('mv, cp, install and ln each read their own options: -n is no-clobber to mv
   }
   expect(only('cp -- -n ~/b')).toMatchObject({ sources: ['-n'], dest: ['~/b'], noClobber: false })
   expect(only('cp - ~/b')).toMatchObject({ sources: ['-'], dest: ['~/b'] })
+  expect(only('cp "$SRC" ~/b')).toMatchObject({ op: 'unknown' })
 })
