@@ -513,6 +513,17 @@ def branch_moves(s):
     expect("branch -f --set-upstream-to= only sets the upstream", s.judge(git("branch", "-f", "--set-upstream-to=main", "side")), [])
     expect("branch -fudev reads dev as -u's value", s.judge(git("branch", "-fudev", "side")), [])
     expect("branch -f with no name only lists", s.judge(git("branch", "-f")), [])
+    # -v doesn't list, and the separate-word value of --sort or --format is not a branch name.
+    for argv in (["branch", "-fv", "side", "main"], ["branch", "-f", "--verbose", "side", "main"], ["branch", "-vv", "-f", "side", "main"],
+                 ["branch", "-f", "--sort", "refname", "side", "main"], ["branch", "-f", "--format", "x", "side", "main"]):
+        expect(f"{say(argv)} over unmerged work holds", s.judge(git(*argv)), lost)
+    expect("branch -f --points-at main side only lists", s.judge(git("branch", "-f", "--points-at", "main", "side")), [])
+    victim = os.path.join(s.home, "victim.txt")
+    for argv in (["branch", "-D", "--", "--output=" + victim], ["branch", "-f", "side", "--", "--output=" + victim]):
+        write(victim, "keep\n")
+        s.judge(git(*argv))
+        check(f"branch {argv[1]} with --output after -- never writes the file", open(victim).read() == "keep\n")
+    os.remove(victim)
     sh("git", "update-ref", "refs/remotes/side", "main", cwd=s.repo)
     expect("branch -r -D drops a remote-tracking branch, not the local one", s.judge(git("branch", "-r", "-D", "side")), [])
     sh("git", "update-ref", "-d", "refs/remotes/side", cwd=s.repo)
@@ -523,6 +534,12 @@ def branch_moves(s):
     sh("git", "checkout", "-q", "--detach", "side", cwd=s.repo)
     expect("branch -f passes while a detached HEAD still has the work", s.judge(git("branch", "-f", "side", "main")), [])
     sh("git", "checkout", "-q", "main", cwd=s.repo)
+    # On an unborn branch HEAD names no commit, so it keeps nothing and must not break the check.
+    sh("git", "checkout", "-q", "--orphan", "unborn", cwd=s.repo)
+    expect("branch -f on an unborn branch over unmerged work holds", s.judge(git("branch", "-f", "side", "main")), lost)
+    expect("branch -f on an unborn branch of a branch another one holds passes", s.judge(git("branch", "-f", "merged", "main")), [])
+    expect("branch -D on an unborn branch of unmerged work holds", s.judge(git("branch", "-D", "side")), lost)
+    sh("git", "checkout", "-q", "-f", "main", cwd=s.repo)
 
 
 def short_options(s):
@@ -604,6 +621,8 @@ def shared_state_from_scratch(s, slot):
            s.judge(git("branch", "-D", "merged"), cwd=slot), [])
     expect("git -C into an agent's worktree, branch -D of unmerged work holds",
            s.judge(git("-C", ".worktrees/slot-1", "branch", "-D", "side")), [("history", "side")])
+    for argv in (["branch", "-f", "side", "main"], ["checkout", "-B", "side", "main"], ["switch", "-C", "side", "main"]):
+        expect(f"from an agent's worktree, {' '.join(argv)} over unmerged work holds", s.judge(git(*argv), cwd=slot), [("history", "side")])
     write(s.p("src", "a.py"), "stashed\n")
     sh("git", "stash", "-q", cwd=s.repo)
     for sub in ("clear", "drop"):
@@ -621,6 +640,8 @@ def throwaway_history(s, copy_repo):
     sh("git", "commit", "-q", "-am", "copy work", cwd=copy_repo)
     sh("git", "checkout", "-q", "main", cwd=copy_repo)
     expect("a throwaway copy's unmerged branch is free to delete", s.judge(git("branch", "-D", "copy-side"), cwd=copy_repo), [])
+    for argv in (["branch", "-f", "copy-side", "main"], ["checkout", "-B", "copy-side", "main"], ["switch", "-C", "copy-side", "main"]):
+        expect(f"a throwaway copy's unmerged branch is free to move: {' '.join(argv)}", s.judge(git(*argv), cwd=copy_repo), [])
     write(os.path.join(copy_repo, "README.md"), "stashed\n")
     sh("git", "stash", "-q", cwd=copy_repo)
     expect("a throwaway copy's stashes are free to clear", s.judge(git("stash", "clear"), cwd=copy_repo), [])

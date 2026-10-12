@@ -163,6 +163,12 @@ def main_checkout(top):
     return os.path.realpath(paths[0])
 
 
+def throwaway(ctx, top):
+    """Whether the whole repository `top` belongs to is a throwaway copy, so its branches,
+    stashes and history go with it."""
+    return ctx.where(main_checkout(top)) in FREE
+
+
 def finding(kind, path, detail):
     return {"kind": kind, "path": path, "detail": detail}
 
@@ -616,6 +622,12 @@ def checked_out(top):
     return decode(r.stdout).strip()
 
 
+def kept_head(top):
+    """HEAD, for a list of what keeps commits, when it names one. On an unborn branch (after
+    checkout --orphan) it names none and keeps nothing, and git log would fail on it."""
+    return ["HEAD"] if is_commitish(top, "HEAD") else []
+
+
 def moved_branch(top, name, start):
     """What moving branch `name` to `start` (None: HEAD) loses: commits on it that no other
     branch, tag, remote, a detached HEAD or its new tip reaches. A new branch loses nothing."""
@@ -627,7 +639,7 @@ def moved_branch(top, name, start):
         return []  # no such branch yet: it is created, not moved
     keep = [f"--exclude={name}", "--branches", "--tags", "--remotes"]
     if checked_out(top) != ref:
-        keep.append("HEAD")  # HEAD stays where it is, so what it reaches is kept
+        keep += kept_head(top)  # HEAD stays where it is, so what it reaches is kept
     tip = git_out(["rev-parse", "--verify", "-q", f"{start or 'HEAD'}^{{commit}}"], top)
     if tip:
         keep.append(tip.strip())  # the new tip (git refuses a start point it can't find)
@@ -645,7 +657,7 @@ def git_checkout(ctx, top, cwd, rest):
     rest = split_short(rest, "bB")
     pos, paths, dashdash = positionals(rest, ("-b", "-B", "--orphan"))
     reset = option_value(rest, "-B")  # -B makes the branch or, when it exists, moves it
-    moved = moved_branch(top, reset, pos[0] if pos else None) if reset else []
+    moved = moved_branch(top, reset, pos[0] if pos else None) if reset and not throwaway(ctx, top) else []
     return moved + checkout_discards(ctx, top, cwd, rest, pos, paths, dashdash)
 
 
@@ -668,7 +680,7 @@ def git_switch(ctx, top, cwd, rest):
     rest = split_short(rest, "cC")
     findings = []
     reset = option_value(rest, "-C", "--force-create")  # like checkout -B
-    if reset:
+    if reset and not throwaway(ctx, top):
         pos, _, _ = positionals(rest, ("-C", "--force-create"))
         findings += moved_branch(top, reset, pos[0] if pos else None)
     if any(a in ("-f", "--force", "--discard-changes") for a in rest):
@@ -754,16 +766,18 @@ def git_stash(ctx, top, cwd, rest):
 
 
 # git branch options under which -f moves no branch: they list branches or change only config.
+# Not -v or --verbose: they don't make git branch list, so -fv side main still moves side.
 BRANCH_NO_MOVE = {
-    "-l", "--list", "-a", "--all", "-v", "--verbose", "-u", "--set-upstream-to", "--unset-upstream",
+    "-l", "--list", "-a", "--all", "-u", "--set-upstream-to", "--unset-upstream",
     "--edit-description", "--show-current", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at",
 }
 
 
 def git_branch(ctx, top, cwd, rest):
     rest = split_short(rest, "u")
-    pos, after, _ = positionals(rest)
-    names = pos + after
+    pos, after, _ = positionals(rest, ("--sort", "--format", "--points-at"))
+    # git refuses a branch name that starts with -, and the judge's own git log would read one as an option.
+    names = [n for n in pos + after if not n.startswith("-")]
     flags = {a.split("=", 1)[0] for a in rest if a.startswith("-")}
     if not flags & {"-f", "--force", "-D", "-M", "-C"} or flags & {"-r", "--remotes"}:
         return []  # unforced, git refuses to drop commits; a fetch brings remote-tracking ones back
@@ -779,8 +793,9 @@ def git_branch(ctx, top, cwd, rest):
 
 def deleted_branches(top, names):
     findings = []
+    head = kept_head(top)
     for name in names:
-        others = ["--not", f"--exclude={name}", "--branches", "--tags", "--remotes", "HEAD"]
+        others = ["--not", f"--exclude={name}", "--branches", "--tags", "--remotes", *head]
         r = git(["log", "--format=%h %s", name, *others], top)
         if r is None or r.returncode != 0:
             continue  # no such branch: git refuses
@@ -875,7 +890,7 @@ def judge_git(ctx, base, eff):
     # Each handler judges a worktree's own files by where they are (discard, git clean's
     # deletes, the worktree remove takes). Shared state is free only when the whole
     # repository is a throwaway copy, never because a scratch worktree runs the command.
-    if args[i] in SHARED and ctx.where(main_checkout(top)) in FREE:
+    if args[i] in SHARED and throwaway(ctx, top):
         return []
     return handler(ctx, top, cwd, args[i + 1 :])
 
