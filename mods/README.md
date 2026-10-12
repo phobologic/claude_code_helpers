@@ -59,7 +59,8 @@ a session loads it from a folder you own.
   stashes, reflogs and objects belong to the whole repository, so `git branch -D`,
   `git checkout -B`, `git stash clear` and the like are judged the same from a scratch
   worktree as from the main checkout, and `git worktree remove` by the worktree it
-  removes.
+  removes, found the way git finds it: by the end of its path (`git worktree remove
+  feature` for `../feature`), and only then as a path.
 - A folder that doesn't exist yet (`mkdir -p x && cd x && ...`) holds only what the
   command makes, so what runs there passes. It still holds when the command links or
   moves files there, a path climbs out with `..`, or a git command could reach work or
@@ -72,8 +73,8 @@ a session loads it from a folder you own.
   repository and its worktrees. git run in another one (a clone or submodule inside the
   project, or an archive extracted with its own `.git`) would read that repository's
   config, which can run commands (`core.fsmonitor`, clean filters) before you are even
-  asked. So deleting anything inside another repository, or `git worktree remove` of a
-  folder with its own `.git` that isn't one of the session's worktrees, is always held.
+  asked. So deleting anything inside another repository, or `git worktree remove` of
+  another repository's worktree (run there, with `git -C`), is always held.
   git commands that name another repository are still checked by running git there (see
   cc-8res).
 - What it can't expand (`xargs rm`, `rm "$VAR"` with a variable from an earlier call,
