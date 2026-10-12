@@ -320,6 +320,7 @@ test('git commands that move an existing branch go to the judge; making a new on
     // A listing option's value is never read as options, so the f in it forces nothing.
     ['branch', '--format', '-> %(refname) from %(upstream)'],
     ['branch', '--sort', '-refname'],
+    ['branch', '--points-at', '-fixup'],
   ]) {
     expect({ argv, risky: gitRisky(argv) }).toEqual({ argv, risky: false })
   }
