@@ -1022,7 +1022,7 @@ interface XargsOpts {
   replace: Word | null // what the input replaces (-I, -J, -i, --replace), or null to add it after
   whole: boolean // BSD's -J: the input replaces only the first word that is exactly `replace`
   fromFile: boolean // the input comes from -a's file, not from stdin
-  unread: boolean // an option has an expansion in it, so where the command starts is unknown
+  unread: boolean // an option's expansion hides where the command starts (see xargsExpanded)
 }
 
 // An option word: it starts with a literal `-`, expansions after it or not.
@@ -1037,6 +1037,7 @@ function xargsOpts(args: Word[]): XargsOpts {
     o.k += 1
     const t = text(w)
     if (t === null) {
+      if (xargsExpanded(w, o)) continue
       o.unread = true
       break
     }
@@ -1075,6 +1076,31 @@ function xargsShort(t: string, args: Word[], o: XargsOpts): void {
   const value = joined ? argWord(joined) : (args[o.k++] ?? argWord(''))
   if (ch === 'I' || ch === 'J') setReplace(o, value, ch === 'J')
   if (ch === 'a') o.fromFile = true
+}
+
+// An option word with an expansion in it, read from its literal head: `--opt=<exp>`, or
+// `-X<exp>` whose head reaches an option that takes a value, is one option whatever the
+// expansion holds (empty, n/P/L/s and the like end in an xargs error), so the command
+// still starts at the next word. False when the head can't say (`-$X`, `--$X`, `-0$X`).
+function xargsExpanded(w: Word, o: XargsOpts): boolean {
+  const first = w.parts[0] as Extract<Part, { kind: 'lit' }>
+  const head = first.text
+  const rest = (i: number): Word => ({ parts: [{ ...first, text: head.slice(i) }, ...w.parts.slice(1)], raw: w.raw })
+  if (head.startsWith('--')) {
+    const eq = head.indexOf('=')
+    if (eq < 0) return false
+    const name = head.slice(0, eq)
+    if (name === '--replace') setReplace(o, rest(eq + 1), false)
+    if (name === '--arg-file') o.fromFile = true
+    return true
+  }
+  const m = XARGS_SHORT.exec(head)
+  if (m === null) return false
+  const ch = m[1] as string
+  const at = head.length - (m[2] as string).length
+  if (ch === 'I' || ch === 'J' || ch === 'i') setReplace(o, rest(at), ch === 'J')
+  if (ch === 'a') o.fromFile = true
+  return true
 }
 
 // Whether the word expands to exactly `s`.

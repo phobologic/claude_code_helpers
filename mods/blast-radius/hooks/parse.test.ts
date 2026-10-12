@@ -333,10 +333,33 @@ test("xargs's options: where its command starts and where its input goes", () =>
   }
   expect(only('R=%; ls | xargs -I "$R" rm -rf %')).toMatchObject(fromInput)
   expect(only('R=%; ls | xargs -I "$R" rm -rf build')).toMatchObject({ op: 'delete', paths: ['build'] })
-  // An option with an expansion in it hides where the command starts.
+  // An option with an expansion in it is read from its literal head. One that reaches an
+  // option taking a value, or a long one with `=`, still ends where it is.
   expect(only('ls | xargs -I"$R" rm -rf ~/keep')).toEqual({
-    op: 'unknown', what: 'xargs options only known when it runs', cmd: 'xargs -I"$R" rm -rf ~/keep',
+    op: 'unknown', what: 'what xargs -I or -J replaces is only known when it runs', cmd: 'xargs -I"$R" rm -rf ~/keep',
   })
+  for (const command of [
+    'find . -name x | xargs -P$(nproc) -n1 gzip',
+    'ls | xargs --max-procs=$(nproc) grep foo',
+    'ls | xargs -n"$N" grep foo',
+    'ls | xargs -0P$(nproc) grep foo',
+  ]) {
+    expect({ command, effects: analyze(command) }).toEqual({ command, effects: [] })
+  }
+  expect(only('ls | xargs -P$(nproc) rm -rf ~/keep')).toMatchObject(fromInput)
+  expect(only('ls | xargs --max-procs=$N rm -f')).toMatchObject(fromInput)
+  expect(only('R=%; ls | xargs -I"$R" rm -rf build')).toMatchObject({ op: 'delete', paths: ['build'] })
+  expect(only('R=%; ls | xargs -i"$R" rm -rf build')).toMatchObject({ op: 'delete', paths: ['build'] })
+  expect(only('R=%; ls | xargs --replace="$R" rm -rf build')).toMatchObject({ op: 'delete', paths: ['build'] })
+  expect(only('R=%; ls | xargs -J"$R" rm -rf build')).toMatchObject(fromInput)
+  expect(only('find . -name x | xargs -a"$F" rm')).toMatchObject(fromInput)
+  expect(only('find . -name x | xargs --arg-file="$F" rm')).toMatchObject(fromInput)
+  // One whose head can't say where the option ends hides where the command starts.
+  for (const command of ['ls | xargs -$X rm -rf ~/keep', 'ls | xargs -0$X rm -rf ~/keep', 'ls | xargs --$X rm -rf ~/keep']) {
+    expect({ command, effect: only(command) }).toMatchObject({
+      command, effect: { op: 'unknown', what: 'xargs options only known when it runs' },
+    })
+  }
   // A variable whose value holds the replace text is the input there.
   expect(only("D='{}'; ls | xargs -I{} rm -rf \"$D\"")).toMatchObject(fromInput)
   expect(only("D='~/backup/{}'; find . -name x | xargs -I{} rm -rf \"$D\"")).toMatchObject(fromInput)
@@ -351,6 +374,8 @@ test("xargs's options: where its command starts and where its input goes", () =>
     { op: 'find' },
   ])
   expect(analyze('find . -name x | xargs -J % rm -rf % %/x')).toMatchObject([{ op: 'delete', paths: ['%/x'] }, { op: 'find' }])
+  // Only the first word that is exactly the text: a second one stays literal.
+  expect(analyze('find . -name x | xargs -J % rm -rf % %')).toMatchObject([{ op: 'delete', paths: ['%'] }, { op: 'find' }])
   expect(only('for r in % {}; do ls | xargs -I "$r" rm -rf %; done')).toMatchObject({
     op: 'unknown', what: 'what xargs -I or -J replaces is only known when it runs',
   })
