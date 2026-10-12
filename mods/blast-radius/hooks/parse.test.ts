@@ -350,6 +350,8 @@ test("xargs's options: where its command starts and where its input goes", () =>
   expect(only('ls | xargs --max-procs=$N rm -f')).toMatchObject(fromInput)
   expect(only('R=%; ls | xargs -I"$R" rm -rf build')).toMatchObject({ op: 'delete', paths: ['build'] })
   expect(only('R=%; ls | xargs -i"$R" rm -rf build')).toMatchObject({ op: 'delete', paths: ['build'] })
+  expect(only('R=x; ls | xargs -I%"$R" rm -rf %x')).toMatchObject(fromInput)
+  expect(only('R=x; ls | xargs -I%"$R" rm -rf x')).toMatchObject({ op: 'delete', paths: ['x'] })
   expect(only('R=%; ls | xargs --replace="$R" rm -rf build')).toMatchObject({ op: 'delete', paths: ['build'] })
   expect(only('R=%; ls | xargs -J"$R" rm -rf build')).toMatchObject(fromInput)
   expect(only('find . -name x | xargs -a"$F" rm')).toMatchObject(fromInput)
