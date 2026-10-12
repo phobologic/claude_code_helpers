@@ -115,8 +115,11 @@ test('braces that are quoted, escaped, unclosed or hold no list or sequence stay
   expect(paths('X={a,b}; rm "$X"')).toEqual(['{a,b}'])
   expect(paths('export X={a,b}; rm "$X"')).toEqual(['b'])
   expect(paths('rm -rf ${HOME:-{a,b}}')).toEqual([HOME])
-  // An escaped , makes no list, so the braces stay.
-  expect(paths('rm {1..2\\,x}')).toEqual(['{1..2,x}'])
+  // An escaped , makes no list, and after a .. that makes no sequence the word stays as
+  // written, as in bash 3.2.
+  expect(paths('rm {1..2\\,x} {a..b.} {a..b.}{c,d} {a,b}{c..d.}{e,f}')).toEqual([
+    '{1..2,x}', '{a..b.}', '{a..b.}{c,d}', 'a{c..d.}{e,f}', 'b{c..d.}{e,f}',
+  ])
   // Braces inside a substitution are its command's own: they make one word, not two.
   const what = (command: string) => (only(command) as { what: string }).what
   expect(what('rm -rf $(mktemp {-d,-q})')).toBe('$(mktemp {-d,-q}) is only known when it runs')
@@ -178,6 +181,7 @@ test('an unquoted variable splits into words at spaces, tabs and newlines', () =
   expect(paths('F="a b"; X=$F; rm "$X"')).toEqual(['a b'])
   expect(paths('F="a b"; export X=$F; rm "$X"')).toEqual(['a b'])
   expect(paths('F="X=a Y=b"; export $F; rm "$X" "$Y"')).toEqual(['a', 'b'])
+  expect(paths('F="a b"; rm X=$F')).toEqual(['X=a', 'b'])
   expect(only('F="a b"; echo x > $F')).toMatchObject({ op: 'overwrite', paths: ['a b'] })
   expect(analyze("F=$'rm a\\nrm b'; bash <<< $F").map(e => (e as { paths: string[] }).paths)).toEqual([['a'], ['b']])
   // bash 3.2 goes to the first of several folders; later bash refuses, so nothing runs.

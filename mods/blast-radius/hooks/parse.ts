@@ -441,7 +441,7 @@ function gobble(s: string, i: number, want: '{' | '}' | ','): number {
         if (!(c === '{' && i === 0 && n === '}')) return i
       } else if (c === '{') level += 1
       else if (c === '}' && level > 0) level -= 1
-      else if (want === '}' && level === 0 && (c === ',' || (c === '.' && n === '.' && s[i + 2] !== '}'))) ready = true
+      else if (level === 0 && (c === ',' || (c === '.' && n === '.' && s[i + 2] !== '}'))) ready = true
       i += 1
     }
   }
@@ -464,8 +464,10 @@ function braceExpand(s: string, depth: number): Braced {
     const amble = rest.slice(open + 1, close)
     const post = rest.slice(close + 1)
     // As in bash, any , not escaped makes a list; without one it is a sequence or plain.
-    let alts: Braced | null = /^(?:\\[^]|[^\\,])*,/.test(amble) ? braceList(amble, depth) : sequence(amble)
-    alts ??= { values: [rest.slice(open, close + 1)] }
+    // After plain braces bash 3.2 leaves the rest as written; bash 4+ and zsh go on, but
+    // what either makes starts with those braces, which no real path does.
+    const alts = /^(?:\\[^]|[^\\,])*,/.test(amble) ? braceList(amble, depth) : sequence(amble)
+    if (alts === null) break
     if ('unknown' in alts) return alts
     const pre = rest.slice(0, open)
     const values = alts.values
