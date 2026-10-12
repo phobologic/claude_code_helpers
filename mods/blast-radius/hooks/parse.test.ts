@@ -74,6 +74,113 @@ test('variables set on the line, loops and mktemp expand; others are unknown', (
   expect(only('while read -r f; do rm "$f"; done < list')).toMatchObject({ op: 'unknown' })
 })
 
+test('braces expand into the words bash makes of them, for every command', () => {
+  const paths = (command: string) => (only(command) as { paths: string[] }).paths
+  expect(only('rm -rf {a,b}')).toEqual({ op: 'delete', dir: null, paths: ['a', 'b'], recursive: true, cmd: 'rm -rf {a,b}' })
+  expect(paths('rm -rf ~/{x,y}/z')).toEqual(['~/x/z', '~/y/z'])
+  expect(paths('rm -rf .{git,x}')).toEqual(['.git', '.x'])
+  expect(paths('rm {a,b{c,d}} {a,b}{1,2}')).toEqual(['a', 'bc', 'bd', 'a1', 'a2', 'b1', 'b2'])
+  expect(paths('rm f{1..3} {c..a} {3..1}')).toEqual(['f1', 'f2', 'f3', 'c', 'b', 'a', '3', '2', '1'])
+  expect(paths('rm {a,"b c"} {\\,a,b}')).toEqual(['a', 'b c', ',a', 'b'])
+  // An empty word goes, unless something quoted is in it.
+  expect(paths("rm {,a} ''{,b}")).toEqual(['a', '', 'b'])
+  // Braces are expanded before options and positions are read.
+  expect(only('mv {a,b} /elsewhere')).toMatchObject({ op: 'copy', sources: ['a', 'b'], dest: ['/elsewhere'] })
+  expect(only('mv {.git,x}')).toMatchObject({ op: 'copy', sources: ['.git'], dest: ['x'] })
+  expect(only('cp x {.env,.git/config}')).toMatchObject({ op: 'copy', sources: ['x', '.env'], dest: ['.git/config'] })
+  expect(only('cp .env{,.bak}')).toMatchObject({ op: 'copy', sources: ['.env'], dest: ['.env.bak'] })
+  expect(only('{rm,-rf,x}')).toMatchObject({ op: 'delete', paths: ['x'], recursive: true })
+  expect(only('git checkout -- {a,b}.ts')).toMatchObject({ op: 'git', argv: ['checkout', '--', 'a.ts', 'b.ts'] })
+  expect(only('find {a,b} -name x -delete')).toMatchObject({ op: 'find', argv: ['a', 'b', '-name', 'x', '-print'] })
+  expect(only('echo x | tee {a,b}.log')).toMatchObject({ op: 'overwrite', paths: ['a.log', 'b.log'] })
+  expect(paths('for d in {a,b}; do rm -rf "$d"; done')).toEqual(['a', 'b'])
+  // bash refuses a redirect to several words, but zsh writes to each.
+  expect(only('echo x > {a,b}')).toMatchObject({ op: 'overwrite', paths: ['a', 'b'] })
+  // After brace expansion $X{a,b} names the variables Xa and Xb, as in bash.
+  expect(paths('X=p; rm ${X}{a,b}')).toEqual(['pa', 'pb'])
+  expect(only('X=p; rm $X{a,b}')).toMatchObject({ op: 'unknown', what: '$Xa is not set on this command line' })
+})
+
+test('braces that are quoted, escaped, unclosed or hold no list or sequence stay as written', () => {
+  const paths = (command: string) => (only(command) as { paths: string[] }).paths
+  expect(paths(`rm "{a,b}" '{c,d}' \\{e,f\\} {g} {} {},h} {i,j {k..} {1..2{l,m}}`)).toEqual([
+    '{a,b}', '{c,d}', '{e,f}', '{g}', '{}', '{},h}', '{i,j', '{k..}', '1..2l', '1..2m',
+  ])
+  expect(only('find . -name x -exec rm -rf {} +')).toMatchObject({ op: 'find', argv: ['.', '-name', 'x', '-print'] })
+  expect(only('git stash drop stash@{0}')).toMatchObject({ op: 'git', argv: ['stash', 'drop', 'stash@{0}'] })
+  // An assignment is never brace expanded; a declaration builtin's assignment is, as in bash 3.2.
+  expect(paths('X={a,b}; rm "$X"')).toEqual(['{a,b}'])
+  expect(paths('export X={a,b}; rm "$X"')).toEqual(['b'])
+  expect(paths('rm -rf ${HOME:-{a,b}}')).toEqual([HOME])
+})
+
+test('braces that make too many words, nest too deep or that shells read differently are unknown', () => {
+  const what = (command: string) => (only(command) as { what: string }).what
+  expect(what('rm -rf x{1..65}')).toBe('x{1..65} has too many values to check')
+  expect(only('rm -rf x{1..64}')).toMatchObject({ op: 'delete' })
+  expect(only('rm -rf x{64..1}')).toMatchObject({ op: 'delete' })
+  expect(what('rm {a,b}{c,d}{e,f}{g,h}{i,j}{k,l}{m,n}')).toBe('{a,b}{c,d}{e,f}{g,h}{i,j}{k,l}{m,n} has too many values to check')
+  const list = Array.from({ length: 65 }, (_, k) => `f${k}`).join(',')
+  expect(what(`rm {${list}}`)).toContain('has too many values to check')
+  expect(only(`rm {${list.split(',').slice(0, 64).join(',')}}`)).toMatchObject({ op: 'delete' })
+  const nest = (n: number): string => (n === 0 ? 'z' : `{${n},${nest(n - 1)}}`)
+  expect(only(`rm ${nest(8)}`)).toMatchObject({ op: 'delete', paths: ['8', '7', '6', '5', '4', '3', '2', '1', 'z'] })
+  expect(what(`rm ${nest(9)}`)).toContain('has braces nested too deep to read')
+  for (const seq of ['{1..9..2}', '{01..10}', '{1..010}', '{-01..1}', '{a..e..2}', '{a..Z}', '{Y..b}', '{1..99999999999999999999}']) {
+    expect({ seq, what: what(`rm -rf x${seq}`) }).toEqual({ seq, what: `x${seq} has a brace sequence Blast Radius doesn't expand` })
+  }
+})
+
+test("$'...' is decoded as bash decodes it", () => {
+  const paths = (command: string) => (only(command) as { paths: string[] }).paths
+  expect(paths("rm -rf $'\\x2egit' $'\\056git' $'\\u002egit' $'\\U0000002egit'")).toEqual(['.git', '.git', '.git', '.git'])
+  expect(paths("rm $'a\\nb\\tc' $'it\\'s' $'\\\\' $'\\\"' $'\\?' $'\\a\\b\\e\\E\\f\\r\\v'")).toEqual([
+    'a\nb\tc', "it's", '\\', '"', '[?]', '\x07\b\x1b\x1b\f\r\v',
+  ])
+  expect(paths("rm $'\\cA' $'\\c?' $'\\ca' $'\\777'")).toEqual(['\x01', '\x7f', '\x01', '\xff'])
+  // A NUL ends the text; escapes bash doesn't know, or with no digits, stay as written.
+  expect(paths("rm $'a\\0b' $'\\q' $'\\x' $'\\u' $'\\U110000'")).toEqual(['a', '\\q', '\\x', '\\u', '\\U110000'])
+  // Its glob characters are quoted, and inside double quotes it is plain text.
+  expect(paths("rm $'x*' \"$'y'\"")).toEqual(['x[*]', "$'y'"])
+  expect(only("bash -c $'rm -rf build\\n'")).toMatchObject({ op: 'delete', paths: ['build'] })
+})
+
+test('an unquoted variable splits into words at spaces, tabs and newlines', () => {
+  const paths = (command: string) => (only(command) as { paths: string[] }).paths
+  expect(paths('F="src/x.py src/y.py"; rm $F')).toEqual(['src/x.py', 'src/y.py'])
+  expect(paths('F="src/x.py src/y.py"; rm "$F"')).toEqual(['src/x.py src/y.py'])
+  expect(paths("F=$'a\\tb\\nc'; rm $F")).toEqual(['a', 'b', 'c'])
+  expect(paths('F=" a b "; rm x${F}y')).toEqual(['x', 'a', 'b', 'y'])
+  expect(paths('F="a  b"; rm $F$F')).toEqual(['a', 'ba', 'b'])
+  expect(paths('F="a b"; rm {x,y}$F')).toEqual(['xa', 'b', 'ya', 'b'])
+  expect(paths('F="-rf build"; rm $F')).toEqual(['build'])
+  expect(only('F="-rf build"; rm $F')).toMatchObject({ recursive: true })
+  expect(paths('LIST="a b"; for f in $LIST; do rm "$f"; done')).toEqual(['a', 'b'])
+  expect(only('P=".git x"; mv $P')).toMatchObject({ op: 'copy', sources: ['.git'], dest: ['x'] })
+  expect(only('C="rm -rf x"; $C')).toMatchObject({ op: 'delete', paths: ['x'] })
+  // An empty unquoted variable is no word at all; a quoted one is an empty word.
+  expect(analyze('E=; rm -rf $E')).toEqual([])
+  expect(paths('E=; rm -rf $E/')).toEqual(['/'])
+  expect(paths('E=; rm -rf "$E"')).toEqual([''])
+  // Assignments, declaration builtins, here-strings and redirect targets never split.
+  expect(paths('F="a b"; X=$F; rm "$X"')).toEqual(['a b'])
+  expect(paths('F="a b"; export X=$F; rm "$X"')).toEqual(['a b'])
+  expect(only('F="a b"; echo x > $F')).toMatchObject({ op: 'overwrite', paths: ['a b'] })
+  expect(analyze("F=$'rm a\\nrm b'; bash <<< $F").map(e => (e as { paths: string[] }).paths)).toEqual([['a'], ['b']])
+  // bash 3.2 goes to the first of several folders; later bash refuses, so nothing runs.
+  expect(only('F="a b"; cd $F && rm x')).toMatchObject({ op: 'delete', dir: 'a', paths: ['x'] })
+})
+
+test('splitting that depends on the pass or on a changed $IFS is unknown', () => {
+  const what = (command: string) => (only(command) as { what: string }).what
+  expect(what('for f in "a b" c; do rm $f; done')).toBe('$f has several values that split into words')
+  expect(only('for f in "a b" c; do rm "$f"; done')).toMatchObject({ op: 'delete', paths: ['a b', 'c'] })
+  expect(only('for f in a c; do rm $f; done')).toMatchObject({ op: 'delete', paths: ['a', 'c'] })
+  expect(what('IFS=:; F=a:b; rm $F')).toBe('$IFS is set on this line, so how $F splits is unknown')
+  expect(only('IFS=:; F="a b"; rm "$F"')).toMatchObject({ op: 'delete', paths: ['a b'] })
+  expect(only('IFS=:; F="a b"; echo x > $F')).toMatchObject({ op: 'overwrite', paths: ['a b'] })
+})
+
 test('redirects that truncate are overwrites; appends, fds and /dev/null and kin are not', () => {
   expect(only('echo hi > out.txt 2>&1')).toMatchObject({ op: 'overwrite', paths: ['out.txt'] })
   expect(only('echo hi >| ~/.zshrc')).toMatchObject({ op: 'overwrite', paths: ['~/.zshrc'] })
