@@ -1192,46 +1192,105 @@ function git(args: Word[], dir: DirState, ctx: Ctx, raw: string): void {
   emit(ctx, dir, [], raw, d => ({ op: 'git', dir: d, argv, cmd: short(raw) }))
 }
 
-function copy(mode: 'mv' | 'cp' | 'ln', name: string, args: Word[], dir: DirState, ctx: Ctx, raw: string): void {
-  let targetDir: Word | null = null
-  let noTargetDir = false
-  let noClobber = false
-  let force = false
-  const pos: Word[] = []
+// What an option of mv, cp, install or ln does about a destination that already exists:
+// `keep` it or `replace` it (the last of the two wins, as in BSD mv and cp and GNU mv;
+// GNU cp keeps on `-nf`, which this counts as replacing), `backup` it first so nothing is
+// lost, treat it as a file even when it is a folder (`noTargetDir`), or make folders and
+// copy nothing (`makesDirs`, install -d).
+type CopyOpt = 'keep' | 'replace' | 'backup' | 'noTargetDir' | 'makesDirs'
+type CopyKind = 'mv' | 'cp' | 'install' | 'ln'
+
+const COPY_SHARED: Record<string, CopyOpt> = {
+  '-b': 'backup', '--backup': 'backup', '-T': 'noTargetDir', '--no-target-directory': 'noTargetDir',
+}
+const MV_CP_OPTS: Record<string, CopyOpt> = {
+  ...COPY_SHARED, '-n': 'keep', '--no-clobber': 'keep', '-f': 'replace', '--force': 'replace', '-i': 'replace', '--interactive': 'replace',
+}
+// Each command's own options; `valued` are the short ones that take a value in every
+// version of it (BSD cp's and install's -S take none, so a path after one is still a path),
+// and `replaces` says whether an existing destination is replaced when no option says.
+const COPY_OPTS: Record<CopyKind, { opts: Record<string, CopyOpt>; valued: string; replaces: boolean }> = {
+  mv: { opts: MV_CP_OPTS, valued: 'tS', replaces: true },
+  cp: { opts: MV_CP_OPTS, valued: 't', replaces: true },
+  install: { opts: { ...COPY_SHARED, '-d': 'makesDirs', '--directory': 'makesDirs' }, valued: 'tmog', replaces: true },
+  // ln fails on a destination that exists unless -f, BSD's -F (which implies -f with -s)
+  // or a yes to -i has it replaced. Its -n and -h only stop it following a link to a folder.
+  ln: {
+    opts: { ...COPY_SHARED, '-f': 'replace', '--force': 'replace', '-F': 'replace', '-i': 'replace', '--interactive': 'replace' },
+    valued: 'tS',
+    replaces: false,
+  },
+}
+// --backup=none and =off make no backup, so only a value naming a kind of backup counts.
+const BACKS_UP = /^--backup=(t|numbered|existing|nil|simple|never)$/
+
+interface CopyOptions {
+  pos: Word[]
+  targetDir: Word | null
+  noTargetDir: boolean
+  replace: boolean
+  backup: boolean
+  makesDirs: boolean
+}
+
+// An option's value cut out of its word, as a word of its own; its glob characters stay literal.
+const quotedLiteral = (value: string): Word => ({ parts: [{ kind: 'lit', text: value, quoted: true }], raw: value })
+
+function setCopyOpt(o: CopyOptions, opt: CopyOpt | undefined): void {
+  if (opt === 'keep' || opt === 'replace') o.replace = opt === 'replace'
+  else if (opt === 'backup') o.backup = true
+  else if (opt === 'noTargetDir') o.noTargetDir = true
+  else if (opt === 'makesDirs') o.makesDirs = true
+}
+
+// One long option; returns how many of the following words it took as its value.
+function longCopyOpt(o: CopyOptions, kind: CopyKind, t: string, next: Word | undefined): number {
+  if (t === '--target-directory') {
+    o.targetDir = next ?? null
+    return 1
+  }
+  if (t.startsWith('--target-directory=')) o.targetDir = quotedLiteral(t.slice(19))
+  else if (/^--(suffix|mode|owner|group)$/.test(t)) return 1
+  else if (t.startsWith('--backup=')) setCopyOpt(o, BACKS_UP.test(t) ? 'backup' : undefined)
+  else setCopyOpt(o, COPY_OPTS[kind].opts[t])
+  return 0
+}
+
+// Combined short options (-fv, -t DIR, -tDIR); returns how many following words they took.
+function shortCopyOpts(o: CopyOptions, kind: CopyKind, t: string, next: Word | undefined): number {
+  for (let j = 1; j < t.length; j += 1) {
+    const ch = t[j] as string
+    if (COPY_OPTS[kind].valued.includes(ch)) {
+      const value = t.slice(j + 1)
+      if (ch === 't') o.targetDir = value ? quotedLiteral(value) : (next ?? null)
+      return value ? 0 : 1
+    }
+    setCopyOpt(o, COPY_OPTS[kind].opts[`-${ch}`])
+  }
+  return 0
+}
+
+function copyOptions(kind: CopyKind, args: Word[]): CopyOptions {
+  const o: CopyOptions = { pos: [], targetDir: null, noTargetDir: false, replace: COPY_OPTS[kind].replaces, backup: false, makesDirs: false }
   let ended = false
-  const valued = name.endsWith('install') ? 'tSmog' : 'tS'
   for (let k = 0; k < args.length; k += 1) {
     const w = args[k] as Word
     const t = text(w)
-    if (ended || t === null || !t.startsWith('-') || t === '-') {
-      pos.push(w)
-      continue
-    }
-    if (t === '--') ended = true
-    else if (t === '--target-directory') targetDir = args[++k] ?? null
-    else if (t.startsWith('--target-directory=')) targetDir = { parts: [{ kind: 'lit', text: t.slice(19), quoted: true }], raw: t }
-    else if (t === '--no-target-directory') noTargetDir = true
-    else if (t === '--no-clobber' || t.startsWith('--backup')) noClobber = true
-    else if (t === '--force') force = true
-    else if (/^--(suffix|mode|owner|group)$/.test(t)) k += 1
-    else if (!t.startsWith('--')) {
-      // Combined short options: -fv, -t DIR, -tDIR.
-      for (let j = 1; j < t.length; j += 1) {
-        const ch = t[j] as string
-        if (valued.includes(ch)) {
-          const value = t.slice(j + 1)
-          const valueWord = value ? { parts: [{ kind: 'lit' as const, text: value, quoted: true }], raw: value } : (args[++k] ?? null)
-          if (ch === 't') targetDir = valueWord
-          break
-        }
-        if (ch === 'T') noTargetDir = true
-        if (ch === 'n' || ch === 'b') noClobber = true
-        if (ch === 'f') force = true
-        if (ch === 'd' && name.endsWith('install')) return // install -d makes folders
-      }
-    }
+    if (ended || t === null || !t.startsWith('-') || t === '-') o.pos.push(w)
+    else if (t === '--') ended = true
+    else if (t.startsWith('--')) k += longCopyOpt(o, kind, t, args[k + 1])
+    else k += shortCopyOpts(o, kind, t, args[k + 1])
   }
-  if (mode === 'ln' && !force) noClobber = true
+  return o
+}
+
+function copy(mode: 'mv' | 'cp' | 'ln', name: string, args: Word[], dir: DirState, ctx: Ctx, raw: string): void {
+  const o = copyOptions(name.endsWith('install') ? 'install' : mode, args)
+  if (o.makesDirs) return
+  const { pos, noTargetDir } = o
+  // `ln [-f] TARGET` links into the working folder, under the target's own name.
+  const targetDir = o.targetDir ?? (mode === 'ln' && pos.length === 1 ? quotedLiteral('.') : null)
+  const noClobber = o.backup || !o.replace
   let sources = pos
   let dest: Word[]
   if (targetDir) {
