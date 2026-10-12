@@ -168,6 +168,112 @@ test('commands inside $( ), bash -c and eval are read too', () => {
   expect(only("node -e 'require(\"fs\").rmSync(\"x\", {recursive: true})'")).toMatchObject({ op: 'unknown' })
 })
 
+// The effects without their command text, which names the wrapper too.
+const bare = (command: string) => analyze(command).map(({ cmd: _cmd, ...effect }) => effect)
+const sameAs = (plain: string, wrapped: string[]) => {
+  const want = bare(plain)
+  expect(want.length).toBe(1)
+  for (const command of wrapped) expect({ command, effects: bare(command) }).toEqual({ command, effects: want })
+}
+
+test('uv run, poetry run, flock and ionice are judged by the command they run', () => {
+  const code = `-c "import shutil; shutil.rmtree('/opt/x')"`
+  sameAs(`python ${code}`, [
+    `uv run python ${code}`,
+    `uv run --with x python ${code}`,
+    `uv --quiet run --with=x -p 3.12 --frozen -- python ${code}`,
+    `uv run -qw x --env-file .env python ${code}`,
+    `~/.local/bin/uv run -n --no-sync python ${code}`,
+    `poetry run python ${code}`,
+    `poetry -q run -P sub -- python ${code}`,
+  ])
+  sameAs('rm -rf ~/x', [
+    'flock /tmp/l rm -rf ~/x',
+    'flock -n -w 5 /tmp/l rm -rf ~/x',
+    'flock -nE 3 --timeout 5 -- /tmp/l rm -rf ~/x',
+    'flock -- -lock rm -rf ~/x',
+    "flock /tmp/l -c 'rm -rf ~/x'",
+    "flock --conflict-exit-code=3 /tmp/l --command 'rm -rf ~/x'",
+    'ionice -c3 rm -rf ~/x',
+    'ionice -c 2 -n 7 -t rm -rf ~/x',
+    'ionice --class idle -- rm -rf ~/x',
+  ])
+  expect(only("uv run python - <<'EOF'\nimport shutil\nshutil.rmtree('x')\nEOF")).toMatchObject({ op: 'unknown' })
+  // A lone `-` runs stdin as Python.
+  const body = "\nimport shutil\nshutil.rmtree('/opt/x')\nEOF"
+  sameAs(`python - <<'EOF'${body}`, [`uv run - <<'EOF'${body}`, `uv run --no-project -- - <<'EOF'${body}`])
+  expect(only(`uv run - <<'EOF'${body}`)).toMatchObject({ op: 'unknown', what: 'inline python code that deletes files' })
+  expect(analyze(`poetry run - <<'EOF'${body}`)).toEqual([])
+  expect(only('flock /tmp/l -c "$CMD"')).toMatchObject({ op: 'unknown' })
+  // Other subcommands name packages, not commands; flock on a file descriptor runs nothing.
+  for (const command of ['uv sync', 'uv remove rm build', 'poetry add rm build', 'uv run', 'flock 9', 'flock -u 9', 'flock /tmp/l -c "echo hi"']) {
+    expect({ command, effects: analyze(command) }).toEqual({ command, effects: [] })
+  }
+})
+
+test('every wrapper skips its own options, in any form, to find its command', () => {
+  sameAs('rm -rf /opt/x', [
+    'sudo --user root rm -rf /opt/x',
+    'sudo --user=root -- rm -rf /opt/x',
+    'sudo -Eu root rm -rf /opt/x',
+    'sudo -uroot -g wheel rm -rf /opt/x',
+    'sudo -u"$U" rm -rf /opt/x',
+    'doas -u root rm -rf /opt/x',
+    'nice -n5 rm -rf /opt/x',
+    'nice --adjustment 5 rm -rf /opt/x',
+    'nice -10 rm -rf /opt/x',
+    '/usr/bin/time -l rm -rf /opt/x',
+    'time -f %e rm -rf /opt/x',
+    'command -- rm -rf /opt/x',
+    'timeout --signal KILL -k 5 10 rm -rf /opt/x',
+    'timeout -k5s 10 rm -rf /opt/x',
+    'stdbuf -o L -eL rm -rf /opt/x',
+    'caffeinate -di -t 60 rm -rf /opt/x',
+    'exec -a name rm -rf /opt/x',
+    'exec - rm -rf /opt/x',
+    'exec -- - rm -rf /opt/x',
+    'exec -a foo - rm -rf /opt/x',
+    '- rm -rf /opt/x',
+    'nohup -- rm -rf /opt/x',
+    'env -i A=1 B=2 rm -rf /opt/x',
+    'env - rm -rf /opt/x',
+    'env -iu HOME -P /bin rm -rf /opt/x',
+    'env -i - A=1 rm -rf /opt/x',
+    "env -S'rm -rf /opt/x'",
+    "env --split-string='rm -rf /opt/x'",
+    "env --split-string 'rm -rf /opt/x'",
+    'env "X=1" rm -rf /opt/x',
+    "env 'X=a b' rm -rf /opt/x",
+    'env "PATH=$PATH:/x" rm -rf /opt/x',
+    'sudo env --unset X timeout 5 nice -n 5 rm -rf /opt/x',
+    'stdbuf --output L rm -rf /opt/x',
+    '/usr/bin/time --output log rm -rf /opt/x',
+    "/usr/bin/time --format '%e' rm -rf /opt/x",
+    'flock --wait 5 /tmp/l rm -rf /opt/x',
+    'ionice --classdata 7 rm -rf /opt/x',
+  ])
+  expect(only('env -S "$CMD"')).toMatchObject({ op: 'unknown', what: 'env -S: $CMD is not set on this command line' })
+  // command -v and -V print where each name is found.
+  for (const command of ['command -v rm cp', 'command -pV rm cp', 'sudo -i', 'env -S', 'env A=1 B=2']) {
+    expect({ command, effects: analyze(command) }).toEqual({ command, effects: [] })
+  }
+})
+
+test('a wrapper that changes folder moves where its command is measured from', () => {
+  expect(only('uv run --directory sub rm -rf build')).toMatchObject({ op: 'delete', dir: 'sub', paths: ['build'] })
+  expect(only('uv --directory=/srv run rm x')).toMatchObject({ dir: '/srv' })
+  expect(only('uv run --project sub rm x')).toMatchObject({ dir: null })
+  expect(only('poetry -C sub run rm x')).toMatchObject({ dir: 'sub' })
+  expect(only('poetry run --directory=sub rm x')).toMatchObject({ dir: 'sub' })
+  expect(only('poetry --project sub run rm x')).toMatchObject({ dir: null })
+  expect(only('sudo -D /srv rm x')).toMatchObject({ dir: '/srv' })
+  expect(only('cd a && env --chdir=b rm x')).toMatchObject({ dir: 'a/b' })
+  expect(only('uv run --directory "$D" rm x')).toEqual({
+    op: 'unknown', what: 'paths relative to uv --directory with an expansion', cmd: 'uv run --directory "$D" rm x',
+  })
+  expect(only('env -C "$D" rm x')).toMatchObject({ op: 'unknown', what: 'paths relative to env -C with an expansion' })
+})
+
 test('find becomes a dry run: deleting actions print, other actions do nothing', () => {
   expect(only("find . -name '*.pyc' -delete")).toEqual({
     op: 'find', dir: null, argv: ['.', '-name', '*.pyc', '-print'], recursive: false, cmd: "find . -name '*.pyc' -delete",
