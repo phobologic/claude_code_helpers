@@ -909,7 +909,7 @@ function withInput(words: Word[], token: string | null, ctx: Ctx): Word[] {
     const [one, ...more] = v.values
     // Several values, some holding the token: the word is only known when it runs.
     if (one === undefined || more.length > 0) return [p, inputPart]
-    return cut({ kind: 'lit', text: one.text, quoted: p.quoted && !one.pattern })
+    return cut({ kind: 'lit', text: one.text, quoted: p.quoted })
   }
   return words.map(w => ({ parts: w.parts.flatMap(fill), raw: w.raw.split(token).join(INPUT_RAW) }))
 }

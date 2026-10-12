@@ -169,6 +169,12 @@ test('commands inside $( ), bash -c and eval are read too', () => {
   expect(only('eval "rm -rf build"')).toMatchObject({ op: 'delete', paths: ['build'] })
   expect(only('sh -c "$CMD"')).toMatchObject({ op: 'unknown' })
   expect(only("node -e 'require(\"fs\").rmSync(\"x\", {recursive: true})'")).toMatchObject({ op: 'unknown' })
+  expect(only("python3 -W ignore -c 'import shutil; shutil.rmtree(\"x\")'")).toMatchObject({ op: 'unknown' })
+  expect(analyze('python3 -c "print(\'$NAME\')"')).toEqual([])
+  // Only deno reads code after `eval`; node runs a script by that name, and a script's
+  // stdin is its data.
+  expect(analyze("node eval 'require(\"fs\").rmSync(\"x\")'")).toEqual([])
+  expect(analyze("python3 tool.py <<'EOF'\nimport shutil; shutil.rmtree('x')\nEOF")).toEqual([])
 })
 
 test('find becomes a dry run: deleting actions print, other actions do nothing', () => {
@@ -240,6 +246,7 @@ test('what xargs or find -exec runs is judged by its own words, the input unknow
   expect(only('ls | xargs -0 python3 -c')).toEqual({ ...fromInput, cmd: 'xargs -0 python3 -c' })
   expect(only("ls | xargs -I{} node -e 'console.log(\"{}\")'")).toMatchObject(fromInput)
   expect(only("find . -name '*.ts' -exec deno eval {} \\;")).toMatchObject({ op: 'unknown' })
+  expect(only("ls | xargs -I{} python3 -c 'import os; os.remove(\"{}\")'")).toMatchObject(fromInput)
   // Code that only takes the input as an argument is read as it is written.
   expect(analyze("ls | xargs python3 -c 'import sys; print(sys.argv)'")).toEqual([])
   // Variables set on the line reach it, and it runs where a wrapper of xargs puts it.
@@ -334,7 +341,19 @@ test("xargs's options: where its command starts and where its input goes", () =>
   expect(only("D='{}'; ls | xargs -I{} rm -rf \"$D\"")).toMatchObject(fromInput)
   expect(only("D='~/backup/{}'; find . -name x | xargs -I{} rm -rf \"$D\"")).toMatchObject(fromInput)
   expect(analyze("D='{}'; find . -name x | xargs -I{} rm -rf \"$D\"").map(e => e.op)).toEqual(['find'])
-  expect(only('for d in a/{} b; do ls | xargs -I{} rm -rf "$d"; done')).toMatchObject(fromInput)
+  expect(only('for d in b a/{}; do ls | xargs -I{} rm -rf "$d"; done')).toMatchObject(fromInput)
+  expect(only('for d in b {}; do find . -name x | xargs -I{} rm -rf "$d"; done')).toMatchObject(fromInput)
+  expect(only('for d in a b; do ls | xargs -I{} rm -rf "$d"; done')).toMatchObject({ op: 'delete', paths: ['a', 'b'] })
+  expect(only('ls | xargs -I{} rm -rf "$X"')).toMatchObject({ op: 'unknown', what: '$X is not set on this command line' })
+  // So is one -J could replace in some runs of a loop and not others.
+  expect(analyze('for p in % b; do find . -name x | xargs -J % rm -rf "$p"; done')).toMatchObject([
+    { op: 'delete', paths: ['%', 'b'] },
+    { op: 'find' },
+  ])
+  expect(analyze('find . -name x | xargs -J % rm -rf % %/x')).toMatchObject([{ op: 'delete', paths: ['%/x'] }, { op: 'find' }])
+  expect(only('for r in % {}; do ls | xargs -I "$r" rm -rf %; done')).toMatchObject({
+    op: 'unknown', what: 'what xargs -I or -J replaces is only known when it runs',
+  })
   for (const command of [
     "ls | xargs -I{} sh -c 'rm -rf {}'",
     'ls | xargs -I % sh -c %',
