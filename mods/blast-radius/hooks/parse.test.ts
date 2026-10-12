@@ -126,12 +126,14 @@ test('an unquoted heredoc runs the $( ) and backticks in its body; a quoted one 
   expect(analyze("bash <<'EOF'\necho \\`rm -rf build\\`\nEOF")).toEqual([])
   expect(only('bash <<EOF\nrm -rf \\$HOME/x\nEOF')).toMatchObject({ paths: [`${HOME}/x`] })
   expect(only('bash <<EOF\nrm -rf \\\\$HOME/x\nEOF')).toMatchObject({ paths: [`${HOME}/x`] })
+  expect(only('bash <<EOF\necho \\\\`date` > out.txt\nEOF')).toEqual({ op: 'overwrite', dir: null, paths: ['out.txt'], cmd: 'echo `date` > out.txt' })
   expect(only("bash <<EOF\nrm -rf 'a\\\\b' 'bu\\\nild'\nEOF")).toMatchObject({ paths: ['a\\b', 'build'] })
   expect(only("bash <<'EOF'\nrm -rf 'a\\\\b' 'bu\\\nild'\nEOF")).toMatchObject({ paths: ['a\\\\b', 'bu\\\nild'] })
 })
 
 test('commands inside $( ), bash -c and eval are read too', () => {
   expect(only('echo $(rm -rf x)')).toMatchObject({ op: 'delete', paths: ['x'] })
+  expect(only('cat <<< "$(rm -rf x)"')).toMatchObject({ op: 'delete', paths: ['x'] })
   expect(only("bash -lc 'rm -rf build'")).toMatchObject({ op: 'delete', paths: ['build'] })
   expect(only('eval "rm -rf build"')).toMatchObject({ op: 'delete', paths: ['build'] })
   expect(only('sh -c "$CMD"')).toMatchObject({ op: 'unknown' })
