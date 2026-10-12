@@ -4,10 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Purpose
 
-This repository is the source of truth for `~/.claude/` — personal Claude Code dotfiles.
-It provides global skills, sub-agents for multi-agent code review, a global CLAUDE.md
-with working style rules, language plugins for auto-formatting, and tool rules for deployment
-and database conventions.
+This repository is the source of truth for most of `~/.claude/` — personal Claude Code dotfiles.
+It provides global skills, sub-agents, the run-tickets workflow, language plugins for
+auto-formatting, and tool rules for deployment and database conventions. The global
+`~/.claude/CLAUDE.md` (working style rules) and `~/.claude/settings.json` are not here:
+they live in the `myhome` repo under `.claude_global/`, whose `install.sh` links them, so
+they sync across machines. Edit them there.
 
 ## Repository Structure
 
@@ -21,14 +23,12 @@ tools/          Per-tool rules files (railway, sqlalchemy) — loaded via .claud
 bin/            Utility scripts (tk plugins, etc.)
 tests/          Tests for the run-tickets workflow script and planner (plain node / python3)
 docs/           Documentation and migration guides
-CLAUDE.global.md  Global CLAUDE.md — symlinked to ~/.claude/CLAUDE.md
 install.sh      Sets up ~/.claude/ symlinks from scratch
 ```
 
 ## Installation
 
 Run `./install.sh` to configure `~/.claude/`:
-- `~/.claude/CLAUDE.md` → `CLAUDE.global.md`
 - `~/.claude/skills/` → `skills/`
 - `~/.claude/agents/` → `agents/`
 - `~/.claude/workflows/` → `workflows/`
@@ -159,6 +159,5 @@ The workflow test runs the real script with fake agents and checks scheduling (c
 
 ## Important Notes
 
-- `CLAUDE.global.md` is symlinked to `~/.claude/CLAUDE.md` — it cannot be renamed to `CLAUDE.md` here because that would cause it to be loaded twice when working in this repo
 - Review reports are generated in `.code-review/` directory
 - Local settings should be in `settings.local.json` (gitignored)

@@ -16,7 +16,6 @@ ticket runner, language plugins, tool rules, and working style rules for `~/.cla
 | `bin/` | Utility scripts: tk plugins (`tk-show-multi`, `tk-epic-status`, `tk-triage`, `tk-set`, `tk-backlog`) and `git-auto-commit.sh` |
 | `hooks/` | Global Claude Code hooks (e.g. `no-inline-scripts.sh` — flags inline-interpreter and heredoc-to-file Bash patterns as a non-blocking, in-context nudge toward Write/Edit) |
 | `tests/` | Dependency-free tests for the `run-tickets-engine` workflow script (run in Node with fake agents), `bin/run-tickets-plan`, `bin/run-tickets-setup` and `bin/run-tickets-finish`, and `bin/wrap-epic-plan` |
-| `CLAUDE.global.md` | Global CLAUDE.md with personal working style rules |
 | `settings.global.json` | Global Claude Code settings — env, permissions, hooks, statusLine |
 | `install.sh` | Sets up `~/.claude/` symlinks from scratch |
 
@@ -28,9 +27,11 @@ cd ~/git/claude_code
 ./install.sh
 ```
 
-This creates:
-- `~/.claude/CLAUDE.md` → `CLAUDE.global.md`
-- `~/.claude/settings.json` → `settings.global.json`
+This creates the links below. The global `~/.claude/CLAUDE.md` (working style rules)
+is not one of them: it lives in the `myhome` repo as `.claude_global/CLAUDE.md`, and
+that repo's `install.sh` links it, so it syncs across machines.
+
+- `~/.claude/settings.json` → `settings.global.json` *(skipped when it already exists; on this machine `myhome` links it)*
 - `~/.claude/hooks/<name>.sh` → `hooks/<name>.sh` *(every script in `hooks/`)*
 - `~/.claude/skills/` → `skills/`
 - `~/.claude/agents/` → `agents/`
@@ -55,7 +56,7 @@ with absolute paths, or anything you don't want in the public repo.
 ### Scratch files
 
 When Claude needs to write a temporary file (long heredocs, generated prompts,
-ad-hoc analysis output), `CLAUDE.global.md` instructs it to prefer a project-local
+ad-hoc analysis output), the global rules instruct it to prefer a project-local
 `.tmp/` directory over `/tmp`. This keeps the working directory inside the repo
 and makes the artifacts inspectable after the fact. `.tmp/` is globally
 gitignored by `install.sh` — no per-project setup needed.
