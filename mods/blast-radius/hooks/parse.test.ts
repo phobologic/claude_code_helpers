@@ -299,6 +299,33 @@ test('git commands that can discard work go to the judge; the rest never do', ()
   }
 })
 
+test('git commands that move an existing branch go to the judge; making a new one does not', () => {
+  expect(only('git checkout -B main origin/main')).toEqual({ op: 'git', dir: null, argv: ['checkout', '-B', 'main', 'origin/main'], cmd: 'git checkout -B main origin/main' })
+  expect(only('git switch -C main origin/main')).toMatchObject({ op: 'git', argv: ['switch', '-C', 'main', 'origin/main'] })
+  expect(only('git branch -f main HEAD~3')).toMatchObject({ op: 'git', argv: ['branch', '-f', 'main', 'HEAD~3'] })
+  for (const argv of [
+    ['checkout', '-B', 'x'], ['checkout', '-qB', 'x', 'main'], ['checkout', '-Bx'],
+    ['switch', '-C', 'x'], ['switch', '-qC', 'x'], ['switch', '--force-create', 'x'], ['switch', '--force-create=x'],
+    ['branch', '-f', 'x', 'main'], ['branch', '--force', 'x'], ['branch', '-qf', 'x'],
+    ['branch', '-M', 'a', 'b'], ['branch', '-C', 'a', 'b'], ['branch', '-m', '--force', 'a', 'b'],
+    // and the force that discards changes, however it is spelled
+    ['checkout', '-b', 'x', '-qf'], ['checkout', '-b', 'x', '--force'], ['switch', '-qf', 'main'], ['switch', '--force', 'main'],
+  ]) {
+    expect({ argv, risky: gitRisky(argv) }).toEqual({ argv, risky: true })
+  }
+  for (const argv of [
+    ['checkout', '-b', 'x', 'main'], ['checkout', '--orphan', 'x'], ['switch', '-c', 'x', 'main'], ['switch', '--create=x'],
+    ['branch', 'x', 'main'], ['branch', '-m', 'a', 'b'], ['branch', '-c', 'a', 'b'], ['branch', '-u', 'origin/x'],
+    ['branch', '--format=%(refname:short)'],
+    // A listing option's value is never read as options, so the f in it forces nothing.
+    ['branch', '--format', '-> %(refname) from %(upstream)'],
+    ['branch', '--sort', '-refname'],
+    ['branch', '--points-at', '-fixup'],
+  ]) {
+    expect({ argv, risky: gitRisky(argv) }).toEqual({ argv, risky: false })
+  }
+})
+
 test('git short options combined in one word count one by one, as git reads them', () => {
   for (const argv of [
     ['branch', '-df', 'x'],

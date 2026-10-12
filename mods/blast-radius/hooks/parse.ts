@@ -1105,7 +1105,7 @@ const GIT_VALUED = new Map([
   ['switch', ['-c', '-C', '--orphan']],
   ['restore', ['-s', '--source']],
   ['clean', ['-e', '--exclude']],
-  ['branch', ['-u', '--set-upstream-to']],
+  ['branch', ['-u', '--set-upstream-to', '--sort', '--format', '--points-at']],
 ])
 
 // A subcommand's arguments with short options combined in one word spelled out one per
@@ -1149,17 +1149,19 @@ export function gitRisky(argv: string[]): boolean {
     case 'reset':
       return has('--hard')
     case 'checkout':
-      return !has('-b', '-B', '--orphan') || has('-f', '--force')
+      // -b and --orphan make a new branch, which git refuses over one that exists; -B resets it.
+      return !has('-b', '--orphan') || has('-f', '--force')
     case 'restore':
       return !has('-S', '--staged') || has('-W', '--worktree')
     case 'switch':
-      return has('-f', '--force', '--discard-changes')
+      return has('-f', '--force', '--discard-changes', '-C', '--force-create') || rest.some(a => a.startsWith('--force-create='))
     case 'clean':
       return !has('-n', '--dry-run')
     case 'stash':
       return rest[0] === 'drop' || rest[0] === 'clear'
     case 'branch':
-      return has('-D') || (has('-d', '--delete') && has('-f', '--force'))
+      // Forced: -D deletes, -M and -C rename or copy over a branch, and -f with a name moves one.
+      return has('-f', '--force', '-D', '-M', '-C')
     case 'worktree':
       return rest[0] === 'remove'
     case 'rm':
