@@ -518,6 +518,19 @@ def branch_moves(s):
                  ["branch", "-f", "--sort", "refname", "side", "main"], ["branch", "-f", "--format", "x", "side", "main"]):
         expect(f"{say(argv)} over unmerged work holds", s.judge(git(*argv)), lost)
     expect("branch -f --points-at main side only lists", s.judge(git("branch", "-f", "--points-at", "main", "side")), [])
+    expect("branch -D --points-at side merged reads side as the option's value", s.judge(git("branch", "-D", "--points-at", "side", "merged")), [])
+    real_git = judge_module.git
+
+    def failing_log(args, cwd, timeout=60):
+        return subprocess.CompletedProcess(args, 128, b"", b"") if args[0] == "log" else real_git(args, cwd, timeout)
+
+    with mock.patch.object(judge_module, "git", failing_log):
+        try:
+            judge_module.moved_branch(s.repo, "side", "main")
+            raised = False
+        except judge_module.Unresolved:
+            raised = True
+    check("a git log that fails leaves a branch move unknown, never passed", raised)
     victim = os.path.join(s.home, "victim.txt")
     for argv in (["branch", "-D", "--", "--output=" + victim], ["branch", "-f", "side", "--", "--output=" + victim]):
         write(victim, "keep\n")
