@@ -82,6 +82,7 @@ test('redirects that truncate are overwrites; appends, fds and /dev/null and kin
   expect(only('cat image > /dev/disk2')).toMatchObject({ op: 'overwrite', paths: ['/dev/disk2'] })
   expect(only('cmd > /dev/fd/../disk2')).toMatchObject({ op: 'overwrite', paths: ['/dev/fd/../disk2'] })
   expect(only('cmd > /dev/nullx')).toMatchObject({ op: 'overwrite', paths: ['/dev/nullx'] })
+  expect(only('cmd > build/dev/null')).toMatchObject({ op: 'overwrite', paths: ['build/dev/null'] })
 })
 
 test('writes to /dev/null, /dev/stdout, /dev/stderr, /dev/tty and /dev/fd/N change nothing', () => {
@@ -101,6 +102,7 @@ test('a write to any other device is an overwrite, so the judge sees it', () => 
   // A body that can't be expanded is checked by its text: a sink is harmless, a disk is not.
   expect(analyze('bash -c "echo $X > /dev/null"')).toEqual([])
   expect(analyze('bash -c "echo $X >/dev/stderr; echo $Y"')).toEqual([])
+  expect(analyze('bash -c "echo $X > /dev/null && echo $Y"')).toEqual([])
   expect(analyze('eval echo $X \\>/dev/null')).toEqual([])
   expect(only('bash -c "echo $X > /dev/disk2"')).toMatchObject({ op: 'unknown' })
   expect(only('bash -c "echo $X > /dev/null2"')).toMatchObject({ op: 'unknown' })

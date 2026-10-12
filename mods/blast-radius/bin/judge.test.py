@@ -181,9 +181,15 @@ def overwrites_and_copies(s):
     expect("writing to any other device holds, as outside the repository", v, [("outside", "/dev/zero")])
     check("  and says it is a device", any("(a device)" in f["detail"] for f in v["findings"]), v["findings"])
     if os.path.exists("/dev/disk2"):  # the disk from the bug report, where this machine has one
-        expect("dd of=/dev/disk2 holds", s.judge(overwrite("/dev/disk2")), [("outside", "/dev/disk2")])
+        v = s.judge(overwrite("/dev/disk2"))
+        expect("dd of=/dev/disk2 holds", v, [("outside", "/dev/disk2")])
+        check("  and says it is a device", any("(a device)" in f["detail"] for f in v["findings"]), v["findings"])
         expect("cp onto /dev/disk2 holds", s.judge(copy("cp", ["README.md"], "/dev/disk2")), [("outside", "/dev/disk2")])
     expect("only a number after /dev/fd/ is a stream", s.judge(overwrite("/dev/fd/../zero")), [("outside", "/dev/zero")])
+    # A terminal such as /dev/ttyp0 or /dev/ttyS0, where the machine has one: only /dev/tty itself is free.
+    near = next((n for n in sorted(os.listdir("/dev")) if n.startswith("tty") and n[3:].isalnum()), None)
+    if near:
+        expect(f"/dev/{near} is not /dev/tty", s.judge(overwrite(f"/dev/{near}")), [("outside", f"/dev/{near}")])
     expect("mv onto an existing file outside holds", s.judge(copy("mv", ["README.md"], "~/.zshrc")), [("outside", "~/.zshrc")])
     write(os.path.join(s.outside, "README.md"))
     expect("mv into a folder that has the name holds", s.judge(copy("mv", ["README.md"], s.outside)), [("outside", os.path.join(s.outside, "README.md"))])
