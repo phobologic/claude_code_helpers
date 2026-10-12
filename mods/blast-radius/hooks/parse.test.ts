@@ -737,6 +737,11 @@ test("xargs -I's text in the command's name, or a name from the input, is held",
   }
   // -I's text in the default echo is held, as in any name, since GNU replaces in it.
   expect(analyze('ls | xargs -I c')).toEqual([named('xargs -I c')])
+  // An unreadable -J value is held with no command too: unquoted, it can split into one.
+  const unread = (cmd: string) => ({ op: 'unknown', what: 'what xargs -I or -J replaces is only known when it runs', cmd })
+  for (const command of ['ls | xargs -J $X', 'ls | xargs -J$X', 'ls | xargs -0 -J $X']) {
+    expect({ command, effects: analyze(command) }).toEqual({ command, effects: [unread(command.slice(5))] })
+  }
 })
 
 test('git commands that can discard work go to the judge; the rest never do', () => {

@@ -1530,7 +1530,13 @@ function holdsText(w: Word, ctx: Ctx, s: string): boolean {
 
 // The words xargs runs (`words`: a command and its arguments, never none), with its input
 // where its options put it, or why that can't be read. `held` says why they are held even so.
-function fedWords(words: Word[], o: XargsOpts, fed: Ctx): { words: Word[]; held?: string } | { unknown: string } {
+// `given` is false for the echo xargs runs when no command is given.
+function fedWords(
+  words: Word[],
+  o: XargsOpts,
+  fed: Ctx,
+  given: boolean,
+): { words: Word[]; held?: string } | { unknown: string } {
   if (o.unread) return { unknown: 'xargs options only known when it runs' }
   if (o.replace === null) return { words: withInput(words, null, fed) }
   const v = expand(o.replace, fed, 'plain')
@@ -1543,8 +1549,9 @@ function fedWords(words: Word[], o: XargsOpts, fed: Ctx): { words: Word[]; held?
     const bsd = { words: [name, ...withInput(rest, token, fed)] }
     return holdsText(name, fed, token) ? { ...bsd, held: 'the command xargs -I runs holds its replace text' } : bsd
   }
-  // BSD's -J puts the input in place of the first word that is the token, else after the words.
-  const at = words.findIndex(w => expandsTo(w, fed, token))
+  // BSD's -J puts the input in place of the first word that is the token, else after the
+  // words. It never puts it in place of the default echo, only after it.
+  const at = given ? words.findIndex(w => expandsTo(w, fed, token)) : -1
   if (at < 0) return { words: withInput(words, null, fed) }
   return { words: [...words.slice(0, at), inputWord(), ...words.slice(at + 1)] }
 }
@@ -1552,10 +1559,9 @@ function fedWords(words: Word[], o: XargsOpts, fed: Ctx): { words: Word[]; held?
 function xargs(args: Word[], dir: DirState, ctx: Ctx, piped: Cmd | null, raw: string): void {
   const o = xargsOpts(args)
   const fed = fedCtx(ctx, dir, 'what xargs passes comes from its input')
-  // With no command given, xargs runs echo. BSD's -J never puts the input in place of
-  // that echo, only after it; -I's text in it is held, since GNU replaces in it.
+  // With no command given, xargs runs echo. -I's text in it is held, since GNU replaces in it.
   const given = o.k < args.length
-  const words = fedWords(given ? args.slice(o.k) : [literal('echo')], given || !o.whole ? o : { ...o, replace: null }, fed)
+  const words = fedWords(given ? args.slice(o.k) : [literal('echo')], o, fed, given)
   if ('unknown' in words) {
     ctx.out.push({ op: 'unknown', what: words.unknown, cmd: short(raw) })
     return
