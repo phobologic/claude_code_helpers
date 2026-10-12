@@ -161,10 +161,12 @@ function heredocSubs(body: string): Part[] {
   return parts
 }
 
-// The text a command reading an unquoted heredoc gets, as far as escapes go: bash drops
-// `\` before `\`, `$` and `` ` ``, and joins lines ending in `\`.
+// The text a shell or interpreter reading an unquoted heredoc gets, as far as escapes go:
+// bash drops `\` before `\`, `$` and `` ` ``, and joins lines ending in `\`. A `\\` just
+// before an expansion goes too, so the reader still expands it: in bash the expansion's
+// value is what it reads there, after a `\` that quotes nothing in a path.
 function heredocText(body: string): string {
-  return body.replace(/\\([\\$`\n])/g, (_, c: string) => (c === '\n' ? '' : c))
+  return body.replace(/\\\\(?=[$`])|\\([\\$`\n])/g, (_, c?: string) => (c === undefined || c === '\n' ? '' : c))
 }
 
 function readWord(s: string, start: number): { word: Word; end: number } {
