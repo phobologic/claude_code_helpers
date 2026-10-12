@@ -222,6 +222,18 @@ test('mv, cp, install and ln each read their own options: -n is no-clobber to mv
   for (const command of ['cp -T a ~/b', 'cp --no-target-directory a ~/b', 'ln -sfT x ~/.zshrc']) {
     expect({ command, effect: only(command) }).toMatchObject({ command, effect: { intoDir: false, noTargetDir: true, noClobber: false } })
   }
+  // Every command's -t takes the folder, whether apart from or joined to other options.
+  for (const command of ['mv -t ~/d a b', 'install -t ~/d a b', 'ln -sf -t ~/d a b', 'ln -sft ~/d a b']) {
+    expect({ command, effect: only(command) }).toMatchObject({ command, effect: { sources: ['a', 'b'], dest: ['~/d'], intoDir: true } })
+  }
+  // install keeps the backup and -T options it shares with the others.
+  for (const command of ['install -b a ~/b', 'install --backup a ~/b']) none(command)
+  expect(only('install -T a ~/b')).toMatchObject({ noTargetDir: true })
+  for (const kind of ['t', 'numbered', 'existing', 'nil', 'simple', 'never']) none(`cp --backup=${kind} a ~/b`)
+  // `ln [-f] TARGET` links into the working folder under the target's own name.
+  expect(only('ln -sf /x/.zshrc')).toMatchObject({ mode: 'ln', sources: ['/x/.zshrc'], dest: ['.'], intoDir: true, noClobber: false })
+  expect(only('cd ~ && ln -sfn dotfiles/.zshrc')).toMatchObject({ mode: 'ln', sources: ['dotfiles/.zshrc'], dest: ['.'], intoDir: true })
+  none('ln -s /x/.zshrc')
   expect(only('cp -- -n ~/b')).toMatchObject({ sources: ['-n'], dest: ['~/b'], noClobber: false })
   expect(only('cp - ~/b')).toMatchObject({ sources: ['-'], dest: ['~/b'] })
   expect(only('cp "$SRC" ~/b')).toMatchObject({ op: 'unknown' })

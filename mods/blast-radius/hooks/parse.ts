@@ -1108,7 +1108,9 @@ function copyOptions(kind: CopyKind, args: Word[]): CopyOptions {
 function copy(mode: 'mv' | 'cp' | 'ln', name: string, args: Word[], dir: DirState, ctx: Ctx, raw: string): void {
   const o = copyOptions(name.endsWith('install') ? 'install' : mode, args)
   if (o.makesDirs) return
-  const { pos, targetDir, noTargetDir } = o
+  const { pos, noTargetDir } = o
+  // `ln [-f] TARGET` links into the working folder, under the target's own name.
+  const targetDir = o.targetDir ?? (mode === 'ln' && pos.length === 1 ? literal('.') : null)
   const noClobber = o.backup || !o.replace
   let sources = pos
   let dest: Word[]
