@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Flags Bash invocations that should use a dedicated tool (Write/Edit/Read)
-# or a real script file under .tmp/ instead. Returns
-# permissionDecision: allow with a reason that surfaces to the model next
-# turn — a non-blocking nudge so unattended agent teams aren't interrupted,
-# while still pushing the agent toward the preferred pattern.
+# or a real script file under .tmp/ instead. Returns the reason as
+# additionalContext only: a note to the model that never blocks and makes no
+# permission decision, so the command still goes through the normal permission
+# check (the dialog, or auto mode's classifier) like any other.
 #
 # Patterns flagged:
 #   - Inline interpreters: python -c, python3 -c, node -e, deno eval,
@@ -51,12 +51,11 @@ fi
 
 [ -z "$REASON" ] && exit 0
 
-MSG="Discouraged pattern detected: $REASON. Next time, $ALT See the Tool Selection section in ~/.claude/CLAUDE.md. (This action was allowed; treat this as a nudge, not a block.)"
+MSG="Discouraged pattern detected: $REASON. Next time, $ALT See the Tool Selection section in ~/.claude/CLAUDE.md. (A note, not a block.)"
 
 jq -n --arg msg "$MSG" '{
   "hookSpecificOutput": {
     "hookEventName": "PreToolUse",
-    "permissionDecision": "allow",
-    "permissionDecisionReason": $msg
+    "additionalContext": $msg
   }
 }'

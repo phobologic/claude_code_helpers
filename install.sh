@@ -34,10 +34,10 @@ remove_obsolete() {
 
 remove_obsolete "$CLAUDE/commands" "$DOTFILES/commands" "migrated to skills/"
 
-# ~/.claude/CLAUDE.md is linked by the myhome repo (.claude_global/CLAUDE.md), not here.
+# ~/.claude/CLAUDE.md and ~/.claude/settings.json are linked by the myhome repo
+# (.claude_global/), not here.
 link "$DOTFILES/tk.md"                "$CLAUDE/tk.md"
 link "$DOTFILES/agent-teams.md"       "$CLAUDE/agent-teams.md"
-link "$DOTFILES/settings.global.json" "$CLAUDE/settings.json"
 link "$DOTFILES/skills"               "$CLAUDE/skills"
 link "$DOTFILES/agents"               "$CLAUDE/agents"
 link "$DOTFILES/workflows"            "$CLAUDE/workflows"

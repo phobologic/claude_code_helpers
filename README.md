@@ -16,7 +16,6 @@ ticket runner, language plugins, tool rules, and working style rules for `~/.cla
 | `bin/` | Utility scripts: tk plugins (`tk-show-multi`, `tk-epic-status`, `tk-triage`, `tk-set`, `tk-backlog`) and `git-auto-commit.sh` |
 | `hooks/` | Global Claude Code hooks (e.g. `no-inline-scripts.sh` — flags inline-interpreter and heredoc-to-file Bash patterns as a non-blocking, in-context nudge toward Write/Edit) |
 | `tests/` | Dependency-free tests for the `run-tickets-engine` workflow script (run in Node with fake agents), `bin/run-tickets-plan`, `bin/run-tickets-setup` and `bin/run-tickets-finish`, and `bin/wrap-epic-plan` |
-| `settings.global.json` | Global Claude Code settings — env, permissions, hooks, statusLine |
 | `install.sh` | Sets up `~/.claude/` symlinks from scratch |
 
 ## Installation
@@ -28,10 +27,10 @@ cd ~/git/claude_code
 ```
 
 This creates the links below. The global `~/.claude/CLAUDE.md` (working style rules)
-is not one of them: it lives in the `myhome` repo as `.claude_global/CLAUDE.md`, and
-that repo's `install.sh` links it, so it syncs across machines.
+and `~/.claude/settings.json` are not among them: they live in the `myhome` repo under
+`.claude_global/`, and that repo's `install.sh` links them, so they sync across machines.
+The `no-inline-scripts.sh` hook linked from `hooks/` is turned on by those settings.
 
-- `~/.claude/settings.json` → `settings.global.json` *(skipped when it already exists; on this machine `myhome` links it)*
 - `~/.claude/hooks/<name>.sh` → `hooks/<name>.sh` *(every script in `hooks/`)*
 - `~/.claude/skills/` → `skills/`
 - `~/.claude/agents/` → `agents/`
