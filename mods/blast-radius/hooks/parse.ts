@@ -635,12 +635,12 @@ function splitWords(w: Word, ctx: Ctx): Word[] {
   return out.filter(o => !o.parts.every(p => isNull(p, ctx)))
 }
 
-// A word with its empty quoted parts ('' and "") taken out when it has other parts. They
-// only keep a word from being dropped, and once the words are split that is settled; left
-// in, one would hide an option's leading `-` (`sudo ""-u root`) or read as its value
-// (`sudo -u"" root`).
+// A word with its empty text parts ('' and "", the only text that can be empty) taken out
+// when it has other parts. They only keep a word from being dropped, and once the words
+// are split that is settled; left in, one would hide an option's leading `-`
+// (`sudo ""-u root`) or read as its value (`sudo -u"" root`).
 function withoutNulls(w: Word): Word {
-  const parts = w.parts.filter(p => !(p.kind === 'lit' && p.quoted && p.text === ''))
+  const parts = w.parts.filter(p => !(p.kind === 'lit' && p.text === ''))
   return parts.length > 0 ? { parts, raw: w.raw } : w
 }
 
