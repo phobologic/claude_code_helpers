@@ -210,6 +210,8 @@ test('an unquoted variable splits into words at spaces, tabs and newlines', () =
   expect(only("F=$'rm -rf\\nsrc'; bash <<< $F")).toMatchObject({ op: 'delete', paths: ['src'], recursive: true })
   expect(analyze("F=$'rm -rf\\nsrc'; bash <<< \"$F\"")).toEqual([])
   expect(only('F="rm  x"; bash <<< $F')).toMatchObject({ op: 'delete', paths: ['x'] })
+  // One that can't be expanded is checked as written.
+  expect(only('python3 <<< "import shutil; shutil.rmtree($X)"')).toMatchObject({ op: 'unknown' })
   // Where bash 3.2's reading can't be known, that is unknown, and the whole value is read.
   expect(analyze('IFS=:; F="rm x"; bash <<< $F')).toMatchObject([
     { op: 'unknown', what: 'here-string in bash 3.2: $IFS is set on this line, so how $F splits is unknown' },
