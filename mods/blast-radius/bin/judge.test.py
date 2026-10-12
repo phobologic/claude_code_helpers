@@ -474,6 +474,7 @@ def git_ops(s):
     expect("clean -fdX of ignored build output passes", s.judge(git("clean", "-fdX")), [])
     write(s.p(".env"))
     expect("clean -fdx over an ignored .env holds", s.judge(git("clean", "-fdx")), [("uncommitted", ".env")])
+    expect("git -C '' cleans where it starts, as plain clean -fdx does", s.judge(git("-C", "", "clean", "-fdx")), [("uncommitted", ".env")])
     expect("an -e value is a pattern, never options", s.judge(git("clean", "-fe", "-qx")), [])
     expect("an --exclude value is a pattern, never options", s.judge(git("clean", "-f", "--exclude", "-qx")), [])
     os.remove(s.p(".env"))
