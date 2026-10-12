@@ -730,10 +730,13 @@ test("xargs -I's text in the command's name, or a name from the input, is held",
   expect(analyze('ls | xargs -J % % -rf build')).toEqual([fromName('xargs -J % % -rf build')])
   expect(analyze('find . -exec {} \\;')).toEqual([fromName('find . -exec {} \\;')])
   expect(analyze("find . -name '*.sh' -exec sudo {} +")).toEqual([fromName("find . -name '*.sh' -exec sudo {} +")])
-  // With no command xargs runs echo, its input as echo's arguments; an empty -exec runs nothing.
-  for (const command of ['ls | xargs', 'ls | xargs -J %', 'ls | xargs -I{}', 'ls | xargs -0r', 'find . -name x -exec \\;']) {
+  // With no command xargs runs echo, its input as echo's arguments (-J echo too: BSD never
+  // replaces the default echo); an empty -exec runs nothing.
+  for (const command of ['ls | xargs', 'ls | xargs -J %', 'ls | xargs -J echo', 'ls | xargs -I{}', 'ls | xargs -0r', 'find . -name x -exec \\;']) {
     expect({ command, effects: analyze(command) }).toEqual({ command, effects: [] })
   }
+  // -I's text in the default echo is held, as in any name, since GNU replaces in it.
+  expect(analyze('ls | xargs -I c')).toEqual([named('xargs -I c')])
 })
 
 test('git commands that can discard work go to the judge; the rest never do', () => {

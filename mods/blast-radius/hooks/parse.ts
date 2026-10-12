@@ -1552,9 +1552,10 @@ function fedWords(words: Word[], o: XargsOpts, fed: Ctx): { words: Word[]; held?
 function xargs(args: Word[], dir: DirState, ctx: Ctx, piped: Cmd | null, raw: string): void {
   const o = xargsOpts(args)
   const fed = fedCtx(ctx, dir, 'what xargs passes comes from its input')
-  // With no command given, xargs runs echo.
-  const command = o.k < args.length ? args.slice(o.k) : [literal('echo')]
-  const words = fedWords(command, o, fed)
+  // With no command given, xargs runs echo. BSD's -J never puts the input in place of
+  // that echo, only after it; -I's text in it is held, since GNU replaces in it.
+  const given = o.k < args.length
+  const words = fedWords(given ? args.slice(o.k) : [literal('echo')], given || !o.whole ? o : { ...o, replace: null }, fed)
   if ('unknown' in words) {
     ctx.out.push({ op: 'unknown', what: words.unknown, cmd: short(raw) })
     return
