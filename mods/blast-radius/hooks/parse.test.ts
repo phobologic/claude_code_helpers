@@ -294,6 +294,77 @@ test('zsh splits no variable into words, and drops one that is unquoted and empt
   expect(analyze(`F="a b"; zsh -c 'rm $F'; rm $F`).map(e => (e as { paths: string[] }).paths)).toEqual([['a b'], ['a', 'b']])
 })
 
+test("a line the session's zsh runs is read as zsh reads it, and bash stays the default", () => {
+  const zsh = (command: string) => analyzeLine(command, 'zsh').effects
+  expect(zsh('F="a b"; rm $F')).toEqual([{ op: 'delete', dir: null, paths: ['a b'], recursive: false, cmd: 'rm $F' }])
+  expect(zsh('F="a b"; cd $F && rm x')).toEqual([{ op: 'delete', dir: 'a b', paths: ['x'], recursive: false, cmd: 'rm x' }])
+  expect(analyzeLine('F="a b"; cd $F', 'zsh').endDir).toBe('a b')
+  expect(zsh('F="a b"; mv x $F')).toMatchObject([{ op: 'copy', sources: ['x'], dest: ['a b'] }])
+  expect(zsh('F="a b"; rsync -a src/ $F')).toMatchObject([{ op: 'overwrite', paths: ['a b'] }])
+  expect(zsh('F="a b"; for f in $F; do rm $f; done')).toMatchObject([{ op: 'delete', paths: ['a b'] }])
+  expect(zsh('F="a b"; echo $(rm $F)')).toMatchObject([{ op: 'delete', paths: ['a b'] }])
+  expect(zsh('E=; rm -rf $E')).toEqual([])
+  // A bash the line starts splits again.
+  expect(zsh('F="a b"; bash -c "rm \\$F"')).toMatchObject([{ op: 'delete', paths: ['a', 'b'] }])
+  // Without a shell, or with bash, the line is bash's.
+  for (const line of [analyzeLine('F="a b"; rm $F'), analyzeLine('F="a b"; rm $F', 'bash')]) {
+    expect(line.effects).toEqual([{ op: 'delete', dir: null, paths: ['a', 'b'], recursive: false, cmd: 'rm $F' }])
+  }
+  expect(analyzeLine('F="a b"; cd $F').endDir).toBe('a')
+})
+
+test('a zsh line that may turn word splitting on reads later unquoted variables as unknown', () => {
+  const opts = [
+    'setopt shwordsplit',
+    'setopt SH_WORD_SPLIT',
+    'unsetopt noshwordsplit',
+    'emulate sh',
+    'set -o SH_Word_Split',
+    'set +o no_sh_word_split',
+    'set -y',
+    'set -ey',
+    'set -o $O',
+    'builtin setopt shwordsplit',
+    'set -oshwordsplit',
+    'set -eoshwordsplit',
+    'set +onoshwordsplit',
+    'options[shwordsplit]=on',
+    'options[$O]=on',
+    'typeset -g options[shwordsplit]=on',
+  ]
+  for (const opt of opts) {
+    expect([opt, analyzeLine(`${opt}; F="a b"; rm $F`, 'zsh').effects[0]?.op]).toEqual([opt, 'unknown'])
+    expect([opt, analyzeLine(`zsh -c '${opt}; F="a b"; rm $F'`).effects[0]?.op]).toEqual([opt, 'unknown'])
+  }
+  // The hold names the zsh options, not an $IFS the line never set.
+  expect(analyzeLine('setopt shwordsplit; F="a b"; rm $F', 'zsh').effects).toMatchObject([
+    { op: 'unknown', what: 'zsh options change on this line, so how $F splits is unknown', cmd: 'rm $F' },
+  ])
+  // Options that leave splitting alone change nothing, nor do words that only look like one.
+  const unchanged = [
+    'set -euo pipefail',
+    'setopt',
+    'set -x',
+    'set -- yes',
+    'set -- shwordsplitter',
+    'set -- foo.yml',
+    'set -- my_shwordsplit',
+    'echo options[shwordsplit]=on',
+    'typeset -g opts[shwordsplit]=on',
+    'myoptions[shwordsplit]=on',
+    '{ setopt; }',
+  ]
+  for (const opt of unchanged) {
+    const line = `${opt}; F="a b"; rm $F`
+    expect([line, analyzeLine(line, 'zsh').effects]).toMatchObject([line, [{ op: 'delete', paths: ['a b'] }]])
+  }
+  // bash has none of these, so its reading stays.
+  for (const opt of ['setopt shwordsplit', 'options[shwordsplit]=on']) {
+    const line = `${opt}; F="a b"; rm $F`
+    expect([line, analyzeLine(line).effects]).toMatchObject([line, [{ op: 'delete', paths: ['a', 'b'] }]])
+  }
+})
+
 test('splitting that depends on the pass or on a changed $IFS is unknown', () => {
   const what = (command: string) => (only(command) as { what: string }).what
   expect(what('for f in "a b" c; do rm $f; done')).toBe('$f has several values that split into words')

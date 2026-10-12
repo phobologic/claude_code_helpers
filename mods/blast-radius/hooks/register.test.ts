@@ -1,5 +1,5 @@
 import type { On } from 'claude-code'
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 import { RUN, STOP, cwdsFor, followCd, question, refusal } from './register'
 import type { Agent, Verdict } from './register'
@@ -13,9 +13,10 @@ const HELD: Verdict = {
 }
 
 // Stands in for the engine: answers the judge with `verdict`, the question with
-// `answer`, and runs any Bash or Write call that gets through.
-function engine(on: On, verdict: Verdict | null, answer: string) {
+// `answer`, the environment with `env`, and runs any Bash or Write call that gets through.
+function engine(on: On, verdict: Verdict | null, answer: string, env: Record<string, string> = {}) {
   const seen = { judged: [] as unknown[], asked: [] as string[], ran: [] as string[] }
+  mock.env(on, env)
   on('session.cwd', () => ({ value: '/repo' }))
   on('session.root', () => ({ value: '/repo' }))
   on('process.run', ($, e) => {
@@ -85,6 +86,33 @@ test('when the judge fails, the command is held with the reason', async ($, on) 
   expect(seen.ran).toEqual([])
   expect(seen.asked[0]).toContain("Blast Radius couldn't check it (Traceback: boom)")
 })
+
+// zsh splits no variable, so rm gets the one path `a b`; bash splits it, and so is any
+// shell the session doesn't name as zsh read.
+const SHELL_CASES: [Record<string, string>, string[]][] = [
+  [{ SHELL: '/bin/zsh' }, ['a b']],
+  [{ SHELL: '/bin/bash', CLAUDE_CODE_SHELL: '/opt/homebrew/bin/zsh' }, ['a b']],
+  [{ SHELL: '/bin/zsh', CLAUDE_CODE_SHELL: '' }, ['a b']],
+  // Claude Code ignores a CLAUDE_CODE_SHELL naming neither bash nor zsh, and runs SHELL.
+  [{ SHELL: '/bin/zsh', CLAUDE_CODE_SHELL: '/usr/bin/fish' }, ['a b']],
+  [{ SHELL: '/bin/zsh', CLAUDE_CODE_SHELL: '/bin/sh' }, ['a b']],
+  [{ SHELL: '/usr/local/bin/zsh-5.9' }, ['a b']],
+  [{ SHELL: '/bin/sh' }, ['a', 'b']],
+  [{ SHELL: '/bin/bash' }, ['a', 'b']],
+  [{ SHELL: '/bin/zsh', CLAUDE_CODE_SHELL: '/bin/bash' }, ['a', 'b']],
+  [{ SHELL: '/home/zsh/bin/bash' }, ['a', 'b']],
+  [{}, ['a', 'b']],
+]
+for (const [env, paths] of SHELL_CASES) {
+  test(`a command is read with the word splitting of the session's shell: ${JSON.stringify(env)}`, async ($, on) => {
+    const seen = engine(on, { hold: false, findings: [] }, STOP, env)
+    await $.tool.call({ tool: 'Bash', command: 'F="a b"; rm $F' })
+    expect(seen.judged).toEqual([
+      { sessionRoot: '/repo', cwd: '/repo', effects: [{ op: 'delete', dir: null, paths, recursive: false, cmd: 'rm $F' }] },
+    ])
+    expect(seen.ran).toEqual(['F="a b"; rm $F'])
+  })
+}
 
 test('a Write is judged as an overwrite of its file', async ($, on) => {
   const seen = engine(on, { hold: false, findings: [] }, STOP)

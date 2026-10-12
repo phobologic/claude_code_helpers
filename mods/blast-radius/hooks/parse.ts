@@ -2,7 +2,8 @@
 //
 // Text only, no filesystem: each effect names its paths as the shell would after the
 // expansions this file can do (quotes and $'...', braces, variables set earlier on the
-// line and their splitting into words, `cd` along the line, $HOME, mktemp).
+// line and, in bash but not zsh, their splitting into words, `cd` along the line, $HOME,
+// mktemp).
 // bin/judge.py then expands globs, resolves links and asks git
 // what is at stake. A path this file cannot know becomes an `unknown` effect, which the
 // judge always holds.
@@ -739,7 +740,11 @@ function varVals(p: Extract<Part, { kind: 'var' }>, ctx: Ctx, mode: 'path' | 'pl
   const v = varValue(p.name, ctx)
   if ('unknown' in v) return v
   if (split && !p.quoted && !ctx.zsh) {
-    if (ctx.vars.has('IFS')) return { unknown: `$IFS is set on this line, so how $${p.name} splits is unknown` }
+    const ifs = ctx.vars.get('IFS')
+    if (ifs) {
+      const why = 'unknown' in ifs && ifs.unknown === ZSH_OPTIONS ? ZSH_OPTIONS : '$IFS is set on this line'
+      return { unknown: `${why}, so how $${p.name} splits is unknown` }
+    }
     if (v.values.some(x => /[ \t\n]/.test(x.text))) return { unknown: `$${p.name} has several values that split into words` }
   }
   return v.values.map(x => (mode === 'path' && p.quoted && !x.pattern ? escapeGlob(x.text) : x.text))
@@ -794,8 +799,12 @@ export interface Line {
   endDir: Dir | { unknown: string }
 }
 
-export function analyzeLine(command: string): Line {
-  const ctx: Ctx = { dir: null, vars: new Map(), pushed: [], out: [], depth: 0, zsh: false }
+// The shell that runs the line. zsh splits no unquoted variable into words, so
+// `F="a b"; rm $F` removes the one path `a b` there, and `a` and `b` in bash.
+export type Shell = 'bash' | 'zsh'
+
+export function analyzeLine(command: string, shell: Shell = 'bash'): Line {
+  const ctx: Ctx = { dir: null, vars: new Map(), pushed: [], out: [], depth: 0, zsh: shell === 'zsh' }
   walk(command, ctx)
   const seen = new Set<string>()
   const effects = ctx.out.filter(e => {
@@ -914,6 +923,10 @@ function handle(cmd: Cmd, ctx: Ctx, piped: Cmd | null): void {
   }
   words = words.slice(k)
   while (words.length > 0 && KEYWORDS.has(text(words[0]) ?? '')) words = words.slice(1)
+  if (ctx.zsh && setsZshOptionsArray(words)) {
+    zshOptionsChange(ctx)
+    return
+  }
   words = shellWords(words, ctx)
   const head = text(words[0])
   if (head === null || words.length === 0) return
@@ -947,7 +960,47 @@ function handle(cmd: Cmd, ctx: Ctx, piped: Cmd | null): void {
 
   const unwrapped = unwrap(words, ctx)
   if (unwrapped === null) return
+  if (ctx.zsh && changesZshSplitting(unwrapped.words)) {
+    zshOptionsChange(ctx)
+    return
+  }
   run(cmd, unwrapped.words, unwrapped.dir, ctx, piped)
+}
+
+// The hold reason once a zsh line changes its options; varVals reports it in place of $IFS.
+const ZSH_OPTIONS = 'zsh options change on this line'
+
+// From here on the line may split its variables as bash does, or may not.
+function zshOptionsChange(ctx: Ctx): void {
+  ctx.zsh = false
+  ctx.vars.set('IFS', { unknown: ZSH_OPTIONS })
+}
+
+// A write to zsh's options array, which sets options as setopt does:
+// options[shwordsplit]=on, or typeset -g options[shwordsplit]=on.
+function setsZshOptionsArray(words: Word[]): boolean {
+  const optionsWord = (w: Word): boolean => /^options\[/.test(w.raw)
+  const first = words[0]
+  if (first === undefined) return false
+  return optionsWord(first) || (DECLARE.has(text(first) ?? '') && words.slice(1).some(optionsWord))
+}
+
+// A zsh command that can turn word splitting on: any setopt, unsetopt or emulate with
+// arguments (setopt shwordsplit, unsetopt noshwordsplit, emulate sh, setopt -m '*split*'),
+// and a set naming the option (set -o sh_word_split, or attached: set -oshwordsplit),
+// giving its letter (set -y), or with a word that is only known when it runs.
+function changesZshSplitting(words: Word[]): boolean {
+  const head = cmdName(words[0])
+  if (head === 'setopt' || head === 'unsetopt' || head === 'emulate') return words.length > 1
+  if (head !== 'set') return false
+  return words.slice(1).some(w => {
+    const t = text(w)
+    return (
+      t === null ||
+      /^[-+][A-Za-z]*y/.test(t) ||
+      /^([-+][a-z]*o)?(no)?shwordsplit$/.test(t.toLowerCase().replace(/_/g, ''))
+    )
+  })
 }
 
 function redirect(r: Redir, ctx: Ctx, raw: string): void {
