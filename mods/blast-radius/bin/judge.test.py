@@ -797,6 +797,8 @@ def ignored_case(s):
            s.judge(git("checkout", "--", os.path.join(s.root, "REPO", "src", "a.py"))), [("uncommitted", "src/a.py")])
     expect("  but checkout -- ../REPO/src/a.py passes, since git refuses it",
            s.judge(git("checkout", "--", os.path.join("..", "REPO", "src", "a.py"))), [])
+    expect("  and checkout -- /abs/other/src/a.py passes, since it is outside the working tree",
+           s.judge(git("checkout", "--", os.path.join(s.root, "other", "src", "a.py"))), [])
     sh("git", "checkout", "--", "src/a.py", cwd=s.repo)
     renamed_by_case(s)
     caps = s.p(".worktrees", "caps")
