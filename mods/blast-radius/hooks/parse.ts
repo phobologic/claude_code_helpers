@@ -416,7 +416,8 @@ function absDir(dir: DirState): string | null {
 
 function joinDir(dir: DirState, arg: string): DirState {
   if (isAbs(arg)) return arg
-  if (isUnknown(dir)) return dir
+  // A fresh object: a folder that moved never compares equal to the one it moved from.
+  if (isUnknown(dir)) return { unknown: dir.unknown }
   return dir === null ? arg : `${dir}/${arg}`
 }
 
@@ -878,22 +879,37 @@ const FIND_ACTIONS = new Set(['-exec', '-execdir', '-ok', '-okdir'])
 const FIND_WRITES: Record<string, number> = { '-fprint': 1, '-fprint0': 1, '-fls': 1, '-fprintf': 2 }
 
 // What xargs reads, or each path find -exec puts in place of {}: an argument only known
-// when it runs, held in a variable no command line can name. A word holding it reads as
-// an expansion in its raw text, so a shell given it as its code is held as
-// `sh -c "$CMD"` is (see opaque()).
+// when it runs, held in a variable no command line can name. A shell or interpreter whose
+// code holds it, in whole or in part, is held as `sh -c "$CMD"` is.
 const INPUT = '<input>'
 const INPUT_RAW = '"$@"'
 const inputPart: Part = { kind: 'var', name: INPUT, quoted: true }
+const inputWord = (): Word => ({ parts: [inputPart], raw: INPUT_RAW })
 const isInput = (w: Word): boolean => w.parts.some(p => p.kind === 'var' && p.name === INPUT)
+// The word is the input and nothing else, as `{}` or xargs's own trailing input is.
+const isBareInput = (w: Word): boolean => {
+  const ps = w.parts.filter(p => !(p.kind === 'lit' && p.text === ''))
+  return ps.length === 1 && ps[0]?.kind === 'var' && ps[0].name === INPUT
+}
 
 // The words with the input in place of each `token` in them, or after them when `token`
-// is null.
-function withInput(words: Word[], token: string | null): Word[] {
-  if (token === null) return [...words, { parts: [inputPart], raw: INPUT_RAW }]
-  const fill = (p: Part): Part[] => {
-    if (p.kind !== 'lit') return [p]
+// is null. A variable whose value holds the token counts as that value: the shell expands
+// it before xargs looks for the token.
+function withInput(words: Word[], token: string | null, ctx: Ctx): Word[] {
+  if (token === null) return [...words, inputWord()]
+  const cut = (p: Extract<Part, { kind: 'lit' }>): Part[] => {
     const [first = '', ...rest] = p.text.split(token)
     return [{ ...p, text: first }, ...rest.flatMap(text => [inputPart, { ...p, text }])]
+  }
+  const fill = (p: Part): Part[] => {
+    if (p.kind === 'lit') return cut(p)
+    if (p.kind !== 'var') return [p]
+    const v = varValue(p.name, ctx)
+    if ('unknown' in v || !v.values.some(x => x.text.includes(token))) return [p]
+    const [one, ...more] = v.values
+    // Several values, some holding the token: the word is only known when it runs.
+    if (one === undefined || more.length > 0) return [p, inputPart]
+    return cut({ kind: 'lit', text: one.text, quoted: p.quoted && !one.pattern })
   }
   return words.map(w => ({ parts: w.parts.flatMap(fill), raw: w.raw.split(token).join(INPUT_RAW) }))
 }
@@ -915,9 +931,11 @@ function runFed(words: Word[], fed: Ctx, raw: string, listDir?: DirState): { rec
   if (u === null) return null
   const name = cmdName(u.words[0]) ?? ''
   const args = u.words.slice(1)
-  const listed = DELETE_CMDS.has(name) && u.dir === listDir && args.some(isInput)
+  // Only a word that is the input alone is one of the find's paths: `~/backup/{}` or
+  // `{}.bak` is some other path, which the dry run does not show.
+  const listed = DELETE_CMDS.has(name) && u.dir === listDir && args.some(isBareInput)
   const cmd: Cmd = { words: u.words, redirs: [], raw, inPipeline: true }
-  run(cmd, listed ? [...u.words.slice(0, 1), ...args.filter(w => !isInput(w))] : u.words, u.dir, fed, null)
+  run(cmd, listed ? [...u.words.slice(0, 1), ...args.filter(w => !isBareInput(w))] : u.words, u.dir, fed, null)
   return listed ? { recursive: recursiveDelete(name, args) } : null
 }
 
@@ -980,7 +998,7 @@ function find(cmd: Cmd, args: Word[], dir: DirState, ctx: Ctx): void {
   const plan = findPlan(v.values, (action, sub) => {
     const where = action.endsWith('dir') ? { unknown: `each folder find ${action} runs in` } : dir
     const fed = fedCtx(ctx, where, `{} in find ${action} is each path it finds`)
-    return runFed(withInput(sub.map(argWord), '{}'), fed, raw, fed.dir)
+    return runFed(withInput(sub.map(argWord), '{}', fed), fed, raw, fed.dir)
   })
   if (plan.writes.length > 0) {
     emit(ctx, dir, plan.writes, raw, d => ({ op: 'overwrite', dir: d, paths: plan.writes.map(escapeGlob), cmd: short(raw) }))
@@ -1001,24 +1019,43 @@ const XARGS_LONG_VALUE = new Set(['--arg-file', '--delimiter', '--max-args', '--
 
 interface XargsOpts {
   k: number // where the command starts
-  replace: string | null // what the input replaces (-I, -J, -i, --replace), or null to add it after
+  replace: Word | null // what the input replaces (-I, -J, -i, --replace), or null to add it after
+  whole: boolean // BSD's -J: the input replaces only the first word that is exactly `replace`
   fromFile: boolean // the input comes from -a's file, not from stdin
+  unread: boolean // an option has an expansion in it, so where the command starts is unknown
+}
+
+// An option word: it starts with a literal `-`, expansions after it or not.
+const isOption = (w: Word): boolean => {
+  const p = w.parts[0]
+  return p?.kind === 'lit' && p.text.startsWith('-')
 }
 
 function xargsOpts(args: Word[]): XargsOpts {
-  const o: XargsOpts = { k: 0, replace: null, fromFile: false }
-  for (let t = text(args[0]); t?.startsWith('-'); t = text(args[o.k])) {
+  const o: XargsOpts = { k: 0, replace: null, whole: false, fromFile: false, unread: false }
+  for (let w = args[0]; w !== undefined && isOption(w); w = args[o.k]) {
     o.k += 1
+    const t = text(w)
+    if (t === null) {
+      o.unread = true
+      break
+    }
     if (t.startsWith('--')) xargsLong(t, o)
     else xargsShort(t, args, o)
   }
   return o
 }
 
+// The last of -I, -J, -i and --replace is the one xargs uses.
+function setReplace(o: XargsOpts, w: Word, whole: boolean): void {
+  o.replace = w
+  o.whole = whole
+}
+
 function xargsLong(t: string, o: XargsOpts): void {
   const eq = t.indexOf('=')
   const name = eq < 0 ? t : t.slice(0, eq)
-  if (name === '--replace') o.replace = eq < 0 ? '{}' : t.slice(eq + 1)
+  if (name === '--replace') setReplace(o, argWord(eq < 0 ? '{}' : t.slice(eq + 1)), false)
   if (name === '--arg-file') o.fromFile = true
   if (eq < 0 && XARGS_LONG_VALUE.has(name)) o.k += 1
 }
@@ -1032,20 +1069,46 @@ function xargsShort(t: string, args: Word[], o: XargsOpts): void {
   if (m === null) return // flags only
   const ch = m[1] as string
   const joined = m[2] as string
-  if (ch === 'i') o.replace = joined || '{}'
+  if (ch === 'i') setReplace(o, argWord(joined || '{}'), false)
   if (XARGS_JOINED.includes(ch)) return
-  const value = joined || (text(args[o.k++]) ?? '')
-  if (ch === 'I' || ch === 'J') o.replace = value
+  // A missing value reads as empty, which fedWords() holds.
+  const value = joined ? argWord(joined) : (args[o.k++] ?? argWord(''))
+  if (ch === 'I' || ch === 'J') setReplace(o, value, ch === 'J')
   if (ch === 'a') o.fromFile = true
+}
+
+// Whether the word expands to exactly `s`.
+function expandsTo(w: Word, ctx: Ctx, s: string): boolean {
+  const v = expand(w, ctx, 'plain')
+  return !('unknown' in v) && v.values.length === 1 && v.values[0] === s
+}
+
+// The words xargs runs, with its input where its options put it, or why that can't be read.
+function fedWords(words: Word[], o: XargsOpts, fed: Ctx): { words: Word[] } | { unknown: string } {
+  if (o.unread) return { unknown: 'xargs options only known when it runs' }
+  if (o.replace === null) return { words: withInput(words, null, fed) }
+  const v = expand(o.replace, fed, 'plain')
+  const token = 'unknown' in v || v.values.length !== 1 ? '' : (v.values[0] as string)
+  if (token === '') return { unknown: 'what xargs -I or -J replaces is only known when it runs' }
+  if (!o.whole) return { words: withInput(words, token, fed) }
+  // BSD's -J puts the input in place of the first word that is the token, else after the words.
+  const at = words.findIndex(w => expandsTo(w, fed, token))
+  if (at < 0) return { words: withInput(words, null, fed) }
+  return { words: [...words.slice(0, at), inputWord(), ...words.slice(at + 1)] }
 }
 
 function xargs(args: Word[], dir: DirState, ctx: Ctx, piped: Cmd | null, raw: string): void {
   const o = xargsOpts(args)
   const fed = fedCtx(ctx, dir, 'what xargs passes comes from its input')
+  const words = fedWords(args.slice(o.k), o, fed)
+  if ('unknown' in words) {
+    ctx.out.push({ op: 'unknown', what: words.unknown, cmd: short(raw) })
+    return
+  }
   // find ... | xargs rm: the find's own output is the list, so dry-run the find.
   const found = o.fromFile ? undefined : piped?.find
   const list = found && !isUnknown(found.dir) ? { dir: found.dir, argv: found.argv } : undefined
-  const del = runFed(withInput(args.slice(o.k), o.replace), fed, raw, list?.dir)
+  const del = runFed(words.words, fed, raw, list?.dir)
   if (del && list) {
     const argv = list.argv.map(a => (a === '-print0' || a === '-ls' ? '-print' : a))
     ctx.out.push({ op: 'find', dir: list.dir, argv, recursive: del.recursive, cmd: short(raw) })
@@ -1203,13 +1266,7 @@ function shell(cmd: Cmd, args: Word[], ctx: Ctx, raw: string): void {
     const t = text(args[k])
     if (t !== null && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(t)) {
       const body = args[k + 1]
-      if (!body) return
-      const v = expand(body, ctx, 'plain')
-      if ('unknown' in v) {
-        if (opaque(body.raw)) ctx.out.push({ op: 'unknown', what: v.unknown, cmd: short(raw) })
-      } else {
-        for (const s of v.values) walk(s, child(ctx))
-      }
+      if (body) shellCode(body, ctx, raw)
       return
     }
     if (t === '-o' || t === '+o') k += 1
@@ -1219,26 +1276,42 @@ function shell(cmd: Cmd, args: Word[], ctx: Ctx, raw: string): void {
   if (body !== null) walk(body, child(ctx))
 }
 
-function interpreter(cmd: Cmd, name: string, args: Word[], ctx: Ctx, raw: string): void {
-  let code: string | null = null
-  let script = false
+// A shell's -c code: read as commands when it can be expanded, else held when it could
+// do anything.
+function shellCode(body: Word, ctx: Ctx, raw: string): void {
+  const v = expand(body, ctx, 'plain')
+  if (!('unknown' in v)) {
+    for (const s of v.values) walk(s, child(ctx))
+  } else if (isInput(body) || opaque(body.raw)) {
+    // Code with xargs's or -exec's input in it is held wherever the input sits.
+    ctx.out.push({ op: 'unknown', what: v.unknown, cmd: short(raw) })
+  }
+}
+
+const CODE_FLAGS = new Set(['-c', '-e', '-E', '--eval', '-r'])
+
+// Where an interpreter's code comes from: the word after -c, -e and kin, a script, or
+// else stdin.
+function codeSource(name: string, args: Word[]): { code: Word | undefined } | 'script' | 'stdin' {
   for (let k = 0; k < args.length; k += 1) {
     const t = text(args[k])
-    if (t !== null && ['-c', '-e', '-E', '--eval', '-r'].includes(t)) {
-      code = args[k + 1]?.raw ?? ''
-      break
-    }
-    if (name === 'deno' && t === 'eval') {
-      code = args[k + 1]?.raw ?? ''
-      break
-    }
-    if (t === null || !t.startsWith('-')) {
-      script = true
-      break
-    }
+    if ((t !== null && CODE_FLAGS.has(t)) || (name === 'deno' && t === 'eval')) return { code: args[k + 1] }
+    if (t === null || !t.startsWith('-')) return 'script'
     if (t === '-m' || t === '-W' || t === '-X') k += 1
   }
-  if (code === null && !script) code = stdinText(cmd, ctx)
+  return 'stdin'
+}
+
+function interpreter(cmd: Cmd, name: string, args: Word[], ctx: Ctx, raw: string): void {
+  const src = codeSource(name, args)
+  const word = typeof src === 'object' ? src.code : undefined
+  // Code made from xargs's or -exec's input could do anything: held as `sh -c` with it is.
+  const fromInput = word !== undefined && isInput(word) ? expand(word, ctx, 'plain') : null
+  if (fromInput !== null && 'unknown' in fromInput) {
+    ctx.out.push({ op: 'unknown', what: fromInput.unknown, cmd: short(raw) })
+    return
+  }
+  const code = typeof src === 'object' ? (word?.raw ?? '') : src === 'stdin' ? stdinText(cmd, ctx) : null
   if (code !== null && CODE_DELETES.test(code)) {
     ctx.out.push({ op: 'unknown', what: `inline ${name} code that deletes files`, cmd: short(raw) })
   }

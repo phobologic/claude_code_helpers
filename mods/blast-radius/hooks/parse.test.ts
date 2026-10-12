@@ -40,6 +40,9 @@ test('rm names its paths, with quoted glob characters made literal', () => {
   expect(only('sudo -u root rm -rf /opt/x')).toMatchObject({ paths: ['/opt/x'] })
   expect(only('timeout 5 \\rm -f x')).toMatchObject({ paths: ['x'] })
   expect(only('/bin/rm -r a')).toMatchObject({ paths: ['a'], recursive: true })
+  expect(only('rm --recursive build')).toMatchObject({ op: 'delete', recursive: true })
+  expect(only('rm -R build')).toMatchObject({ op: 'delete', recursive: true })
+  expect(only('rm -f --verbose build')).toMatchObject({ op: 'delete', recursive: false })
 })
 
 test('cd, pushd and subshells move where later paths are measured', () => {
@@ -205,6 +208,8 @@ test('xargs and find -exec read the command they run like any other, wrappers in
     op: 'find', dir: null, argv: ['.', '-name', '*.log'], recursive: true, cmd: 'xargs sudo rm -rf',
   })
   expect(only('unlink -r x')).toMatchObject({ recursive: false })
+  expect(only('find . -name x | xargs rm --recursive')).toMatchObject({ op: 'find', recursive: true })
+  expect(only('find . -name x -exec rm -R {} +')).toMatchObject({ op: 'find', recursive: true })
 })
 
 test('what xargs or find -exec runs is judged by its own words, the input unknown', () => {
@@ -223,9 +228,20 @@ test('what xargs or find -exec runs is judged by its own words, the input unknow
   expect(only('find . -type f -exec mv {} /x \\;')).toEqual({
     op: 'unknown', what: '{} in find -exec is each path it finds', cmd: 'find . -type f -exec mv {} /x \\;',
   })
-  // A shell given the input as its code is held, as sh -c "$CMD" is.
+  // A shell given the input as its code is held, as sh -c "$CMD" is, and so is one whose
+  // code has the input inside it, or an interpreter's.
   expect(only('ls | xargs bash -c')).toMatchObject({ op: 'unknown' })
   expect(only('find . -exec sh -c {} \\;')).toMatchObject({ op: 'unknown' })
+  expect(only("ls | xargs -I{} sh -c 'git branch -D {}'")).toEqual({ ...fromInput, cmd: "xargs -I{} sh -c 'git branch -D {}'" })
+  expect(only("ls | xargs -I{} sh -c 'mv {} /x'")).toMatchObject(fromInput)
+  expect(only("find . -exec sh -c 'git checkout -- {}' \\;")).toMatchObject({
+    op: 'unknown', what: '{} in find -exec is each path it finds',
+  })
+  expect(only('ls | xargs -0 python3 -c')).toEqual({ ...fromInput, cmd: 'xargs -0 python3 -c' })
+  expect(only("ls | xargs -I{} node -e 'console.log(\"{}\")'")).toMatchObject(fromInput)
+  expect(only("find . -name '*.ts' -exec deno eval {} \\;")).toMatchObject({ op: 'unknown' })
+  // Code that only takes the input as an argument is read as it is written.
+  expect(analyze("ls | xargs python3 -c 'import sys; print(sys.argv)'")).toEqual([])
   // Variables set on the line reach it, and it runs where a wrapper of xargs puts it.
   expect(only('D=build; ls | xargs -I{} rm -rf "$D"')).toMatchObject({ op: 'delete', paths: ['build'] })
   expect(only('ls | env -C /srv xargs -I{} rm -rf build')).toMatchObject({ op: 'delete', dir: '/srv', paths: ['build'] })
@@ -255,26 +271,70 @@ test("a delete fed a find's list leaves it to the dry run, and its other words a
   expect(only('env -C /srv find . -name x | xargs rm')).toMatchObject(fromInput)
   expect(only('cd "$X" && find . -name x | xargs rm')).toMatchObject(fromInput)
   expect(only('find . -name x -exec env -C /srv rm {} \\;')).toMatchObject({ op: 'unknown' })
+  // Only a word that is the input alone is one of the find's paths; one built from it is not.
+  expect(only('find . -name x | xargs -I{} rm -rf ~/backup/{}')).toEqual({ ...fromInput, cmd: 'xargs -I{} rm -rf ~/backup/{}' })
+  expect(only("find . -name '*.c' | xargs -I{} rm {}.bak")).toMatchObject(fromInput)
+  expect(only('find . -name x -exec rm -rf ~/backup/{} \\;')).toMatchObject({ op: 'unknown' })
+  expect(only('find . -name x -exec rm -f {}.bak \\;')).toMatchObject({ op: 'unknown' })
+  expect(analyze('find . -name x | xargs -I{} rm -rf {} {}.bak').map(e => e.op)).toEqual(['unknown', 'find'])
   // -execdir runs in each folder found: its list is the find's, other relative paths are unknown.
   expect(only('find . -name x -execdir rm {} \\;')).toMatchObject({ op: 'find', argv: ['.', '-name', 'x', '-print'] })
   expect(only('find . -name x -execdir cp /etc/hosts ../x \\;')).toMatchObject({
     op: 'unknown', what: 'paths relative to each folder find -execdir runs in',
   })
+  expect(only('find . -name x -okdir cp /etc/hosts ../x \\;')).toMatchObject({
+    op: 'unknown', what: 'paths relative to each folder find -okdir runs in',
+  })
+  // A folder moved from one that is unknown is another folder, not the find's.
+  expect(only('find . -name x -execdir env -C .. rm {} \\;')).toMatchObject({ op: 'unknown' })
   expect(only('find . -name x -exec cp /etc/hosts ../x \\;')).toMatchObject({ op: 'copy', dest: ['../x'] })
   // A find's other -exec does nothing in the dry run an xargs rm reads.
   expect(only('find . -name x -exec touch {} + | xargs rm')).toMatchObject({ op: 'find', argv: ['.', '-name', 'x', '-true'] })
 })
 
 test("xargs's options: where its command starts and where its input goes", () => {
-  for (const opts of ['-n1', '-n 1', '-0n 1', '-0r', '--max-args 1', '--max-args=1', '--arg-file list', '-a list', '-0 --', '-ei']) {
+  for (const opts of [
+    '-n1', '-n 1', '-0n 1', '-0r', '--max-args 1', '--max-args=1', '--arg-file list', '-a list', '-0 --', '-ei',
+    '--delimiter x', '--max-procs 2', '--max-chars 100', '--process-slot-var V',
+  ]) {
     const command = `ls | xargs ${opts} rm -f`
     expect({ command, effect: only(command) }).toMatchObject({ command, effect: fromInput })
   }
-  // -I, -J, -i and --replace put the input in place of their text, and nowhere else.
-  for (const opts of ['-I{}', '-I %', '-J %', '-i', '-rI {}', '--replace']) {
+  // -I, -i and --replace put the input in place of their text, and nowhere else.
+  for (const opts of ['-I{}', '-I %', '-i', '-rI {}', '--replace', '-J% -I%']) {
     const command = `ls | xargs ${opts} rm -rf build`
     expect({ command, effect: only(command) }).toMatchObject({ command, effect: { op: 'delete', paths: ['build'] } })
   }
+  // BSD's -J replaces only a word that is exactly its text, and else adds the input after.
+  expect(only('ls | xargs -J % rm -rf build')).toEqual({ ...fromInput, cmd: 'xargs -J % rm -rf build' })
+  expect(only('ls | xargs -I% -J% rm -rf build')).toMatchObject(fromInput)
+  expect(only('ls | xargs -J % rm -rf %/x')).toMatchObject(fromInput)
+  expect(only('ls | xargs -J % mv % /dest')).toMatchObject(fromInput)
+  expect(analyze('find . -name x | xargs -J % rm -rf build').map(e => e.op)).toEqual(['delete', 'find'])
+  expect(analyze('find . -name x | xargs -J % rm -rf % build').map(e => e.op)).toEqual(['delete', 'find'])
+  expect(analyze('find . -name x | xargs -J % rm -rf %/x build')).toMatchObject([
+    { op: 'delete', paths: ['%/x', 'build'] },
+    { op: 'find' },
+  ])
+  expect(analyze("P=%; find . -name x | xargs -J % rm -rf \"$P\" build").map(e => e.op)).toEqual(['delete', 'find'])
+  // A replace text the shell expands is read as its value; one only known when it runs is held.
+  expect(only('R={}; ls | xargs -I "$R" rm -rf ~/keep')).toMatchObject({ op: 'delete', paths: ['~/keep'] })
+  for (const command of ['ls | xargs -I "$R" rm -rf ~/keep', 'ls | xargs -I', "ls | xargs -I '' rm x"]) {
+    expect({ command, effect: only(command) }).toMatchObject({
+      command, effect: { op: 'unknown', what: 'what xargs -I or -J replaces is only known when it runs' },
+    })
+  }
+  expect(only('R=%; ls | xargs -I "$R" rm -rf %')).toMatchObject(fromInput)
+  expect(only('R=%; ls | xargs -I "$R" rm -rf build')).toMatchObject({ op: 'delete', paths: ['build'] })
+  // An option with an expansion in it hides where the command starts.
+  expect(only('ls | xargs -I"$R" rm -rf ~/keep')).toEqual({
+    op: 'unknown', what: 'xargs options only known when it runs', cmd: 'xargs -I"$R" rm -rf ~/keep',
+  })
+  // A variable whose value holds the replace text is the input there.
+  expect(only("D='{}'; ls | xargs -I{} rm -rf \"$D\"")).toMatchObject(fromInput)
+  expect(only("D='~/backup/{}'; find . -name x | xargs -I{} rm -rf \"$D\"")).toMatchObject(fromInput)
+  expect(analyze("D='{}'; find . -name x | xargs -I{} rm -rf \"$D\"").map(e => e.op)).toEqual(['find'])
+  expect(only('for d in a/{} b; do ls | xargs -I{} rm -rf "$d"; done')).toMatchObject(fromInput)
   for (const command of [
     "ls | xargs -I{} sh -c 'rm -rf {}'",
     'ls | xargs -I % sh -c %',
