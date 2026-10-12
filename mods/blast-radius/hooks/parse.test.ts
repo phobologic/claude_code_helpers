@@ -313,6 +313,8 @@ test('heredoc bodies are text, except where a shell or interpreter reads them', 
     { op: 'overwrite', dir: null, paths: ['notes.md'], cmd: "cat > notes.md <<'EOF'" },
   ])
   expect(only("bash <<'EOF'\nrm -rf build\nEOF")).toMatchObject({ op: 'delete', paths: ['build'] })
+  // A shell with nothing on stdin reads from the terminal, which is not on this line.
+  expect(analyze('bash -l')).toEqual([])
   expect(only("python3 - <<'EOF'\nimport shutil\nshutil.rmtree('x')\nEOF")).toMatchObject({ op: 'unknown' })
   // A heredoc inside $( ) with an apostrophe and parens must not swallow the rest of the line.
   expect(only(`git commit -m "$(cat <<'EOF'\nDon't (do) this\nEOF\n)" && rm -rf build`)).toMatchObject({
