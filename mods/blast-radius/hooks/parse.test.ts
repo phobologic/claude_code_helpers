@@ -125,6 +125,10 @@ test('braces that are quoted, escaped, unclosed or hold no list or sequence stay
   expect(what('rm -rf $(mktemp {-d,-q})')).toBe('$(mktemp {-d,-q}) is only known when it runs')
   expect(what('rm -rf `mktemp {-d,-q}`')).toBe('$(mktemp {-d,-q}) is only known when it runs')
   expect(what('rm -rf <(mktemp {-d,-q})')).toBe('$(mktemp {-d,-q}) is only known when it runs')
+  expect(what('rm -rf >(mktemp {-d,-q})')).toBe('$(mktemp {-d,-q}) is only known when it runs')
+  expect(what('rm -rf $((pwd))')).toBe('$(pwd) is only known when it runs')
+  // A quote left open hides the rest of the word, braces included.
+  expect(paths("rm {a,'b}")).toEqual(['{a,b}'])
 })
 
 test('braces that make too many words, nest too deep or that shells read differently are unknown', () => {
@@ -152,7 +156,7 @@ test('braces that make too many words, nest too deep or that shells read differe
   expect((only('rm x{+1..2}') as { paths: string[] }).paths).toEqual(['x1', 'x2'])
   // After braces that make nothing, bash 3.2 stops, but bash 4+ and zsh go on: in zsh
   // rm -rf [{a..s.}]{rc,zz} deletes src.
-  for (const word of ['[{a..s.}]{rc,zz}', '{a..b.}{c,d}', '{a,b}{c..d.}{e,f}', '{a..b.}{1..2}', '{a..b.}{c..d.}{e,f}']) {
+  for (const word of ['[{a..s.}]{rc,zz}', '{a..b.}{c,d}', '{a,b}{c..d.}{e,f}', '{a..b.}{1..2}', '{a..b.}{x..x}', '{a..b.}{c..d.}{e,f}']) {
     expect({ word, what: what(`rm -rf ${word}`) }).toEqual({ word, what: `${word} has braces that bash 3.2 and later shells expand differently` })
   }
   // bash 3.2 decodes $'...' before brace expansion, so its , can make a list: there
@@ -206,6 +210,11 @@ test('an unquoted variable splits into words at spaces, tabs and newlines', () =
   expect(only("F=$'rm -rf\\nsrc'; bash <<< $F")).toMatchObject({ op: 'delete', paths: ['src'], recursive: true })
   expect(analyze("F=$'rm -rf\\nsrc'; bash <<< \"$F\"")).toEqual([])
   expect(only('F="rm  x"; bash <<< $F')).toMatchObject({ op: 'delete', paths: ['x'] })
+  // Where bash 3.2's reading can't be known, that is unknown, and the whole value is read.
+  expect(analyze('IFS=:; F="rm x"; bash <<< $F')).toMatchObject([
+    { op: 'unknown', what: 'here-string in bash 3.2: $IFS is set on this line, so how $F splits is unknown' },
+    { op: 'delete', paths: ['x'] },
+  ])
   // bash 3.2 goes to the first of several folders; later bash refuses, so nothing runs.
   expect(only('F="a b"; cd $F && rm x')).toMatchObject({ op: 'delete', dir: 'a', paths: ['x'] })
   // Tabs and newlines split as spaces do.
@@ -216,6 +225,8 @@ test('an unquoted variable splits into words at spaces, tabs and newlines', () =
   expect(paths("H='a '; rm -rf $H''")).toEqual(['a'])
   expect(paths('X=; G=" a"; rm -rf "$X"$G')).toEqual(['a'])
   expect(paths("G='a b'; rm -rf ''$G")).toEqual(['a', 'b'])
+  expect(paths("G=' a'; rm -rf 'x'$G")).toEqual(['x', 'a'])
+  expect(paths('X=x; G=" a"; rm -rf "$X"$G')).toEqual(['x', 'a'])
   expect(analyze("G=' '; rm -rf ''$G")).toEqual([])
   expect(paths("E=; rm -rf ''$E")).toEqual([''])
 })

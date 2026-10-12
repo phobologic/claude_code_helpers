@@ -487,7 +487,9 @@ function findBraces(rest: string): { open: number; close: number } | null {
 function unexpanded(amble: string, post: string, depth: number): { unknown: string } | null {
   if (amble.includes("$'")) return { unknown: "has $'...' in braces, which bash 3.2 decodes first" }
   const later = braceExpand(post, depth)
-  if ('unknown' in later || later.values.length !== 1 || later.values[0] !== post) {
+  // Brace expansion makes each word shorter than its text, so a first value that is the
+  // text itself means nothing after expands.
+  if ('unknown' in later || later.values[0] !== post) {
     return { unknown: 'has braces that bash 3.2 and later shells expand differently' }
   }
   return null
@@ -575,10 +577,12 @@ function oneValue(name: string, ctx: Ctx): string | null {
   return 'values' in v && v.values.length === 1 ? (v.values[0] as Val).text : null
 }
 
-// A part that is quoted and empty: '', "", or "$X" with X empty.
-function quotedNull(p: Part, ctx: Ctx): boolean {
-  if (p.kind === 'lit') return p.quoted && p.text === ''
-  return p.kind === 'var' && p.quoted && oneValue(p.name, ctx) === ''
+// A part that expands to nothing: '' or "$X" with X empty. Among the parts splitWords
+// keeps, only quoted ones can: readWord makes no empty unquoted text, and an unquoted
+// variable that is empty is split away.
+function isNull(p: Part, ctx: Ctx): boolean {
+  if (p.kind === 'lit') return p.text === ''
+  return p.kind === 'var' && oneValue(p.name, ctx) === ''
 }
 
 // The words bash makes of `w` by splitting each unquoted variable's value at spaces, tabs
@@ -619,8 +623,8 @@ function splitWords(w: Word, ctx: Ctx): Word[] {
   if (kept) out.push({ parts, raw: w.raw })
   // Where a value did split, bash 3.2 also drops a word left with only quoted nulls in it
   // (G=' a'; rm ''$G removes a alone). Without a split, '' stays a word of its own.
-  if (!values.some(v => v !== null && /[ \t\n]/.test(v))) return out
-  return out.filter(o => !o.parts.every(p => quotedNull(p, ctx)))
+  if (!values.some(v => v !== null && v !== '')) return out
+  return out.filter(o => !o.parts.every(p => isNull(p, ctx)))
 }
 
 // The words a command runs with, after brace expansion and splitting. The assignments a
@@ -1371,20 +1375,25 @@ function rsync(args: Word[], dir: DirState, ctx: Ctx, raw: string): void {
 
 // A here-string's text. bash 4+ and zsh pass its value whole; bash 3.2 splits its
 // unquoted variables and joins the words with spaces (F=$'rm -rf\nsrc'; bash <<< $F runs
-// rm -rf src). When the two differ, both are returned a line apart, so each is read.
-function hereString(target: Word, ctx: Ctx): string {
+// rm -rf src). When the two differ, both are returned a line apart, so each is read; when
+// bash 3.2's can't be known, that is an unknown effect.
+function hereString(target: Word, ctx: Ctx, raw: string): string {
   const v = expand(target, ctx, 'plain', false)
   if ('unknown' in v) return target.raw
   const whole = v.values.join(' ')
   const split = expandAll(splitWords(target, ctx), ctx, 'plain')
-  const joined = 'unknown' in split ? whole : split.values.join(' ')
+  if ('unknown' in split) {
+    ctx.out.push({ op: 'unknown', what: `here-string in bash 3.2: ${split.unknown}`, cmd: short(raw) })
+    return whole
+  }
+  const joined = split.values.join(' ')
   return joined === whole ? whole : `${whole}\n${joined}`
 }
 
 function stdinText(cmd: Cmd, ctx: Ctx): string | null {
   for (const r of cmd.redirs) {
     if (r.heredoc) return r.heredoc.quoted ? r.heredoc.body : heredocText(r.heredoc.body)
-    if (r.op === '<<<' && r.target) return hereString(r.target, ctx)
+    if (r.op === '<<<' && r.target) return hereString(r.target, ctx, cmd.raw)
   }
   return null
 }
