@@ -670,7 +670,8 @@ def worktrees_by_name(s, slot, away):
     """git worktree remove also takes the end of a worktree's path on whole names, and
     tries that before the path. `slot` is an agent's worktree with changes, `away` a
     worktree outside the repository folder with a changed README.md."""
-    lost = [("uncommitted", os.path.join(away, "README.md"))]
+    write(os.path.join(away, "precious.txt"))
+    lost = [("uncommitted", os.path.join(away, "README.md")), ("uncommitted", os.path.join(away, "precious.txt"))]
 
     def remove(name, **kw):
         return s.judge(git("worktree", "remove", "--force", name), **kw)
@@ -697,6 +698,7 @@ def worktrees_by_name(s, slot, away):
     expect("  and passes where no worktree is at that path, since git refuses it", remove("feat"), [])
     expect("worktree remove of part of a name passes, since git matches whole names", remove("away"), [])
     expect("worktree remove of a name no worktree has passes, since git refuses it", remove("nope"), [])
+    os.remove(os.path.join(away, "precious.txt"))
     for path in (mine, twin, host):
         sh("git", "worktree", "remove", "--force", path, cwd=s.repo)
     expect("worktree remove --force of an agent's worktree passes by its path", remove(slot), [])
