@@ -1105,7 +1105,7 @@ const GIT_VALUED = new Map([
   ['switch', ['-c', '-C', '--orphan']],
   ['restore', ['-s', '--source']],
   ['clean', ['-e', '--exclude']],
-  ['branch', ['-u', '--set-upstream-to']],
+  ['branch', ['-u', '--set-upstream-to', '--sort', '--format', '--points-at']],
 ])
 
 // A subcommand's arguments with short options combined in one word spelled out one per
@@ -1138,9 +1138,6 @@ function unbundle(words: string[], valued: string[]): string[] {
   return out
 }
 
-// Whether a short option word (-f, or combined as in -qf) has any of these letters.
-const shortFlag = (a: string, letters: string): boolean => /^-[a-zA-Z]+$/.test(a) && [...a.slice(1)].some(c => letters.includes(c))
-
 // Whether a git command can discard work at all, so the safe majority never reaches the judge.
 export function gitRisky(argv: string[]): boolean {
   let k = 0
@@ -1153,21 +1150,18 @@ export function gitRisky(argv: string[]): boolean {
       return has('--hard')
     case 'checkout':
       // -b and --orphan make a new branch, which git refuses over one that exists; -B resets it.
-      return !has('-b', '--orphan') || has('--force') || rest.some(a => shortFlag(a, 'f'))
+      return !has('-b', '--orphan') || has('-f', '--force')
     case 'restore':
       return !has('-S', '--staged') || has('-W', '--worktree')
     case 'switch':
-      return (
-        has('--force', '--discard-changes', '--force-create') ||
-        rest.some(a => a.startsWith('--force-create=') || shortFlag(a, 'fC'))
-      )
+      return has('-f', '--force', '--discard-changes', '-C', '--force-create') || rest.some(a => a.startsWith('--force-create='))
     case 'clean':
       return !has('-n', '--dry-run')
     case 'stash':
       return rest[0] === 'drop' || rest[0] === 'clear'
     case 'branch':
       // Forced: -D deletes, -M and -C rename or copy over a branch, and -f with a name moves one.
-      return has('--force') || rest.some(a => shortFlag(a, 'fDMC'))
+      return has('-f', '--force', '-D', '-M', '-C')
     case 'worktree':
       return rest[0] === 'remove'
     case 'rm':

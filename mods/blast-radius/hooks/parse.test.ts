@@ -317,6 +317,9 @@ test('git commands that move an existing branch go to the judge; making a new on
     ['checkout', '-b', 'x', 'main'], ['checkout', '--orphan', 'x'], ['switch', '-c', 'x', 'main'], ['switch', '--create=x'],
     ['branch', 'x', 'main'], ['branch', '-m', 'a', 'b'], ['branch', '-c', 'a', 'b'], ['branch', '-u', 'origin/x'],
     ['branch', '--format=%(refname:short)'],
+    // A listing option's value is never read as options, so the f in it forces nothing.
+    ['branch', '--format', '-> %(refname) from %(upstream)'],
+    ['branch', '--sort', '-refname'],
   ]) {
     expect({ argv, risky: gitRisky(argv) }).toEqual({ argv, risky: false })
   }
