@@ -198,6 +198,9 @@ test('xargs and find -exec read the command they run like any other, wrappers in
   expect(only("find ~/old -name '*.bak' -exec sudo rm -f {} \\;")).toEqual({ ...bak, cmd: "find ~/old -name '*.bak' -exec sudo rm -f {} \\;" })
   expect(only("find ~/old -name '*.bak' -exec env -i nice -n 5 rm -f {} \\;")).toMatchObject(bak)
   expect(only("find ~/old -name '*.bak' -exec sudo rm -rf {} +")).toMatchObject({ ...bak, recursive: true })
+  expect(only("find ~/old -name '*.bak' -exec env LC_ALL=C rm -f {} +")).toMatchObject(bak)
+  // -exec's words come after the shell's quoting, so a glob in them is read as one.
+  expect(only("find ~/old -name '*.bak' -exec rm -f '*.tmp' \\;")).toMatchObject({ op: 'delete', paths: ['*.tmp'] })
   expect(only("find . -name '*.log' | xargs sudo rm -rf")).toEqual({
     op: 'find', dir: null, argv: ['.', '-name', '*.log'], recursive: true, cmd: 'xargs sudo rm -rf',
   })
