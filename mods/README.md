@@ -55,10 +55,21 @@ a session loads it from a folder you own.
   inside the repository folder (`.worktrees/*`, `.claude/worktrees/*`) is an agent's
   scratch space, so `/run-tickets` agents undoing their test mutations with
   `git checkout -- <file>` are never asked about. The worktree the session itself runs
-  in, and worktrees kept outside the repository folder, get full protection.
+  in, and worktrees kept outside the repository folder, get full protection. Branches,
+  stashes, reflogs and objects belong to the whole repository, so `git branch -D`,
+  `git stash clear` and the like are judged the same from a scratch worktree as from
+  the main checkout, and `git worktree remove` by the worktree it removes.
 - Ignored files are free to delete except `.env*` (not `.env.example` and kin),
   `*.db`, `*.sqlite` and `*.sqlite3`. Folders like `node_modules` and `.venv` are never
   searched.
+- When it checks a delete or `git worktree remove`, git only runs in the session's own
+  repository and its worktrees. git run in another one (a clone or submodule inside the
+  project, or an archive extracted with its own `.git`) would read that repository's
+  config, which can run commands (`core.fsmonitor`, clean filters) before you are even
+  asked. So deleting anything inside another repository, or `git worktree remove` of a
+  folder with its own `.git` that isn't one of the session's worktrees, is always held.
+  git commands that name another repository are still checked by running git there (see
+  cc-8res).
 - What it can't expand (`xargs rm`, `rm "$VAR"` with a variable from an earlier call,
   `sh -c "$CMD"`, inline Python or Node that deletes files) is held, since it could be
   anything. What it can't see at all runs: scripts (`make clean`, `./cleanup.sh`),
