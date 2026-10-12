@@ -112,6 +112,7 @@ def main():
         worktrees(s)
         subagent_folders(s)
         odd_cases(s)
+        letter_case(s)
     finally:
         s.done()
     print(f"\n{failures} failure(s)" if failures else "\nall passed")
@@ -374,6 +375,64 @@ def odd_cases(s):
     plain = os.path.join(s.root, "plain")
     write(os.path.join(plain, "f.txt"))
     expect("outside git, deleting project files holds", s.judge(delete("f.txt"), cwd=plain, root=plain), [("uncommitted", os.path.join(plain, "f.txt"))])
+
+
+def letter_case(s):
+    """A path is judged as the volume spells it. Run the test with TMPDIR on a volume
+    of the other kind to cover the checks this one skips."""
+    locked = os.path.join(s.outside, "locked")
+    write(os.path.join(locked, "f.txt"))
+    os.chmod(locked, 0o300)
+    try:
+        expect("a file in a folder that can't be listed is still judged",
+               s.judge(delete(os.path.join(locked, "f.txt"))), [("outside", os.path.join(locked, "f.txt"))])
+    finally:
+        os.chmod(locked, 0o700)
+    if os.path.exists(s.p("readme.md")):
+        print("SKIP  checks for a volume that keeps case: this one ignores it")
+        ignored_case(s)
+    else:
+        print("SKIP  checks for a volume that ignores case: this one keeps it")
+        kept_case(s)
+
+
+def ignored_case(s):
+    """Where the volume ignores case, SRC is src and .GIT is .git."""
+    write(s.p("src", "new.py"))
+    expect("rm -rf SRC holds like rm -rf src", s.judge(delete("SRC")), [("uncommitted", "src/new.py")])
+    os.remove(s.p("src", "new.py"))
+    expect("rm -rf .GIT holds like rm -rf .git", s.judge(delete(".GIT")), [("git", ".git")])
+    expect("overwriting .GIT/config holds", s.judge(overwrite(".GIT/config")), [("git", ".git/config")])
+    expect("deleting the repository folder in another case holds as the repository", s.judge(delete("../REPO")), [("git", s.repo)])
+    expect("a memory file in another case is free", s.judge(delete("~/.claude/projects/p/MEMORY/m.md")), [])
+    write(s.p("src", "a.py"), "changed\n")
+    expect("cd SRC, then checkout -- a.py over a change holds", s.judge(git("checkout", "--", "a.py", dir="SRC")),
+           [("uncommitted", "src/a.py")])
+    expect("checkout -- SRC/a.py passes, since git matches pathspecs by case", s.judge(git("checkout", "--", "SRC/a.py")), [])
+    sh("git", "checkout", "--", "src/a.py", cwd=s.repo)
+    caps = s.p(".worktrees", "caps")
+    sh("git", "worktree", "add", "-q", "-b", "caps", ".WORKTREES/caps", cwd=s.repo)
+    write(os.path.join(caps, "README.md"), "mutant\n")
+    expect("an agent's worktree git recorded in another case is still scratch",
+           s.judge(git("checkout", "--", "README.md"), cwd=caps), [])
+    away = os.path.join(s.root, "wt-away")
+    expect("worktree remove --force named in another case holds its changes",
+           s.judge(git("worktree", "remove", "--force", os.path.join(s.root, "WT-AWAY"))),
+           [("uncommitted", os.path.join(away, "README.md"))])
+
+
+def kept_case(s):
+    """Where the volume keeps case, SRC and src are different folders."""
+    write(s.p("src", "new.py"))
+    expect("rm -rf SRC with only src/ has nothing to lose", s.judge(delete("SRC")), [])
+    write(s.p("SRC", "x.py"))
+    expect("with SRC/ and src/, rm -rf src judges src/", s.judge(delete("src")), [("uncommitted", "src/new.py")])
+    expect("  and rm -rf SRC judges SRC/", s.judge(delete("SRC")), [("uncommitted", "SRC/x.py")])
+    shutil.rmtree(s.p("SRC"))
+    os.remove(s.p("src", "new.py"))
+    write(os.path.join(s.outside, "README.md"))
+    expect("cp to a new name that differs from a folder only in case makes a file",
+           s.judge(copy("cp", ["README.md"], os.path.join(s.root, "OUTSIDE"))), [])
 
 
 if __name__ == "__main__":

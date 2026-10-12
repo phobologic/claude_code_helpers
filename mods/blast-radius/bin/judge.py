@@ -29,6 +29,7 @@ The policy goes by where the affected files are, not where the command runs:
 Run it with `python3 -I`, so nothing in the working directory is imported.
 """
 
+import functools
 import glob
 import json
 import os
@@ -74,6 +75,36 @@ def under(path, root):
     return path == root or path.startswith(root.rstrip("/") + "/")
 
 
+@functools.cache
+def names_in(folder):
+    """The names in `folder` as the file system stores them, and each by its case-folded form."""
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        names = []
+    return frozenset(names), {n.casefold(): n for n in names}
+
+
+def spelled(path):
+    """An absolute, normalized `path` with each name that exists spelled the way its
+    folder lists it. A volume that ignores case opens src for SRC, but realpath keeps the
+    spelling it was given, and every check compares paths as strings."""
+    out = "/"
+    for name in path.split("/"):
+        if not name:
+            continue
+        exact, folded = names_in(out)
+        if name not in exact and os.path.lexists(os.path.join(out, name)):
+            name = folded.get(name.casefold(), name)
+        out = os.path.join(out, name)
+    return out
+
+
+def ondisk(path):
+    """os.path.realpath, spelled the way the file system stores each name."""
+    return spelled(os.path.realpath(path))
+
+
 def decode(b):
     return b.decode("utf-8", "surrogateescape")
 
@@ -93,7 +124,7 @@ def git_out(args, cwd):
 def toplevel(path):
     d = path if os.path.isdir(path) else os.path.dirname(path)
     t = git_out(["rev-parse", "--show-toplevel"], d)
-    return os.path.realpath(t.strip()) if t and t.strip() else None
+    return ondisk(t.strip()) if t and t.strip() else None
 
 
 def main_checkout(top):
@@ -103,7 +134,7 @@ def main_checkout(top):
     paths = [line[9:] for line in listing.splitlines() if line.startswith("worktree ")]
     if not paths:
         raise Unresolved(f"git worktree list failed in {top}, so whose branches and history these are is unknown")
-    return os.path.realpath(paths[0])
+    return ondisk(paths[0])
 
 
 def finding(kind, path, detail):
@@ -120,9 +151,9 @@ def size(n):
 
 class Ctx:
     def __init__(self, req):
-        self.cwd = os.path.realpath(req["cwd"])
+        self.cwd = ondisk(req["cwd"])
         self.home = os.path.expanduser("~")
-        self.home_real = os.path.realpath(self.home)
+        self.home_real = ondisk(self.home)
         tmp = tempfile.gettempdir()
         self.vars = {
             "HOME": self.home,
@@ -133,15 +164,16 @@ class Ctx:
         }
         roots = os.environ.get("BLAST_RADIUS_TEMP_ROOTS")  # tests only
         temp = roots.split(os.pathsep) if roots else ["/tmp", "/var/tmp", tmp, os.environ.get("TMPDIR", "")]
-        self.temp = sorted({os.path.realpath(p) for p in temp if p})
-        self.memory = os.path.realpath(os.path.join(self.home, ".claude", "projects"))
-        self.project = os.path.realpath(req["sessionRoot"])
+        self.temp = sorted({ondisk(p) for p in temp if p})
+        self.memory = ondisk(os.path.join(self.home, ".claude", "projects"))
+        self.project = ondisk(req["sessionRoot"])
         self.top = toplevel(self.project)  # the session's own working copy
         self.main = None
         self.worktrees = []
         if self.top:
             listing = git_out(["worktree", "list", "--porcelain"], self.top) or ""
-            paths = [os.path.realpath(line[9:]) for line in listing.splitlines() if line.startswith("worktree ")]
+            # git records a worktree's path as it was typed, not as the volume spells it.
+            paths = [ondisk(line[9:]) for line in listing.splitlines() if line.startswith("worktree ")]
             self.main = paths[0] if paths else self.top
             self.worktrees = paths or [self.top]
         # Linked worktrees inside the repository folder are agents' scratch space.
@@ -215,9 +247,9 @@ def resolve_delete(p):
     # rm removes the last name itself, never what a link there points to, unless the
     # path ends in a slash.
     if p.endswith("/") or os.path.basename(p) in ("", ".", ".."):
-        return os.path.realpath(p)
+        return ondisk(p)
     parent, name = os.path.split(p)
-    return os.path.join(os.path.realpath(parent), name)
+    return spelled(os.path.join(os.path.realpath(parent), name))
 
 
 def describe(rp):
@@ -283,7 +315,7 @@ def walk(ctx, top, protected, nested):
     seen = 0
     for dirpath, dirnames, filenames in os.walk(top):
         if ".git" in dirnames or ".git" in filenames:
-            real = os.path.realpath(dirpath)
+            real = ondisk(dirpath)
             if real in ctx.scratch:
                 dirnames[:] = []
                 continue
@@ -370,7 +402,7 @@ def judge_in_repo(ctx, owner, entries):
 def judge_overwrite(ctx, p):
     if p.startswith("/dev/"):
         return []
-    rp = os.path.realpath(p)  # a write goes through links to their target
+    rp = ondisk(p)  # a write goes through links to their target
     if not os.path.exists(rp):
         return []
     w = ctx.where(rp)
@@ -393,7 +425,7 @@ def judge_copy(ctx, base, eff):
     if eff["noClobber"]:
         return findings
     for d in [p for w in eff["dest"] for p in expand(ctx, base, w, must_exist=False)]:
-        rd = os.path.realpath(d)
+        rd = ondisk(d)
         if eff["intoDir"] or (os.path.isdir(rd) and not eff["noTargetDir"]):
             targets = [os.path.join(rd, os.path.basename(os.path.normpath(s))) for s in srcs]
         else:
@@ -425,6 +457,8 @@ def spec_path(cwd, top, spec):
         return os.path.join(top, spec[2:])
     if spec.startswith(":"):
         return top  # other pathspec magic: count the whole repository
+    # git matches a pathspec by case even where the volume ignores it, so only `cwd`
+    # (from git_start) is spelled as on disk, and SRC/a.py matches nothing in src/.
     return os.path.realpath(os.path.join(cwd, spec))
 
 
@@ -602,7 +636,7 @@ def git_worktree(ctx, top, cwd, rest):
     pos, _, _ = positionals(rest[1:])
     if not pos:
         return []
-    p = os.path.realpath(os.path.join(cwd, os.path.expanduser(pos[0])))
+    p = ondisk(os.path.join(cwd, os.path.expanduser(pos[0])))
     if not os.path.isdir(p) or ctx.where(p) in FREE:
         return []
     findings = []
@@ -661,7 +695,7 @@ def git_start(base, args):
             raise Unresolved("git with --git-dir or --work-tree")
         else:
             i += 1
-    return os.path.realpath(cwd), i
+    return ondisk(cwd), i  # git spells its folder as on disk too
 
 
 def judge_git(ctx, base, eff):
@@ -728,7 +762,7 @@ def alternates(ctx, req):
     out = []
     for c in req.get("altCwds", []):
         try:
-            p = os.path.realpath(base_dir(ctx, c))
+            p = ondisk(base_dir(ctx, c))
         except Unresolved:
             continue
         if p != ctx.cwd and os.path.isdir(p) and p not in [a.cwd for a in out]:
