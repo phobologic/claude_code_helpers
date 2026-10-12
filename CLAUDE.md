@@ -17,8 +17,8 @@ be published. Edit settings there; put everything else here.
 ## Repository Structure
 
 ```
-skills/         Global skills (spec, run-tickets, wrap-epic, review, multi-review, use-railway, …)
-agents/         Sub-agents for code review, design sprints, /spec, and the run-tickets workflow
+skills/         Global skills (spec, run-tickets, wrap-epic, review, use-railway, …)
+agents/         Sub-agents for design sprints, /spec, and the run-tickets workflow
 workflows/      Saved Claude Code workflow scripts (run-tickets)
 languages/      Per-language Claude Code plugins (go, python) — hooks + rules
 mods/           Claude Code mods (workflow-monitor), installed from their own marketplace
@@ -61,9 +61,9 @@ To add language auto-formatting hooks to a project:
 - See the [Claude Code skills docs](https://code.claude.com/docs/en/skills) for format details
 
 ### Sub-Agents
-- Specialized review agents are stored in the `agents/` directory
-- Agents are used by the multi-review system to provide specialized code analysis
-- The review coordinator aggregates findings from all reviewers
+- Sub-agents are stored in the `agents/` directory, one file each
+- They serve `/spec` (spec-critic), the `run-tickets-engine` workflow (ticket-implementer, ticket-verifier, ticket-reviewer) and `/design-sprint` (design-designer, design-evaluator)
+- Code review has no agents of its own: `/review` runs Claude Code's built-in `/code-review`
 
 ### Language Plugins
 - Each language in `languages/` is a Claude Code plugin
@@ -97,8 +97,7 @@ To add language auto-formatting hooks to a project:
 - `/wrap-epic [epic-id]` - Ship a completed `/run-tickets` batch: merge to main, prune worktrees, move non-blocking findings to the backlog epic (folding duplicates into existing tickets), close epic with ship note, report remaining sub-epics. Never closes the backlog epic. The plan comes from `bin/wrap-epic-plan` (read-only): the integration branch, the worktrees to prune (never ones another run's record claims), and the epic's open children sorted into blocking (`regression`, `worsened`, `deferred-rework` or `needs-human` at any priority, or a P0-1 finding), movable, and unfinished. `/run-tickets` uses the same script for its "Blocking wrap" line, so the two never disagree. Given a planning epic with no branch of its own (like `/spec`'s top-level epic), it wraps the one sub-epic that has a branch, and it closes the parent epic too when nothing else is open under it. User-only (`disable-model-invocation: true`); confirms before any destructive action.
 
 ### Review
-- `/review` - Perform standard code review of uncommitted changes
-- `/multi-review` - Coordinate parallel reviews from 5 specialized agents
+- `/review [level] [target] [--max-findings <n>|all]` - Runs Claude Code's built-in `/code-review` (level `high` unless given, always passed explicitly because `/code-review` otherwise reuses the last level typed; `--max-findings all` unless given), then files every finding as a `tk` ticket under a new review epic that `/run-tickets` takes directly. The target is `/code-review`'s: none for the current branch's diff plus uncommitted changes, a PR number, a branch, or paths. Filing merges findings one fix would cover, gives each a priority (0-3, from the failure scenario) and acceptance criteria, notes repeats on existing tickets after a `tk backlog find`, sends pre-existing medium and low findings to the backlog epic, and tags owner choices `decision`. It replaced `/multi-review` (four specialist reviewer agents) after a head-to-head on the same code, where `/code-review` found about three times as many of the most serious bugs for about a quarter of the tokens. User-only; `ultra`, `--fix` and `--comment` go to `/code-review` directly
 
 ### Ticket Workflow
 - `/epic-tree [--all] [epic-id ...]` - Show a tree of epics with open/closed ticket counts per level; omit IDs to show all root epics; `--all` includes closed sub-epics
@@ -131,22 +130,6 @@ Used only by the `run-tickets-engine` workflow. They never use `SendMessage`; ea
 
 The workflow's merge step and final integration check (both sonnet, medium effort) use inline prompts, not agent files.
 
-## Multi-Review Agent Specializations
-
-1. **code-reviewer-1**: Logical correctness, best practices, architecture
-2. **code-reviewer-2**: Performance, efficiency, resource usage
-3. **code-reviewer-3**: Readability, maintainability, documentation
-4. **security-reviewer**: Security vulnerabilities, defensive coding
-5. **review-coordinator**: Aggregates and prioritizes findings
-
-## Code Review Process
-
-- Reviews analyze uncommitted changes (or specific commits/files when specified)
-- Multi-review creates reports in `.code-review/` directory
-- Issues are rated by importance: Critical, High, Medium, Low
-- Final reports include file locations and line numbers
-- When `tk` is installed, `/multi-review` creates tickets directly instead of writing to `.code-review/*.md` files. An epic is created per review session with child tickets for each finding. Use `tk query '.parent == "<epic-id>"'` to browse results.
-
 ## Tests
 
 After changing `workflows/run-tickets-engine.js`, any `bin/run-tickets-*` script, or `bin/wrap-epic-plan`, run:
@@ -162,12 +145,11 @@ The workflow test runs the real script with fake agents and checks scheduling (c
 
 ## Gate Tags
 
-`needs-human` and `decision` (defined in `tk.md`) keep tickets away from agents until a person acts. Every ticket filer (ticket-reviewer, code-critic, `/multi-review`, `/playwright-explore`, `/spec`) tags a finding `decision` when its right fix is a choice the owner would notice in the product. `/run-tickets` skips both tags and asks the owner about decision-shaped tickets before dispatch. No skill turns a shared file into a `tk dep` edge; `/run-tickets` handles such tickets within the run instead (the `run-tickets-engine` workflow runs them side by side and resolves conflicts at merge).
+`needs-human` and `decision` (defined in `tk.md`) keep tickets away from agents until a person acts. Every ticket filer (ticket-reviewer, `/review`, `/playwright-explore`, `/spec`) tags a finding `decision` when its right fix is a choice the owner would notice in the product. `/run-tickets` skips both tags and asks the owner about decision-shaped tickets before dispatch. No skill turns a shared file into a `tk dep` edge; `/run-tickets` handles such tickets within the run instead (the `run-tickets-engine` workflow runs them side by side and resolves conflicts at merge).
 
 ## Important Notes
 
 - **This repo is public on GitHub.** Keep other projects out of it: no names, paths, ticket IDs, code or data from them in files, test fixtures, or commit messages. Describe what a run or project showed in general terms instead. Private Claude config (`~/.claude/settings.json`) stays in the private `myhome` repo (see Repository Purpose)
 - `CLAUDE.global.md` is symlinked to `~/.claude/CLAUDE.md`. It can't be named `CLAUDE.md` here, because then it would be loaded twice when working in this repo
 - `~/.claude/settings.json` is not in this repo (see Repository Purpose); there is no user-level `~/.claude/settings.local.json`
-- Review reports are generated in `.code-review/` directory
 - Local settings should be in `settings.local.json` (gitignored)

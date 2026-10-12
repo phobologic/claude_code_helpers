@@ -1,15 +1,15 @@
 # Claude Code Dotfiles
 
-Personal Claude Code dotfiles — global skills, multi-agent code review, a workflow-driven
+Personal Claude Code dotfiles — global skills, code review filed as tickets, a workflow-driven
 ticket runner, language plugins, tool rules, and working style rules for `~/.claude/`.
 
 ## What's Here
 
 | Directory / File | Purpose |
 |-----------------|---------|
-| `skills/` | Global skills: `/spec`, `/run-tickets`, `/run-status`, `/analyze-runs`, `/wrap-epic`, `/review`, `/multi-review`, `/design-sprint`, `/playwright-explore`, `/epic-tree`, `/ticket-triage`, `/setup-python-project`, `/setup-js-project`, `/setup-go-project`, `/use-railway`, `/use-sqlalchemy`, `/load-shared-rule` |
+| `skills/` | Global skills: `/spec`, `/run-tickets`, `/run-status`, `/analyze-runs`, `/wrap-epic`, `/review`, `/design-sprint`, `/playwright-explore`, `/epic-tree`, `/ticket-triage`, `/setup-python-project`, `/setup-js-project`, `/setup-go-project`, `/use-railway`, `/use-sqlalchemy`, `/load-shared-rule` |
 | `workflows/` | Saved Claude Code workflow scripts: `run-tickets` (launched by `/run-tickets`) |
-| `agents/` | Sub-agents: spec-critic (plan review for `/spec`), run-tickets workflow (ticket-implementer, ticket-verifier, ticket-reviewer), design-sprint (design-designer, design-evaluator), 5 code review agents, and code-critic (adversarial single-pass reviewer) |
+| `agents/` | Sub-agents: spec-critic (plan review for `/spec`), run-tickets workflow (ticket-implementer, ticket-verifier, ticket-reviewer), and design-sprint (design-designer, design-evaluator) |
 | `languages/` | Per-language Claude Code plugins (Go, Python, JS/SvelteKit) — auto-formatting hooks + coding rules |
 | `plugins/` | General-purpose Claude Code plugins — workflow automation and tool integrations |
 | `tools/` | Per-tool rule files (Railway, SQLAlchemy) — loaded via `.claude/rules/` symlinks |
@@ -71,8 +71,7 @@ are available globally:
 | `/spec [idea]` | Turn a rough idea into a phased plan with EARS ACs, adversarial review, and `tk` tickets. Reads the code and design docs first, then asks every product decision with a recommendation |
 | `/run-tickets <epic-id> \| <id> [id ...] [--resume]` | **Experimental.** The ticket runner: scheduling lives in `workflows/run-tickets-engine.js`, not an LLM team lead. Takes a spec'd epic, a batch of review findings, or a few backlog tickets, with AC verification only for tickets that have acceptance criteria. Asks you about decision-shaped tickets before dispatch, keeps tickets that share a file from running at once, and gates every merge on lint, types and tests. Watch with `/workflows`. Pre-existing medium and low findings go to the repo's backlog epic, so the epic can finish. Helpers: `bin/run-tickets-plan`, `bin/run-tickets-setup`, `bin/run-tickets-finish`, `bin/wrap-epic-plan`, `bin/worktree-reset`, `bin/tk-backlog`, `bin/review-scratch` (a throwaway copy of a branch for mutation testing) |
 | `/run-status [run-id]` | Ticket-by-ticket snapshot of a `/run-tickets` run, running or finished, with per-step timing (`bin/run-tickets-status`; `--list` for recent runs) |
-| `/review` | Code review of all uncommitted changes |
-| `/multi-review` | Parallel review by 5 specialized agents |
+| `/review [level] [target]` | Claude Code's `/code-review`, with every finding filed as a `tk` ticket for `/run-tickets` |
 | `/design-sprint [--scan] [-- guidance]` | Multi-agent GAN-style design sprint producing a frontend spec |
 | `/playwright-explore <url> [scenario:<name>] [roles:…] [time:…] [-- scenario]` | Spawn simulated users to explore a running app and file `tk` tickets |
 | `/epic-tree [--all] [epic-id ...]` | Show a tree of epics with open/closed ticket counts per level |
@@ -93,7 +92,7 @@ usage:
 **Feature kickoff** — turn an idea into running code:
 
 ```
-/spec "your idea"  →  /run-tickets <epic-id>  →  /multi-review  →  /wrap-epic
+/spec "your idea"  →  /run-tickets <epic-id>  →  /review <branch>  →  /wrap-epic
 ```
 
 **Backlog grooming** — work down the open ticket list:
@@ -105,10 +104,10 @@ usage:
 **Post-review cleanup** — act on review findings:
 
 ```
-/multi-review  →  /run-tickets <review-epic-id>  →  /wrap-epic
+/review  →  /run-tickets <review-epic-id>  →  /wrap-epic
 ```
 
-`/multi-review` creates a `tk` epic with one child ticket per finding, which
+`/review` files its findings as tickets under a new `tk` epic, which
 `/run-tickets` can consume directly.
 
 **Build + validate + fix** — after a feature lands, poke it with simulated users:
@@ -144,7 +143,7 @@ usage:
 ```
 
 `/run-tickets` also takes a list of ticket IDs, so the same command covers a spec'd
-epic, a batch of `/multi-review` findings, or a few backlog tickets. Watch a run with
+epic, a batch of `/review` findings, or a few backlog tickets. Watch a run with
 `/workflows` or `/run-status`. The details are in `skills/run-tickets/SKILL.md` and
 this repo's `CLAUDE.md`.
 
@@ -157,40 +156,36 @@ this repo's `CLAUDE.md`.
 
 ## Review Skills
 
-### `/review` — Quick Single-Pass Review
+### `/review` — /code-review, Filed as Tickets
 
-Reviews all uncommitted changes and provides feedback on correctness, security,
-performance, readability, and test coverage.
-
-### `/multi-review` — Parallel Multi-Agent Review
-
-Coordinates 5 specialized code review agents working in parallel:
-
-| Agent | Focus |
-|-------|-------|
-| **code-reviewer-1** | Logical correctness, best practices, architecture |
-| **code-reviewer-2** | Performance, efficiency, resource usage |
-| **code-reviewer-3** | Readability, maintainability, documentation |
-| **security-reviewer** | Security vulnerabilities, defensive coding |
-| **review-coordinator** | Aggregates, deduplicates, and prioritizes findings |
-
-Issues are rated: **Critical**, **High**, **Medium**, **Low**.
-
-#### Review Scope
+Runs Claude Code's built-in `/code-review`, then files each finding as a `tk`
+ticket under a new review epic, ready for `/run-tickets`. It takes the same level
+and target as `/code-review`:
 
 ```bash
-/multi-review                    # Uncommitted changes (default)
-/multi-review last 3 commits     # Recent commits
-/multi-review since abc123       # Since a specific commit
-/multi-review src/auth.py        # Specific files
+/review                          # current branch's diff plus uncommitted changes, at high
+/review xhigh                    # the same, at extra-high effort
+/review high feature/login       # a branch
+/review 42                       # a PR
+/review xhigh src/auth.py src/db # specific paths
 ```
 
-#### Output
+Filing:
 
-Results go to `.code-review/final-report.md`. If `tk` is installed, findings are
-created as tickets directly — an epic per review session with child tickets per finding.
+- Findings that one fix would cover become one ticket listing every location.
+- Each ticket gets a priority (0-3) judged from the reported failure scenario,
+  and acceptance criteria, so `/run-tickets` can verify the fix.
+- A finding an open ticket already covers becomes a note on that ticket
+  (`tk backlog find` first).
+- Pre-existing medium and low findings in a diff review go to the repo's backlog
+  epic, so the review epic holds only what the change should fix.
+- A finding whose right fix is the owner's choice is tagged `decision`, and
+  `/run-tickets` asks about it before any agent works on it.
 
-See [examples/multi-review-example.md](examples/multi-review-example.md) for a sample report.
+`/review` doesn't take `ultra`, `--fix` or `--comment`; run `/code-review` for
+those. It replaced `/multi-review` (four specialist reviewer agents), which found
+about a third as many of the most serious bugs on the same code for about four
+times the tokens.
 
 ## Third-Party Tool: tk
 

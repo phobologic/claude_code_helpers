@@ -88,7 +88,7 @@ Will do:
 Will NOT do:
   - Push to remote (you push manually)
   - Delete the remote branch
-  - Run tests or /multi-review
+  - Run tests or /review
 
 Blocking findings still open under this epic:
      ab-abcd  P1  preexisting  "Null deref in login handler"

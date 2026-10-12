@@ -39,6 +39,7 @@ remove_obsolete() {
 }
 
 remove_obsolete "$CLAUDE/commands" "$DOTFILES/commands" "migrated to skills/"
+remove_obsolete "$HOME/.local/bin/review-setup" "$DOTFILES/bin/review-setup" "/review runs /code-review now"
 
 # Everything Claude lives in this repo except ~/.claude/settings.json, which the
 # private myhome repo links: it holds private context (auto mode's description of
@@ -85,8 +86,7 @@ echo ""
 echo "Done. ~/.claude/ is configured."
 echo ""
 echo "Skills available globally (type / in Claude Code to see them):"
-echo "  /review             Code review of uncommitted changes"
-echo "  /multi-review       Parallel review with 5 specialized agents"
+echo "  /review             /code-review, with its findings filed as tk tickets"
 echo "  /run-tickets        Implement tk tickets in parallel worktrees, reviewed and merged"
 echo "  /ticket-triage      Filter, sort, and review open tickets"
 echo "  /epic-tree          Show a tree of epics with open/closed ticket counts"

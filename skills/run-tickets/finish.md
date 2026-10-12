@@ -101,7 +101,7 @@ Still open under <findings parent>: <N> unfinished, <K> findings that move to th
 
 Next:
   git log --oneline main..<branch>
-  /code-review high  (or /multi-review) on main...<branch>
+  /review high <branch>                   # files its findings as tk tickets
   /run-tickets <findings parent>          # only if "Blocking wrap" lists findings
   /run-tickets <blocked ids> --resume     # after addressing the block reasons
   /wrap-epic <epic-id or branch>          # when "Blocking wrap" is none
@@ -116,5 +116,5 @@ one moved anyway, that is an exception to the rule: say so in those words,
 and have them name it by id. Any note you write on the ticket when moving it
 records it as an exception, with the origin unchanged.
 
-Findings from `/code-review` or `/multi-review` can go straight back through
-`/run-tickets <finding-epic-id>`.
+`/review` files its findings under a review epic, which can go straight back
+through `/run-tickets <review-epic-id>`. Plain `/code-review` files nothing.

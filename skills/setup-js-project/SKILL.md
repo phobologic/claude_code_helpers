@@ -271,7 +271,6 @@ dist/
 !.env.example
 .DS_Store
 .tmp/
-.code-review/
 .tickets/
 ```
 

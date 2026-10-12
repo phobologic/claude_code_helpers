@@ -168,7 +168,6 @@ coverage.html
 *.swp
 
 # Claude Code scratch
-.code-review/
 .tickets/
 .worktrees/
 .tmp/

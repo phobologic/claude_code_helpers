@@ -142,7 +142,7 @@ When coordinating a team of agents (spawn → coordinate → shut down), read
 and per-agent shutdown rules. There is no `TeamCreate`/`TeamDelete` and no
 broadcast address: agents are addressed by the `name` given at spawn, and each
 is shut down individually. Skills that orchestrate teams (`/design-sprint`,
-`/multi-review`, `/playwright-explore`) document the same conventions.
+`/playwright-explore`) document the same conventions.
 
 ## Testing
 
