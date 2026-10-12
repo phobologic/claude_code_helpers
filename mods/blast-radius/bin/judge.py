@@ -18,6 +18,10 @@ The policy goes by where the affected files are, not where the command runs:
 - The session's repository: held only when work would be lost that git can't give
   back: untracked or modified files, ignored files that look like secrets or local
   data, a nested repository's history, commits on no other branch, stashes.
+- Another repository inside it (a clone, a submodule, an extracted archive with its
+  own .git): always held. git only ever runs in the session's own worktrees, since git
+  run in another repository reads that repository's config, which can run commands
+  (core.fsmonitor, clean filters) before the person is even asked.
 - An agent's scratch worktree (a linked worktree inside the repository folder, other
   than the one the session runs in), temp folders and Claude's memory folders: free.
 - Anywhere else: held.
@@ -49,6 +53,7 @@ VENDORED = {
 }
 FIND_ACTIONS = {"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"}
 PLACEHOLDER = re.compile("\x01(\\w+)\x01")
+SEPARATE = "a separate git repository: its work can't be checked"
 
 # git runs without the caller's repository overrides, and never takes index.lock for
 # a refresh, so a check never collides with an agent's own git command.
@@ -69,8 +74,11 @@ def decode(b):
 
 
 def git(args, cwd, timeout=60):
+    # A check never starts the repository's file monitor, a command its config names.
+    # Clean filters can't be switched off this way, which is why git only runs in the
+    # session's own worktrees (see judge_deletes).
     try:
-        return subprocess.run(["git", *args], cwd=cwd, env=GIT_ENV, capture_output=True, timeout=timeout)
+        return subprocess.run(["git", "-c", "core.fsmonitor=false", *args], cwd=cwd, env=GIT_ENV, capture_output=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired):
         return None
 
@@ -223,8 +231,12 @@ def is_protected(name):
     return name not in NOT_PROTECTED and any(fnmatchcase(name, p) for p in PROTECTED)
 
 
-def tracked(path):
-    out = git_out(["--literal-pathspecs", "ls-files", "-z", "--", os.path.basename(path)], os.path.dirname(path))
+def tracked(ctx, path):
+    # Asked of the session's innermost worktree holding `path`, never from the file's
+    # own folder: git there could find another repository (a folder laid out as a bare
+    # repository needs no .git) and run its config.
+    repo = max((w for w in ctx.worktrees if under(path, w)), key=len)
+    out = git_out(["--literal-pathspecs", "ls-files", "-z", "--", os.path.relpath(path, repo)], repo)
     return bool(out)
 
 
@@ -317,6 +329,9 @@ def judge_deletes(ctx, items):
 
 
 def judge_in_repo(ctx, owner, entries):
+    if owner not in ctx.worktrees:
+        # A repository nested in the session's: git status there would run its config.
+        return [finding("history", ctx.show(owner), SEPARATE)]
     findings = []
     targets = [rp for rp, _ in entries]
     lost = {}
@@ -332,16 +347,26 @@ def judge_in_repo(ctx, owner, entries):
                 protected.append(rp)
         elif walk(ctx, rp, protected, nested):
             ctx.notes.append(f"{ctx.show(rp)} is too large to search fully for .env files and nested repositories.")
+    findings += judge_nested(ctx, nested, lost)
+    for path in protected:
+        if path not in lost and not tracked(ctx, path):
+            lost[path] = "ignored by git, so it can't be restored"
+    findings += [finding("uncommitted", ctx.show(p), what) for p, what in sorted(lost.items())]
+    return findings
+
+
+def judge_nested(ctx, nested, lost):
+    """Findings for the repositories walk() found; a session worktree's changes go into `lost`."""
+    findings = []
     for repo, kind in nested:
         if kind == "repo":
             findings.append(finding("history", ctx.show(repo), "a separate git repository: its history would be deleted"))
-        else:
+        elif repo in ctx.worktrees:
             for path, what in changes(repo, untracked=True):
                 lost[path] = what
-    for path in protected:
-        if path not in lost and not tracked(path):
-            lost[path] = "ignored by git, so it can't be restored"
-    findings += [finding("uncommitted", ctx.show(p), what) for p, what in sorted(lost.items())]
+        else:
+            # Its .git file can point at any git folder, whose config git status would run.
+            findings.append(finding("history", ctx.show(repo), SEPARATE))
     return findings
 
 
@@ -581,12 +606,14 @@ def git_worktree(ctx, top, cwd, rest):
     p = os.path.realpath(os.path.join(cwd, os.path.expanduser(pos[0])))
     if not os.path.isdir(p) or ctx.where(p) in ("scratch", "temp"):
         return []
+    if p not in ctx.worktrees:
+        return [finding("history", ctx.show(p), SEPARATE)]  # git status there would run its config
     findings = []
     if any(a in ("-f", "--force") for a in rest):
         findings += [finding("uncommitted", ctx.show(path), what) for path, what in changes(p, untracked=True)]
     protected = []
     walk(ctx, p, protected, [])
-    findings += [finding("uncommitted", ctx.show(f), "ignored by git, so it can't be restored") for f in protected if not tracked(f)]
+    findings += [finding("uncommitted", ctx.show(f), "ignored by git, so it can't be restored") for f in protected if not tracked(ctx, f)]
     return findings
 
 
