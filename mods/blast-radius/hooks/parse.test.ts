@@ -181,6 +181,111 @@ test('find becomes a dry run: deleting actions print, other actions do nothing',
   expect(only('ls *.log | xargs rm')).toMatchObject({ op: 'unknown' })
 })
 
+const fromInput = { op: 'unknown', what: 'what xargs passes comes from its input' }
+
+test('xargs and find -exec read the command they run like any other, wrappers included', () => {
+  expect(only('git branch | xargs git branch -D')).toEqual({
+    op: 'unknown', what: 'git with an argument only known when it runs', cmd: 'xargs git branch -D',
+  })
+  expect(only('git branch | grep -v main | xargs git branch -D')).toMatchObject({ op: 'unknown' })
+  expect(only('ls | xargs -I{} git -C {} reset --hard')).toMatchObject({ op: 'unknown' })
+  expect(only('find . -type f -exec git checkout -- {} +')).toMatchObject({ op: 'unknown' })
+  expect(analyze('git branch --merged | xargs git branch -d')).toEqual([])
+  for (const run of ['rm -rf', 'sudo rm -rf', 'sudo -u root rm -rf', 'env -u X nohup timeout 5 rm -rf']) {
+    expect(analyze(`ls ~/old | xargs ${run}`)).toEqual([{ ...fromInput, cmd: `xargs ${run}` }])
+  }
+  const bak = { op: 'find', dir: null, argv: ['~/old', '-name', '*.bak', '-print'], recursive: false }
+  expect(only("find ~/old -name '*.bak' -exec sudo rm -f {} \\;")).toEqual({ ...bak, cmd: "find ~/old -name '*.bak' -exec sudo rm -f {} \\;" })
+  expect(only("find ~/old -name '*.bak' -exec env -i nice -n 5 rm -f {} \\;")).toMatchObject(bak)
+  expect(only("find ~/old -name '*.bak' -exec sudo rm -rf {} +")).toMatchObject({ ...bak, recursive: true })
+  expect(only("find . -name '*.log' | xargs sudo rm -rf")).toEqual({
+    op: 'find', dir: null, argv: ['.', '-name', '*.log'], recursive: true, cmd: 'xargs sudo rm -rf',
+  })
+  expect(only('unlink -r x')).toMatchObject({ recursive: false })
+})
+
+test('what xargs or find -exec runs is judged by its own words, the input unknown', () => {
+  // A command that writes nothing, or won't clobber, isn't held for its input alone.
+  for (const command of [
+    'find . -name x | xargs grep foo',
+    'ls | xargs',
+    'ls | xargs command -v',
+    'ls | xargs ln -s -t ~/bin',
+    'ls | xargs tee -a log',
+    "find . -name '*.sh' -exec sh -c 'echo \"$1\"' _ {} \\;",
+  ]) {
+    expect({ command, effects: analyze(command) }).toEqual({ command, effects: [] })
+  }
+  expect(only('ls | xargs mv -t ~/x')).toEqual({ ...fromInput, cmd: 'xargs mv -t ~/x' })
+  expect(only('find . -type f -exec mv {} /x \\;')).toEqual({
+    op: 'unknown', what: '{} in find -exec is each path it finds', cmd: 'find . -type f -exec mv {} /x \\;',
+  })
+  // A shell given the input as its code is held, as sh -c "$CMD" is.
+  expect(only('ls | xargs bash -c')).toMatchObject({ op: 'unknown' })
+  expect(only('find . -exec sh -c {} \\;')).toMatchObject({ op: 'unknown' })
+  // Variables set on the line reach it, and it runs where a wrapper of xargs puts it.
+  expect(only('D=build; ls | xargs -I{} rm -rf "$D"')).toMatchObject({ op: 'delete', paths: ['build'] })
+  expect(only('ls | env -C /srv xargs -I{} rm -rf build')).toMatchObject({ op: 'delete', dir: '/srv', paths: ['build'] })
+})
+
+test("a delete fed a find's list leaves it to the dry run, and its other words are judged", () => {
+  const find = { op: 'find', dir: null, argv: ['.', '-name', 'x'], recursive: true, cmd: 'xargs rm -rf ~/keep' }
+  expect(analyze('find . -name x | xargs rm -rf ~/keep')).toEqual([
+    { op: 'delete', dir: null, paths: ['~/keep'], recursive: true, cmd: 'xargs rm -rf ~/keep' },
+    find,
+  ])
+  expect(analyze('D=build; find . -name x | xargs rm -rf "$D"')).toEqual([
+    { op: 'delete', dir: null, paths: ['build'], recursive: true, cmd: 'xargs rm -rf "$D"' },
+    { ...find, cmd: 'xargs rm -rf "$D"' },
+  ])
+  const exec = 'find . -name x -exec rm -rf ~/keep {} +'
+  expect(analyze(exec)).toEqual([
+    { op: 'delete', dir: null, paths: ['~/keep'], recursive: true, cmd: exec },
+    { ...find, argv: ['.', '-name', 'x', '-print'], cmd: exec },
+  ])
+  // Without {}, -exec runs its command as written, once per path found.
+  expect(analyze('find . -name x -exec rm -rf build \\;')).toEqual([
+    { op: 'delete', dir: null, paths: ['build'], recursive: true, cmd: 'find . -name x -exec rm -rf build \\;' },
+  ])
+  // The list holds paths from where the find ran: a delete run anywhere else can't use it.
+  expect(only('find . -name x | xargs env -C /srv rm')).toMatchObject(fromInput)
+  expect(only('env -C /srv find . -name x | xargs rm')).toMatchObject(fromInput)
+  expect(only('cd "$X" && find . -name x | xargs rm')).toMatchObject(fromInput)
+  expect(only('find . -name x -exec env -C /srv rm {} \\;')).toMatchObject({ op: 'unknown' })
+  // -execdir runs in each folder found: its list is the find's, other relative paths are unknown.
+  expect(only('find . -name x -execdir rm {} \\;')).toMatchObject({ op: 'find', argv: ['.', '-name', 'x', '-print'] })
+  expect(only('find . -name x -execdir cp /etc/hosts ../x \\;')).toMatchObject({
+    op: 'unknown', what: 'paths relative to each folder find -execdir runs in',
+  })
+  expect(only('find . -name x -exec cp /etc/hosts ../x \\;')).toMatchObject({ op: 'copy', dest: ['../x'] })
+  // A find's other -exec does nothing in the dry run an xargs rm reads.
+  expect(only('find . -name x -exec touch {} + | xargs rm')).toMatchObject({ op: 'find', argv: ['.', '-name', 'x', '-true'] })
+})
+
+test("xargs's options: where its command starts and where its input goes", () => {
+  for (const opts of ['-n1', '-n 1', '-0n 1', '-0r', '--max-args 1', '--max-args=1', '--arg-file list', '-a list', '-0 --', '-ei']) {
+    const command = `ls | xargs ${opts} rm -f`
+    expect({ command, effect: only(command) }).toMatchObject({ command, effect: fromInput })
+  }
+  // -I, -J, -i and --replace put the input in place of their text, and nowhere else.
+  for (const opts of ['-I{}', '-I %', '-J %', '-i', '-rI {}', '--replace']) {
+    const command = `ls | xargs ${opts} rm -rf build`
+    expect({ command, effect: only(command) }).toMatchObject({ command, effect: { op: 'delete', paths: ['build'] } })
+  }
+  for (const command of [
+    "ls | xargs -I{} sh -c 'rm -rf {}'",
+    'ls | xargs -I % sh -c %',
+    'ls | xargs -i% rm %',
+    'ls | xargs --replace=% rm %',
+    'ls | xargs -I{} rm {}/x',
+  ]) {
+    expect({ command, effect: only(command) }).toMatchObject({ command, effect: fromInput })
+  }
+  // Read from a file, the input isn't the find's list.
+  expect(only('find . -name x | xargs -a list rm')).toMatchObject(fromInput)
+  expect(only('find . -name x | xargs --arg-file=list rm')).toMatchObject(fromInput)
+})
+
 test('git commands that can discard work go to the judge; the rest never do', () => {
   expect(only('git checkout -- src/a.ts')).toEqual({ op: 'git', dir: null, argv: ['checkout', '--', 'src/a.ts'], cmd: 'git checkout -- src/a.ts' })
   expect(only('git -C ../other reset --hard')).toMatchObject({ argv: ['-C', '../other', 'reset', '--hard'] })

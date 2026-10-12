@@ -40,7 +40,6 @@ const DELETE_CMDS = new Set(['rm', 'grm', 'unlink', 'shred', 'srm'])
 const COPY_CMDS: Record<string, 'mv' | 'cp' | 'ln'> = {
   mv: 'mv', gmv: 'mv', cp: 'cp', gcp: 'cp', install: 'cp', ginstall: 'cp', ln: 'ln', gln: 'ln',
 }
-const WRITE_CMDS = new Set([...Object.keys(COPY_CMDS), 'tee', 'dd', 'truncate', 'rsync'])
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh'])
 const INTERPRETERS = /^(python[0-9.]*|pypy[0-9.]*|node|nodejs|perl|ruby|deno|bun|php|osascript)$/
 // Inline code that deletes files: unknown, since its targets are only known when it runs.
@@ -796,16 +795,15 @@ function run(cmd: Cmd, words: Word[], dir: DirState, ctx: Ctx, piped: Cmd | null
   }
 
   if (DELETE_CMDS.has(name)) {
-    const { opts, args: targets } = split(args)
-    const recursive = name !== 'unlink' && opts.some(o => o === '--recursive' || /^-[^-]*[rR]/.test(o))
-    const paths = pathsOf(targets, local, raw)
+    const recursive = recursiveDelete(name, args)
+    const paths = pathsOf(split(args).args, local, raw)
     if (paths && paths.length > 0) {
       emit(ctx, dir, paths, raw, d => ({ op: 'delete', dir: d, paths, recursive, cmd: short(raw) }))
     }
     return
   }
   if (name === 'find') return find(cmd, args, dir, local)
-  if (name === 'xargs') return xargs(args, ctx, piped, raw)
+  if (name === 'xargs') return xargs(args, dir, local, piped, raw)
   if (name === 'git') return git(args, dir, local, raw)
   if (name in COPY_CMDS) return copy(COPY_CMDS[name] as 'mv' | 'cp' | 'ln', name, args, dir, local, raw)
   if (name === 'tee') {
@@ -838,6 +836,11 @@ function run(cmd: Cmd, words: Word[], dir: DirState, ctx: Ctx, piped: Cmd | null
     return
   }
   if (INTERPRETERS.test(name)) return interpreter(cmd, name, args, ctx, raw)
+}
+
+// Whether a delete command's options make it recursive.
+function recursiveDelete(name: string, args: Word[]): boolean {
+  return name !== 'unlink' && split(args).opts.some(o => o === '--recursive' || /^-[^-]*[rR]/.test(o))
 }
 
 function positionals(args: Word[], valued: Set<string>): Word[] {
@@ -874,48 +877,97 @@ function outputFile(args: Word[], short_: RegExp, long: string[], dir: DirState,
 const FIND_ACTIONS = new Set(['-exec', '-execdir', '-ok', '-okdir'])
 const FIND_WRITES: Record<string, number> = { '-fprint': 1, '-fprint0': 1, '-fls': 1, '-fprintf': 2 }
 
+// What xargs reads, or each path find -exec puts in place of {}: an argument only known
+// when it runs, held in a variable no command line can name. A word holding it reads as
+// an expansion in its raw text, so a shell given it as its code is held as
+// `sh -c "$CMD"` is (see opaque()).
+const INPUT = '<input>'
+const INPUT_RAW = '"$@"'
+const inputPart: Part = { kind: 'var', name: INPUT, quoted: true }
+const isInput = (w: Word): boolean => w.parts.some(p => p.kind === 'var' && p.name === INPUT)
+
+// The words with the input in place of each `token` in them, or after them when `token`
+// is null.
+function withInput(words: Word[], token: string | null): Word[] {
+  if (token === null) return [...words, { parts: [inputPart], raw: INPUT_RAW }]
+  const fill = (p: Part): Part[] => {
+    if (p.kind !== 'lit') return [p]
+    const [first = '', ...rest] = p.text.split(token)
+    return [{ ...p, text: first }, ...rest.flatMap(text => [inputPart, { ...p, text }])]
+  }
+  return words.map(w => ({ parts: w.parts.flatMap(fill), raw: w.raw.split(token).join(INPUT_RAW) }))
+}
+
+// Where the command xargs or find -exec runs is read: a child process of the line's
+// shell, in `dir`, whose input `what` describes.
+function fedCtx(ctx: Ctx, dir: DirState, what: string): Ctx {
+  const fed = { ...child(ctx), dir }
+  fed.vars.set(INPUT, { unknown: what })
+  return fed
+}
+
+// Reads the command xargs or find -exec runs the way any command on the line is read,
+// wrappers such as sudo and env included. With `listDir`, its input is the paths a find
+// prints from that folder: a delete given them there leaves them to the find's dry run,
+// and the result says whether it recurses. Its other words are judged either way.
+function runFed(words: Word[], fed: Ctx, raw: string, listDir?: DirState): { recursive: boolean } | null {
+  const u = unwrap(words, fed)
+  if (u === null) return null
+  const name = cmdName(u.words[0]) ?? ''
+  const args = u.words.slice(1)
+  const listed = DELETE_CMDS.has(name) && u.dir === listDir && args.some(isInput)
+  const cmd: Cmd = { words: u.words, redirs: [], raw, inPipeline: true }
+  run(cmd, listed ? [...u.words.slice(0, 1), ...args.filter(w => !isInput(w))] : u.words, u.dir, fed, null)
+  return listed ? { recursive: recursiveDelete(name, args) } : null
+}
+
+interface FindPlan {
+  argv: string[]
+  deletes: boolean
+  recursive: boolean
+  writes: string[]
+}
+// Reads the command an -exec or -ok runs, and says whether it deletes the paths found.
+type FindExec = (action: string, sub: string[]) => { recursive: boolean } | null
+
 // A find's dry run: the same search, with each deleting action printing instead and
 // every other side effect dropped, so the judge can run it and see what would go.
-function findPlan(argv: string[]): { argv: string[]; deletes: boolean; recursive: boolean; writes: string[]; risky: string | null } {
-  let k = 0
-  const lead: string[] = []
-  while (k < argv.length && /^-[HLPEXdsx]$/.test(argv[k] as string)) lead.push(argv[k++] as string)
-  const roots: string[] = []
-  while (k < argv.length && !/^[-(!)]/.test(argv[k] as string)) roots.push(argv[k++] as string)
-  const out: string[] = []
-  let deletes = false
-  let recursive = false
-  let risky: string | null = null
-  const writes: string[] = []
-  for (; k < argv.length; k += 1) {
+function findPlan(argv: string[], exec: FindExec): FindPlan {
+  const plan: FindPlan = { argv: [], deletes: false, recursive: false, writes: [] }
+  for (let k = 0; k < argv.length; k += 1) {
     const a = argv[k] as string
     if (a === '-delete') {
-      deletes = true
-      out.push('-print')
+      plan.deletes = true
+      plan.argv.push('-print')
     } else if (FIND_ACTIONS.has(a)) {
-      let j = k + 1
-      while (j < argv.length && argv[j] !== ';' && argv[j] !== '+') j += 1
-      const sub = argv.slice(k + 1, j)
-      const name = (sub[0] ?? '').split('/').pop() ?? ''
-      if (DELETE_CMDS.has(name)) {
-        deletes = true
-        recursive ||= sub.some(s => /^-[^-]*[rR]/.test(s) || s === '--recursive')
-        out.push('-print')
-      } else {
-        if (WRITE_CMDS.has(name) || SHELLS.has(name) || INTERPRETERS.test(name)) risky = `find ${a} ${name}`
-        out.push('-true')
-      }
-      k = j
+      k = findAction(argv, k, plan, exec)
     } else if (a in FIND_WRITES) {
-      writes.push(argv[k + 1] ?? '')
-      out.push('-true')
+      plan.writes.push(argv[k + 1] ?? '')
+      plan.argv.push('-true')
       k += FIND_WRITES[a] as number
     } else {
-      out.push(a)
+      plan.argv.push(a)
     }
   }
-  return { argv: [...lead, ...roots, ...out], deletes, recursive, writes, risky }
+  return plan
 }
+
+// The -exec or -ok at argv[k], in the dry run: it prints when its command deletes the
+// paths found, and does nothing otherwise. Returns the index of its closing ; or +.
+function findAction(argv: string[], k: number, plan: FindPlan, exec: FindExec): number {
+  let j = k + 1
+  while (j < argv.length && argv[j] !== ';' && argv[j] !== '+') j += 1
+  const del = exec(argv[k] as string, argv.slice(k + 1, j))
+  plan.deletes ||= del !== null
+  plan.recursive ||= del?.recursive === true
+  plan.argv.push(del ? '-print' : '-true')
+  return j
+}
+
+// An argument find passes to what -exec runs, as the shell left it. Unquoted, so a glob
+// character in it is read as a pattern: the shell's quoting is gone by now, and the
+// pattern is the reading that holds more.
+const argWord = (s: string): Word => ({ parts: [{ kind: 'lit', text: s, quoted: false }], raw: s })
 
 function find(cmd: Cmd, args: Word[], dir: DirState, ctx: Ctx): void {
   const raw = cmd.raw
@@ -924,11 +976,15 @@ function find(cmd: Cmd, args: Word[], dir: DirState, ctx: Ctx): void {
     if (/-delete\b|-exec|-ok/.test(raw)) ctx.out.push({ op: 'unknown', what: `find: ${v.unknown}`, cmd: short(raw) })
     return
   }
-  const plan = findPlan(v.values)
+  // -execdir and -okdir run their command in the folder of each path found.
+  const plan = findPlan(v.values, (action, sub) => {
+    const where = action.endsWith('dir') ? { unknown: `each folder find ${action} runs in` } : dir
+    const fed = fedCtx(ctx, where, `{} in find ${action} is each path it finds`)
+    return runFed(withInput(sub.map(argWord), '{}'), fed, raw, fed.dir)
+  })
   if (plan.writes.length > 0) {
     emit(ctx, dir, plan.writes, raw, d => ({ op: 'overwrite', dir: d, paths: plan.writes.map(escapeGlob), cmd: short(raw) }))
   }
-  if (plan.risky) ctx.out.push({ op: 'unknown', what: `${plan.risky}: what it changes is only known when it runs`, cmd: short(raw) })
   if (plan.deletes) {
     emit(ctx, dir, [], raw, d => ({ op: 'find', dir: d, argv: plan.argv, recursive: plan.recursive, cmd: short(raw) }))
   } else {
@@ -936,32 +992,63 @@ function find(cmd: Cmd, args: Word[], dir: DirState, ctx: Ctx): void {
   }
 }
 
-const XARGS_VALUE = new Set(['-n', '-P', '-I', '-L', '-s', '-d', '-E', '-J', '-R', '-S', '--max-args', '--max-procs', '--replace', '--max-lines', '--max-chars', '--delimiter', '--eof'])
+// xargs options that take a value, joined (-n1, -I{}) or as the next word; GNU's -e and
+// -i, which take one only joined; and the long ones that take the next word when no `=`
+// gives it (--replace, --eof and --max-lines take one only after `=`).
+const XARGS_VALUE = 'adEIJLnPRsS'
+const XARGS_JOINED = 'ei'
+const XARGS_LONG_VALUE = new Set(['--arg-file', '--delimiter', '--max-args', '--max-chars', '--max-procs', '--process-slot-var'])
 
-function xargs(args: Word[], ctx: Ctx, piped: Cmd | null, raw: string): void {
-  let k = 0
-  let fromFile = false
-  while (k < args.length) {
-    const t = text(args[k])
-    if (t === null || !t.startsWith('-')) break
-    if (t === '-a' || t.startsWith('--arg-file')) fromFile = true
-    k += XARGS_VALUE.has(t) || t === '-a' ? 2 : 1
+interface XargsOpts {
+  k: number // where the command starts
+  replace: string | null // what the input replaces (-I, -J, -i, --replace), or null to add it after
+  fromFile: boolean // the input comes from -a's file, not from stdin
+}
+
+function xargsOpts(args: Word[]): XargsOpts {
+  const o: XargsOpts = { k: 0, replace: null, fromFile: false }
+  for (let t = text(args[0]); t?.startsWith('-'); t = text(args[o.k])) {
+    o.k += 1
+    if (t.startsWith('--')) xargsLong(t, o)
+    else xargsShort(t, args, o)
   }
-  const rest = args.slice(k)
-  const name = cmdName(rest[0])
-  if (name === null) return
-  if (DELETE_CMDS.has(name)) {
-    const found = !fromFile && piped?.find
-    if (found && !isUnknown(found.dir)) {
-      // find ... | xargs rm: the find's own output is the list, so dry-run the find.
-      const argv = found.argv.map(a => (a === '-print0' || a === '-ls' ? '-print' : a))
-      const recursive = rest.some(w => /^-[^-]*[rR]/.test(text(w) ?? '') || text(w) === '--recursive')
-      ctx.out.push({ op: 'find', dir: found.dir, argv, recursive, cmd: short(raw) })
-    } else {
-      ctx.out.push({ op: 'unknown', what: `xargs ${name}: what it deletes comes from its input`, cmd: short(raw) })
-    }
-  } else if (WRITE_CMDS.has(name) || SHELLS.has(name) || INTERPRETERS.test(name)) {
-    ctx.out.push({ op: 'unknown', what: `xargs ${name}: what it changes comes from its input`, cmd: short(raw) })
+  return o
+}
+
+function xargsLong(t: string, o: XargsOpts): void {
+  const eq = t.indexOf('=')
+  const name = eq < 0 ? t : t.slice(0, eq)
+  if (name === '--replace') o.replace = eq < 0 ? '{}' : t.slice(eq + 1)
+  if (name === '--arg-file') o.fromFile = true
+  if (eq < 0 && XARGS_LONG_VALUE.has(name)) o.k += 1
+}
+
+// Combined short options (-0r, -0n 1, -rI{}): flags, up to the first option that takes
+// a value, which is the rest of the word or else the next word.
+const XARGS_SHORT = new RegExp(`^-[^${XARGS_VALUE}${XARGS_JOINED}]*([${XARGS_VALUE}${XARGS_JOINED}])(.*)$`, 's')
+
+function xargsShort(t: string, args: Word[], o: XargsOpts): void {
+  const m = XARGS_SHORT.exec(t)
+  if (m === null) return // flags only
+  const ch = m[1] as string
+  const joined = m[2] as string
+  if (ch === 'i') o.replace = joined || '{}'
+  if (XARGS_JOINED.includes(ch)) return
+  const value = joined || (text(args[o.k++]) ?? '')
+  if (ch === 'I' || ch === 'J') o.replace = value
+  if (ch === 'a') o.fromFile = true
+}
+
+function xargs(args: Word[], dir: DirState, ctx: Ctx, piped: Cmd | null, raw: string): void {
+  const o = xargsOpts(args)
+  const fed = fedCtx(ctx, dir, 'what xargs passes comes from its input')
+  // find ... | xargs rm: the find's own output is the list, so dry-run the find.
+  const found = o.fromFile ? undefined : piped?.find
+  const list = found && !isUnknown(found.dir) ? { dir: found.dir, argv: found.argv } : undefined
+  const del = runFed(withInput(args.slice(o.k), o.replace), fed, raw, list?.dir)
+  if (del && list) {
+    const argv = list.argv.map(a => (a === '-print0' || a === '-ls' ? '-print' : a))
+    ctx.out.push({ op: 'find', dir: list.dir, argv, recursive: del.recursive, cmd: short(raw) })
   }
 }
 
