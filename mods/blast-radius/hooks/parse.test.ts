@@ -258,6 +258,25 @@ test('zsh splits no variable into words, and drops one that is unquoted and empt
   expect(analyze(`F="a b"; zsh -c 'rm $F'; rm $F`).map(e => (e as { paths: string[] }).paths)).toEqual([['a b'], ['a', 'b']])
 })
 
+test("a line the session's zsh runs is read as zsh reads it, and bash stays the default", () => {
+  const zsh = (command: string) => analyzeLine(command, 'zsh').effects
+  expect(zsh('F="a b"; rm $F')).toEqual([{ op: 'delete', dir: null, paths: ['a b'], recursive: false, cmd: 'rm $F' }])
+  expect(zsh('F="a b"; cd $F && rm x')).toEqual([{ op: 'delete', dir: 'a b', paths: ['x'], recursive: false, cmd: 'rm x' }])
+  expect(analyzeLine('F="a b"; cd $F', 'zsh').endDir).toBe('a b')
+  expect(zsh('F="a b"; mv x $F')).toMatchObject([{ op: 'copy', sources: ['x'], dest: ['a b'] }])
+  expect(zsh('F="a b"; rsync -a src/ $F')).toMatchObject([{ op: 'overwrite', paths: ['a b'] }])
+  expect(zsh('F="a b"; for f in $F; do rm $f; done')).toMatchObject([{ op: 'delete', paths: ['a b'] }])
+  expect(zsh('F="a b"; echo $(rm $F)')).toMatchObject([{ op: 'delete', paths: ['a b'] }])
+  expect(zsh('E=; rm -rf $E')).toEqual([])
+  // A bash the line starts splits again.
+  expect(zsh('F="a b"; bash -c "rm \\$F"')).toMatchObject([{ op: 'delete', paths: ['a', 'b'] }])
+  // Without a shell, or with bash, the line is bash's.
+  for (const line of [analyzeLine('F="a b"; rm $F'), analyzeLine('F="a b"; rm $F', 'bash')]) {
+    expect(line.effects).toEqual([{ op: 'delete', dir: null, paths: ['a', 'b'], recursive: false, cmd: 'rm $F' }])
+  }
+  expect(analyzeLine('F="a b"; cd $F').endDir).toBe('a')
+})
+
 test('splitting that depends on the pass or on a changed $IFS is unknown', () => {
   const what = (command: string) => (only(command) as { what: string }).what
   expect(what('for f in "a b" c; do rm $f; done')).toBe('$f has several values that split into words')

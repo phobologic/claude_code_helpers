@@ -2,7 +2,8 @@
 //
 // Text only, no filesystem: each effect names its paths as the shell would after the
 // expansions this file can do (quotes and $'...', braces, variables set earlier on the
-// line and their splitting into words, `cd` along the line, $HOME, mktemp).
+// line and, in bash but not zsh, their splitting into words, `cd` along the line, $HOME,
+// mktemp).
 // bin/judge.py then expands globs, resolves links and asks git
 // what is at stake. A path this file cannot know becomes an `unknown` effect, which the
 // judge always holds.
@@ -764,8 +765,12 @@ export interface Line {
   endDir: Dir | { unknown: string }
 }
 
-export function analyzeLine(command: string): Line {
-  const ctx: Ctx = { dir: null, vars: new Map(), pushed: [], out: [], depth: 0, zsh: false }
+// The shell that runs the line. zsh splits no unquoted variable into words, so
+// `F="a b"; rm $F` removes the one path `a b` there, and `a` and `b` in bash.
+export type Shell = 'bash' | 'zsh'
+
+export function analyzeLine(command: string, shell: Shell = 'bash'): Line {
+  const ctx: Ctx = { dir: null, vars: new Map(), pushed: [], out: [], depth: 0, zsh: shell === 'zsh' }
   walk(command, ctx)
   const seen = new Set<string>()
   const effects = ctx.out.filter(e => {

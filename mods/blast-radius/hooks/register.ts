@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 
 import { analyzeLine, escapeGlob, isAbs, looksDestructive } from './parse'
-import type { Effect, Line } from './parse'
+import type { Effect, Line, Shell } from './parse'
 
 // Blast Radius: holds a command that could destroy work, and asks the person first.
 // - tool.call (Bash): parse.ts lists what the command could delete or overwrite, and
@@ -128,6 +128,14 @@ export function followCd(agent: Agent, endDir: Line['endDir'], base: string): Ag
   return { ...agent, lastCd: typeof from === 'string' ? `${from}/${endDir}` : from }
 }
 
+// The shell Claude Code runs Bash commands in: CLAUDE_CODE_SHELL when set, else the
+// user's SHELL. zsh reads a line without splitting its variables into words; any other
+// shell, or none named, is read as bash.
+async function sessionShell($: EngineInterface): Promise<Shell> {
+  const path = (await $.env.get('CLAUDE_CODE_SHELL')) || (await $.env.get('SHELL')) || ''
+  return path.split('/').pop() === 'zsh' ? 'zsh' : 'bash'
+}
+
 async function judge($: EngineInterface, effects: Effect[], agentId: string | undefined): Promise<Verdict> {
   const sessionRoot = await $.session.root()
   const agent = agentId === undefined ? undefined : (agents.get(agentId) ?? { label: 'a subagent' })
@@ -191,7 +199,7 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
-    const { effects, endDir } = analyzeLine(e.command)
+    const { effects, endDir } = analyzeLine(e.command, await sessionShell($))
     const agentId = e.agentId
     const run = async () => {
       const ran = await next(e)
