@@ -289,13 +289,34 @@ test('a zsh line that may turn word splitting on reads later unquoted variables 
     'set -ey',
     'set -o $O',
     'builtin setopt shwordsplit',
+    'set -oshwordsplit',
+    'set -eoshwordsplit',
+    'set +onoshwordsplit',
+    'options[shwordsplit]=on',
+    'options[$O]=on',
+    'typeset -g options[shwordsplit]=on',
   ]
   for (const opt of opts) {
     expect([opt, analyzeLine(`${opt}; F="a b"; rm $F`, 'zsh').effects[0]?.op]).toEqual([opt, 'unknown'])
     expect([opt, analyzeLine(`zsh -c '${opt}; F="a b"; rm $F'`).effects[0]?.op]).toEqual([opt, 'unknown'])
   }
-  // Options that leave splitting alone change nothing.
-  for (const line of ['set -euo pipefail; F="a b"; rm $F', 'setopt; F="a b"; rm $F', 'set -x; F="a b"; rm $F']) {
+  // The hold names the zsh options, not an $IFS the line never set.
+  expect(analyzeLine('setopt shwordsplit; F="a b"; rm $F', 'zsh').effects).toMatchObject([
+    { op: 'unknown', what: 'zsh options change on this line, so how $F splits is unknown', cmd: 'rm $F' },
+  ])
+  // Options that leave splitting alone change nothing, nor do words that only look like one.
+  const unchanged = [
+    'set -euo pipefail',
+    'setopt',
+    'set -x',
+    'set -- yes',
+    'set -- shwordsplitter',
+    'set -- foo.yml',
+    'echo options[shwordsplit]=on',
+    'typeset -g opts[shwordsplit]=on',
+  ]
+  for (const opt of unchanged) {
+    const line = `${opt}; F="a b"; rm $F`
     expect([line, analyzeLine(line, 'zsh').effects]).toMatchObject([line, [{ op: 'delete', paths: ['a b'] }]])
   }
   // bash has none of these, so its reading stays.

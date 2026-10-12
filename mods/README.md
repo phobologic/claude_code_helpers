@@ -55,8 +55,9 @@ a session loads it from a folder you own.
   at all when `CLAUDE_CODE_SHELL` (or, when that names neither bash nor zsh, `SHELL`)
   names zsh, so `F="a b"; rm $F` removes the one path `a b`; at spaces, tabs and
   newlines otherwise, as bash does. A `CLAUDE_CODE_SHELL` naming neither is ignored, as
-  Claude Code ignores it. After a zsh `setopt`, `unsetopt`, `emulate` or `set -o`/`-y`
-  that may turn splitting on, later unquoted variables are unknown and held. Other
+  Claude Code ignores it. After a zsh `setopt`, `unsetopt`, `emulate`, `set -o`/`-y` or
+  write to `options[...]` that may turn splitting on, later unquoted variables are
+  unknown and held. Other
   zsh-only syntax is not modeled.
 - It judges by where the files are, not where the command runs. A linked worktree
   inside the repository folder (`.worktrees/*`, `.claude/worktrees/*`) is an agent's
