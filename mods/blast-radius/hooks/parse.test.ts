@@ -192,6 +192,8 @@ test('git short options combined in one word count one by one, as git reads them
     ['checkout', '-bfix'],
     ['switch', '-cf', 'main'],
     ['restore', '-Sq', 'a'],
+    ['restore', '-SsWIP', 'a'],
+    ['branch', '-uorigin/Dev'],
     ['rm', '-rq', 'x'],
     ['clean', '-nfd'],
   ]) {

@@ -250,6 +250,7 @@ def git_ops(s):
     expect("branch -fd of unmerged work holds", s.judge(git("branch", "-fd", "side")), [("history", "side")])
     expect("branch -dq is left to git", s.judge(git("branch", "-dq", "side")), [])
     expect("branch -rD is left alone (a fetch brings remote-tracking branches back)", s.judge(git("branch", "-rD", "side")), [])
+    expect("branch -uup/Dev only sets an upstream: up/Dev is -u's value", s.judge(git("branch", "-uup/Dev", "side")), [])
     expect("gc --prune=now holds", s.judge(git("gc", "--prune=now")), [("history", "unreachable commits")])
     expect("a git subcommand with nothing to lose passes", s.judge(git("log", "-1")), [])
     expect("prune -nv is a dry run", s.judge(git("prune", "-nv")), [])
@@ -272,6 +273,7 @@ def combined_short_options(s):
     expect("switch -cf passes: f is the new branch's name", s.judge(git("switch", "-cf", "main")), [])
     expect("restore -SW holds", s.judge(git("restore", "-SW", "src/a.py")), lost)
     expect("restore -Sq only unstages", s.judge(git("restore", "-Sq", "src/a.py")), [])
+    expect("restore -SsWIP only unstages: WIP is -s's value", s.judge(git("restore", "-SsWIP", "src/a.py")), [])
     expect("rm -qf of a changed file holds", s.judge(git("rm", "-qf", "src/a.py")), lost)
     expect("rm -rq is left to git", s.judge(git("rm", "-rq", "src/a.py")), [])
 
