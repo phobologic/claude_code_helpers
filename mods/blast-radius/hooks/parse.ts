@@ -645,71 +645,196 @@ function pathsOf(words: Word[], ctx: Ctx, raw: string): string[] | null {
   return v.values
 }
 
-const SUDO_VALUE = new Set(['-u', '-g', '-C', '-D', '-h', '-p', '-r', '-t', '-T', '-U'])
-const TIMEOUT_VALUE = new Set(['-s', '-k', '--signal', '--kill-after'])
+// ---------- wrappers ----------
 
-// Strips the wrappers that run another command unchanged (sudo, env, timeout, ...).
-function unwrap(words: Word[], ctx: Ctx): { words: Word[]; dir: DirState } | null {
-  let dir = ctx.dir
-  for (;;) {
-    const name = cmdName(words[0])
-    let k = 1
-    const opt = (): string | null => text(words[k])
-    if (name === 'sudo' || name === 'doas') {
-      while (opt()?.startsWith('-')) {
-        const t = opt() as string
-        k += SUDO_VALUE.has(t) ? 2 : 1
-        if (t === '--') break
-      }
-    } else if (name === 'env') {
-      while (k < words.length) {
-        const t = opt()
-        if (t === '--') {
-          k += 1
-          break
-        }
-        if (t === '-C' || t === '--chdir') {
-          const d = text(words[k + 1])
-          dir = d === null ? { unknown: 'env -C with an expansion' } : joinDir(dir, d)
-          k += 2
-        } else if (t?.startsWith('--chdir=')) {
-          dir = joinDir(dir, t.slice(8))
-          k += 1
-        } else if (t === '-S' || t === '--split-string') {
-          const v = words[k + 1] ? expand(words[k + 1] as Word, ctx, 'plain') : { values: [] }
-          if ('unknown' in v) ctx.out.push({ op: 'unknown', what: `env -S: ${v.unknown}`, cmd: '' })
-          else walk(v.values.join(' '), child(ctx))
-          return null
-        } else if (t === '-u' || t === '--unset') {
-          k += 2
-        } else if (t?.startsWith('-') || isAssign(words[k] as Word)) {
-          k += 1
-        } else {
-          break
-        }
-      }
-    } else if (name === 'command') {
-      if (opt() === '-v' || opt() === '-V') return null
-      if (opt() === '-p') k += 1
-    } else if (name === 'exec') {
-      while (opt()?.startsWith('-')) k += opt() === '-a' ? 2 : 1
-    } else if (name === 'time') {
-      if (opt() === '-p') k += 1
-    } else if (name === 'nice') {
-      if (opt() === '-n') k += 2
-      else if (/^(-\d+|--adjustment=.*)$/.test(opt() ?? '')) k += 1
-    } else if (name === 'timeout' || name === 'gtimeout') {
-      while (opt()?.startsWith('-')) k += TIMEOUT_VALUE.has(opt() as string) ? 2 : 1
-      k += 1 // the duration
-    } else if (name === 'stdbuf') {
-      while (opt()?.startsWith('-')) k += /^-[ioe]$/.test(opt() as string) ? 2 : 1
-    } else if (name === 'caffeinate') {
-      while (opt()?.startsWith('-')) k += opt() === '-t' || opt() === '-w' ? 2 : 1
-    } else if (name !== 'builtin' && name !== 'nohup' && name !== 'chronic' && name !== 'unbuffer') {
-      return { words, dir }
+// A command a wrapper runs and the folder it runs in; no words when it runs none.
+interface Wrapped {
+  words: Word[]
+  dir: DirState
+}
+type Wrapper = (words: Word[], dir: DirState, ctx: Ctx) => Wrapped
+
+// How a wrapper's own words are laid out before the command it runs.
+interface Grammar {
+  short?: string // short options whose value can be the next word: `-u root`, `-Eu root`
+  long?: string[] // long ones whose value can be the next word: `--user root`
+  chdir?: string[] // options whose value is the folder the command runs in
+  operands?: number // words between the options and the command: timeout's duration
+  sub?: string // the subcommand that runs a command (`uv run`); any other runs none
+}
+
+interface Opt {
+  name: string // `-u` or `--user`, without its value
+  value: Word | null
+}
+
+const literal = (s: string): Word => ({ parts: [{ kind: 'lit', text: s, quoted: false }], raw: s })
+
+// The word with its first n characters, all of them in its leading literal, cut off.
+function after(w: Word, n: number): Word {
+  const [head, ...rest] = w.parts as [Extract<Part, { kind: 'lit' }>, ...Part[]]
+  return { parts: [{ ...head, text: head.text.slice(n) }, ...rest], raw: w.raw }
+}
+
+// The options in one word (`-Eu`, `-uroot`, `--user=root`), and the name of a last one
+// whose value is the next word.
+function optionWord(w: Word, flag: string, g: Grammar): { opts: Opt[]; next: string | null } {
+  if (flag.startsWith('--')) {
+    const eq = flag.indexOf('=')
+    if (eq >= 0) return { opts: [{ name: flag.slice(0, eq), value: after(w, eq + 1) }], next: null }
+    return g.long?.includes(flag) ? { opts: [], next: flag } : { opts: [{ name: flag, value: null }], next: null }
+  }
+  const opts: Opt[] = []
+  for (let j = 1; j < flag.length; j += 1) {
+    const name = `-${flag[j]}`
+    if (g.short?.includes(flag[j] as string)) {
+      if (j + 1 === flag.length && w.parts.length === 1) return { opts, next: name }
+      opts.push({ name, value: after(w, j + 1) })
+      return { opts, next: null }
     }
-    words = words.slice(k)
-    if (words.length === 0) return null
+    opts.push({ name, value: null })
+  }
+  return { opts, next: null }
+}
+
+// The options from words[k], up to the first word that isn't one or just past `--`, and
+// the index after them. A lone `-` is skipped too: no wrapper runs a command by that name,
+// and to env it means -i.
+function readOpts(words: Word[], k: number, g: Grammar): { opts: Opt[]; k: number } {
+  const opts: Opt[] = []
+  while (k < words.length) {
+    const w = words[k] as Word
+    const head = w.parts[0]
+    const flag = head?.kind === 'lit' ? head.text : ''
+    if (!flag.startsWith('-')) break
+    k += 1
+    if (text(w) === '--') break
+    const found = optionWord(w, flag, g)
+    opts.push(...found.opts)
+    if (found.next !== null) {
+      opts.push({ name: found.next, value: words[k] ?? null })
+      k += 1
+    }
+  }
+  return { opts, k }
+}
+
+// The folder a wrapper's command runs in once its chdir options (`sudo -D`) are applied.
+function moveDir(dir: DirState, wrapper: string, opts: Opt[], chdir: string[]): DirState {
+  for (const o of opts) {
+    if (!chdir.includes(o.name)) continue
+    const d = o.value === null ? null : text(o.value)
+    dir = d === null ? { unknown: `${wrapper} ${o.name} with an expansion` } : joinDir(dir, d)
+  }
+  return dir
+}
+
+// A wrapper whose words a Grammar describes.
+function grammar(g: Grammar): Wrapper {
+  return (words, dir) => {
+    let { opts, k } = readOpts(words, 1, g)
+    if (g.sub !== undefined) {
+      // `uv sync` and the like run nothing this file judges.
+      if (text(words[k]) !== g.sub) return { words: [], dir }
+      const more = readOpts(words, k + 1, g)
+      opts = opts.concat(more.opts)
+      k = more.k
+    }
+    return { words: words.slice(k + (g.operands ?? 0)), dir: moveDir(dir, cmdName(words[0]) ?? '', opts, g.chdir ?? []) }
+  }
+}
+
+const ENV: Grammar = { short: 'CPSu', long: ['--chdir', '--split-string', '--unset'], chdir: ['-C', '--chdir'] }
+
+// env [options] [NAME=value ...] command, where -S's string is a command line of its own.
+function env(words: Word[], dir: DirState, ctx: Ctx): Wrapped {
+  const { opts, k } = readOpts(words, 1, ENV)
+  const split = opts.find(o => o.name === '-S' || o.name === '--split-string')
+  if (split) {
+    const v = split.value ? expand(split.value, ctx, 'plain') : { values: [] }
+    if ('unknown' in v) ctx.out.push({ op: 'unknown', what: `env -S: ${v.unknown}`, cmd: '' })
+    else walk(v.values.join(' '), child(ctx))
+    return { words: [], dir }
+  }
+  let j = k
+  while (j < words.length && isAssign(words[j] as Word)) j += 1
+  return { words: words.slice(j), dir: moveDir(dir, 'env', opts, ENV.chdir ?? []) }
+}
+
+// command -v and -V only look the command up.
+function command(words: Word[], dir: DirState): Wrapped {
+  const { opts, k } = readOpts(words, 1, {})
+  return { words: opts.some(o => o.name === '-v' || o.name === '-V') ? [] : words.slice(k), dir }
+}
+
+const FLOCK: Grammar = { short: 'wE', long: ['--wait', '--timeout', '--conflict-exit-code'] }
+
+// flock [options] lockfile command..., or flock [options] lockfile -c 'command', which sh
+// runs. flock [options] fd runs nothing.
+function flock(words: Word[], dir: DirState): Wrapped {
+  const k = readOpts(words, 1, FLOCK).k + 1 // past the lock file
+  const c = text(words[k])
+  if (c === '-c' || c === '--command') return { words: [literal('sh'), literal('-c'), ...words.slice(k + 1)], dir }
+  return { words: words.slice(k), dir }
+}
+
+const SUDO: Grammar = {
+  short: 'aCcDghpRrTtUu',
+  long: ['--auth-type', '--close-from', '--login-class', '--chdir', '--group', '--host', '--prompt', '--chroot', '--role', '--type', '--command-timeout', '--other-user', '--user'],
+  chdir: ['-D', '--chdir'],
+}
+const TIMEOUT: Grammar = { short: 'ks', long: ['--kill-after', '--signal'], operands: 1 }
+// The options of uv run that take a value, from uv's CLI reference, global ones included.
+const UV: Grammar = {
+  sub: 'run',
+  short: 'CfiPpw',
+  long: [
+    '--allow-insecure-host', '--cache-dir', '--color', '--config-file', '--config-setting', '--config-settings',
+    '--config-settings-package', '--default-index', '--directory', '--env-file', '--exclude-newer',
+    '--exclude-newer-package', '--extra', '--extra-index-url', '--find-links', '--fork-strategy', '--group', '--index',
+    '--index-strategy', '--index-url', '--keyring-provider', '--link-mode', '--no-binary-package',
+    '--no-build-isolation-package', '--no-build-package', '--no-editable-package', '--no-extra', '--no-group',
+    '--no-sources-package', '--only-group', '--package', '--prerelease', '--prerelease-package', '--project', '--python',
+    '--python-platform', '--python-preference', '--refresh-package', '--reinstall-package', '--resolution',
+    '--trusted-host', '--upgrade-group', '--upgrade-package', '--with', '--with-editable', '--with-requirements',
+  ],
+  chdir: ['--directory'],
+}
+// Poetry 2 runs the command in -C's folder; -P only says where the project is.
+const POETRY: Grammar = { sub: 'run', short: 'CP', long: ['--directory', '--project'], chdir: ['-C', '--directory'] }
+
+// Wrappers that run another command unchanged. npx, pnpm exec and uvx are not here: the
+// package binaries they run are unknown code either way.
+const WRAPPERS = new Map<string, Wrapper>([
+  ['sudo', grammar(SUDO)],
+  ['doas', grammar({ short: 'aCu' })],
+  ['env', env],
+  ['command', command],
+  ['exec', grammar({ short: 'a' })],
+  ['time', grammar({ short: 'fo', long: ['--format', '--output'] })],
+  ['nice', grammar({ short: 'n', long: ['--adjustment'] })],
+  ['timeout', grammar(TIMEOUT)],
+  ['gtimeout', grammar(TIMEOUT)],
+  ['stdbuf', grammar({ short: 'eio', long: ['--input', '--output', '--error'] })],
+  ['caffeinate', grammar({ short: 'tw' })],
+  ['ionice', grammar({ short: 'cnPpu', long: ['--class', '--classdata', '--pid', '--pgid', '--uid'] })],
+  ['flock', flock],
+  ['uv', grammar(UV)],
+  ['poetry', grammar(POETRY)],
+  ['builtin', grammar({})],
+  ['nohup', grammar({})],
+  ['chronic', grammar({})],
+  ['unbuffer', grammar({})],
+])
+
+// Strips the wrappers that run another command unchanged (sudo, env, timeout, uv run, ...).
+function unwrap(words: Word[], ctx: Ctx): Wrapped | null {
+  let w: Wrapped = { words, dir: ctx.dir }
+  for (;;) {
+    const wrapper = WRAPPERS.get(cmdName(w.words[0]) ?? '')
+    if (wrapper === undefined) return w
+    w = wrapper(w.words, w.dir, ctx)
+    if (w.words.length === 0) return null
   }
 }
 
