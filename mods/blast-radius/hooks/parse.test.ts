@@ -234,6 +234,8 @@ test('mv, cp, install and ln each read their own options: -n is no-clobber to mv
   expect(only('ln -sf /x/.zshrc')).toMatchObject({ mode: 'ln', sources: ['/x/.zshrc'], dest: ['.'], intoDir: true, noClobber: false })
   expect(only('cd ~ && ln -sfn dotfiles/.zshrc')).toMatchObject({ mode: 'ln', sources: ['dotfiles/.zshrc'], dest: ['.'], intoDir: true })
   none('ln -s /x/.zshrc')
+  // mv, cp and install need two operands, and ln needs one.
+  for (const command of ['mv a', 'cp -f a', 'install a', 'ln -sf']) none(command)
   expect(only('cp -- -n ~/b')).toMatchObject({ sources: ['-n'], dest: ['~/b'], noClobber: false })
   expect(only('cp - ~/b')).toMatchObject({ sources: ['-'], dest: ['~/b'] })
   expect(only('cp "$SRC" ~/b')).toMatchObject({ op: 'unknown' })
