@@ -116,6 +116,7 @@ def main():
         finds(s)
         git_ops(s)
         worktrees(s)
+        other_repos(s)
         subagent_folders(s)
         odd_cases(s)
     finally:
@@ -404,8 +405,9 @@ def throwaway_history(s, copy_repo):
     copy_wt = os.path.join(s.root, "copy-wt")
     sh("git", "worktree", "add", "-q", "-b", "copy-wt", copy_wt, cwd=copy_repo)
     write(os.path.join(copy_wt, "README.md"), "kept outside\n")
-    expect("a throwaway copy's worktree kept outside a temp folder still holds its changes on remove --force",
-           s.judge(git("worktree", "remove", "--force", copy_wt), cwd=copy_repo), [("uncommitted", os.path.join(copy_wt, "README.md"))])
+    # Not one of the session's worktrees, so the judge holds it without running git there.
+    expect("a throwaway copy's worktree kept outside a temp folder still holds on remove --force",
+           s.judge(git("worktree", "remove", "--force", copy_wt), cwd=copy_repo), [("history", copy_wt)])
 
     other = os.path.join(s.root, "other-repo")
     sh("git", "init", "-q", "-b", "main", other, cwd=s.root)
@@ -420,6 +422,107 @@ def throwaway_history(s, copy_repo):
     sh("git", "checkout", "-q", "--detach", "main", cwd=other_wt)
     expect("a worktree in a temp folder still holds its repository's unmerged branch",
            s.judge(git("branch", "-D", "work"), cwd=other_wt), [("history", "work")])
+
+
+def other_repos(s):
+    # A repository's config can name commands that git status runs (core.fsmonitor, a
+    # clean filter for a changed file). Each trap below appends to `marker` if git runs
+    # one, so a check that runs git in that repository shows up.
+    marker = os.path.join(s.root, "ran")
+    fsmonitor = os.path.join(s.root, "traps", "fsmonitor.sh")
+    clean = os.path.join(s.root, "traps", "clean.sh")
+    write(fsmonitor, f"#!/bin/sh\necho fsmonitor >> '{marker}'\n")
+    write(clean, f"#!/bin/sh\necho clean >> '{marker}'\nexec cat\n")
+    os.chmod(fsmonitor, 0o755)
+    os.chmod(clean, 0o755)
+
+    def trap(repo):
+        """Commits a .txt file run through a clean filter, then sets both traps."""
+        write(os.path.join(repo, ".gitattributes"), "*.txt filter=trap\n")
+        write(os.path.join(repo, "a.txt"))
+        sh("git", "add", "-A", cwd=repo)
+        sh("git", "commit", "-q", "-m", "trap", cwd=repo)
+        sh("git", "config", "core.fsmonitor", fsmonitor, cwd=repo)
+        sh("git", "config", "filter.trap.clean", clean, cwd=repo)
+
+    def touch(path):
+        """Same size, new content: git status has to run the clean filter to tell."""
+        write(path, "y\n")
+
+    def ran():
+        if not os.path.exists(marker):
+            return ""
+        with open(marker) as f:
+            return f.read()
+
+    def judged(*effects, **kw):
+        if os.path.exists(marker):
+            os.remove(marker)
+        return s.judge(*effects, **kw)
+
+    pkg = s.p("build", "pkg")  # say, an archive extracted into the project
+    sh("git", "init", "-q", pkg, cwd=s.repo)
+    trap(pkg)
+    touch(os.path.join(pkg, "a.txt"))
+    expect("deleting inside a nested repository holds without running git there", judged(delete("build/pkg/*")),
+           [("history", "build/pkg")])
+    check("  and its config ran nothing", not ran(), ran())
+    shutil.rmtree(pkg)
+
+    other = os.path.join(s.root, "other")
+    sh("git", "init", "-q", "-b", "main", other, cwd=s.root)
+    write(os.path.join(other, ".env"))
+    trap(other)
+    wt = s.p("build", "box", "wt")
+    sh("git", "worktree", "add", "-q", "-b", "wt", wt, cwd=other)
+    touch(os.path.join(wt, "a.txt"))
+    # Its .env is reported as git-ignored: the session's git is asked, never the other repository's.
+    expect("a folder holding another repository's worktree holds without running git there", judged(delete("build/box")),
+           [("history", "build/box/wt"), ("uncommitted", "build/box/wt/.env")])
+    check("  and its config ran nothing", not ran(), ran())
+    expect("worktree remove of a folder that isn't the session's worktree holds without running git there",
+           judged(git("worktree", "remove", "--force", "build/box/wt")), [("history", "build/box/wt")])
+    check("  and its config ran nothing", not ran(), ran())
+    shutil.rmtree(s.p("build", "box"))
+    shutil.rmtree(other)
+
+    write(s.p("src", "new.py"))
+    sh("git", "config", "core.fsmonitor", fsmonitor, cwd=s.repo)
+    expect("the session's own repository is still checked", judged(delete("src/new.py")), [("uncommitted", "src/new.py")])
+    check("  without starting its file monitor", not ran(), ran())
+    sh("git", "config", "--unset", "core.fsmonitor", cwd=s.repo)
+    os.remove(s.p("src", "new.py"))
+
+    outer = os.path.join(s.root, "wt-outer")
+    inner = os.path.join(outer, "box", "inner")
+    sh("git", "worktree", "add", "-q", "-b", "outer", outer, cwd=s.repo)
+    sh("git", "worktree", "add", "-q", "-b", "inner", inner, cwd=s.repo)
+    write(os.path.join(inner, "new.txt"))
+    expect("a session worktree nested in another is still checked", s.judge(delete("box"), cwd=outer),
+           [("uncommitted", inner), ("uncommitted", os.path.join(inner, "new.txt"))])
+    sh("git", "worktree", "remove", "--force", inner, cwd=s.repo)
+    sh("git", "worktree", "remove", "--force", outer, cwd=s.repo)
+
+    slot = s.p(".worktrees", "slot-env")
+    sh("git", "worktree", "add", "-q", "-b", "slot-env", slot, cwd=s.repo)
+    write(os.path.join(slot, ".env"))
+    sh("git", "add", "-f", ".env", cwd=slot)
+    sh("git", "commit", "-q", "-m", "env", cwd=slot)
+    expect("a committed .env in the worktree a session runs in is asked of that worktree",
+           s.judge(delete(".env"), cwd=slot, root=slot), [])
+    write(s.p(".env"))
+    sh("git", "add", "-f", ".env", cwd=s.repo)
+    sh("git", "commit", "-q", "-m", "main env", cwd=s.repo)
+    expect("a committed .env in another session worktree is asked of that worktree",
+           s.judge(delete(s.p(".env")), cwd=slot, root=slot), [])
+    sh("git", "rm", "-q", "-f", ".env", cwd=s.repo)
+    sh("git", "commit", "-q", "-m", "drop env", cwd=s.repo)
+    sh("git", "worktree", "remove", "--force", slot, cwd=s.repo)
+
+    os.makedirs(s.p("build", "plain"))
+    expect("worktree remove of a plain folder passes, since git refuses it",
+           s.judge(git("worktree", "remove", "build/plain")), [])
+    os.rmdir(s.p("build", "plain"))
 
 
 def subagent_folders(s):
