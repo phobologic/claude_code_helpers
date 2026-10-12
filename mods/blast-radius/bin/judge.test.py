@@ -166,6 +166,8 @@ def unmatched_globs(s):
     write(os.path.join(app, "[slug]", "[id]", "page.tsx"))
     expect("  a quoted part of the name is read back as typed", s.judge(delete("src/app/[[]slug]/[id]")),
            [("uncommitted", "src/app/[slug]/[id]/page.tsx")])
+    expect("  and so is one run from inside a folder named like a glob", s.judge(delete("[id]", dir="src/app/[slug]")),
+           [("uncommitted", "src/app/[slug]/[id]/page.tsx")])
     shutil.rmtree(os.path.join(app, "[slug]"))
     write(os.path.join(app, "*?", "[id]", "page.tsx"))
     expect("  and so is a quoted * or ?", s.judge(delete("src/app/[*][?]/[id]")), [("uncommitted", "src/app/*?/[id]/page.tsx")])
