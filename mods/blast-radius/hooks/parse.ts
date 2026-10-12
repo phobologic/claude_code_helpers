@@ -58,6 +58,8 @@ const DESTRUCTIVE = new RegExp(
 // Command text that can't be expanded and could do anything: it looks destructive, or
 // the command itself is a variable or substitution (`sh -c "$CMD"`).
 const opaque = (raw: string): boolean => DESTRUCTIVE.test(raw) || /^["']?(\$|`)/.test(raw.trim())
+// Text that could change the shell's folder.
+const MOVES_DIR = /\b(cd|pushd|popd)\b/
 
 const MAX_VALUES = 64
 const MAX_DEPTH = 4
@@ -937,6 +939,11 @@ function handle(cmd: Cmd, ctx: Ctx, piped: Cmd | null): void {
     }
     return
   }
+  // eval runs its text in this shell, or in the subshell a pipeline stage is, as cd does.
+  if (head === 'eval') {
+    evalText(words.slice(1), ctx, cmd.raw, cmd.inPipeline)
+    return
+  }
 
   const unwrapped = unwrap(words, ctx)
   if (unwrapped === null) return
@@ -1262,15 +1269,52 @@ function run(cmd: Cmd, words: Word[], dir: DirState, ctx: Ctx, piped: Cmd | null
   if (name === 'wget') return outputFile(args, /^-[a-zA-Z]*O$/, ['--output-document'], dir, local, raw)
   if (SHELLS.has(name)) return shell(cmd, name, args, local, raw)
   if (name === 'eval') {
-    const v = expandAll(args, ctx, 'plain')
-    if ('unknown' in v) {
-      if (opaque(args.map(w => w.raw).join(' '))) ctx.out.push({ op: 'unknown', what: `eval: ${v.unknown}`, cmd: short(raw) })
-    } else {
-      walk(v.values.join(' '), { ...ctx, depth: ctx.depth + 1 })
-    }
+    wrappedEval(args, local, raw)
     return
   }
   if (INTERPRETERS.test(name)) return interpreter(cmd, name, args, ctx, raw)
+}
+
+// An eval behind a wrapper (handle() reads a bare one), or one xargs or find -exec runs.
+// sudo, env and nohup find no eval program and run nothing, but builtin, time, bash's
+// command and zsh's `-` run the shell's own, which keeps what it sets. So its text is
+// read in a context of its own, and every variable it changes is unknown to the rest of
+// the line: right whichever of the two runs it. `ctx` may carry the wrapper's folder,
+// but its variables are the line's own.
+function wrappedEval(args: Word[], ctx: Ctx, raw: string): void {
+  // child() counts a level and evalText() counts another; the eval is only one.
+  const inner: Ctx = { ...child(ctx), depth: ctx.depth }
+  evalText(args, inner, raw, false)
+  for (const [k, val] of inner.vars) {
+    if (ctx.vars.get(k) !== val) ctx.vars.set(k, { unknown: `$${k} is set by ${short(raw)}, which may run in this shell` })
+  }
+}
+
+// eval's words, joined with spaces, read as a command line. eval is a builtin, so the
+// line's shell runs it: a cd, pushd or variable in it lasts, as it would written in the
+// eval's place. In a `subshell` (a pipeline stage, say) nothing it sets outlives it.
+// bash and zsh skip a leading `--`, as eval's end of options.
+function evalText(words: Word[], ctx: Ctx, raw: string, subshell: boolean): void {
+  const args = text(words[0]) === '--' ? words.slice(1) : words
+  const v = expandAll(args, ctx, 'plain')
+  if ('unknown' in v) {
+    const written = args.map(w => w.raw).join(' ')
+    if (opaque(written)) ctx.out.push({ op: 'unknown', what: `eval: ${v.unknown}`, cmd: short(raw) })
+    // Text that can't be read can still move the shell, as `cd "$W"` does.
+    if (!subshell && MOVES_DIR.test(written)) ctx.dir = { unknown: `eval ${short(written)}` }
+    return
+  }
+  const code = v.values.join(' ')
+  if (subshell) {
+    walk(code, child(ctx))
+    return
+  }
+  ctx.depth += 1
+  try {
+    walk(code, ctx)
+  } finally {
+    ctx.depth -= 1
+  }
 }
 
 // Whether a delete command's options make it recursive.

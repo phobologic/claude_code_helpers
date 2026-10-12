@@ -416,6 +416,77 @@ test('commands inside $( ), bash -c and eval are read too', () => {
   expect(analyze("python3 tool.py <<'EOF'\nimport shutil; shutil.rmtree('x')\nEOF")).toEqual([])
 })
 
+const dirOf = (command: string) => (only(command) as { dir: unknown }).dir
+const endOf = (command: string) => analyzeLine(command).endDir
+
+test("eval runs its text in the line's shell, so a cd, pushd or variable in it lasts", () => {
+  expect(only('eval "cd ~"; rm -rf Documents')).toMatchObject({ op: 'delete', dir: '~', paths: ['Documents'] })
+  expect(dirOf('eval "cd /tmp"; rm -rf x')).toBe('/tmp')
+  expect(endOf('eval "cd /srv"')).toBe('/srv')
+  expect(only('eval "D=/opt"; rm -rf "$D/x"')).toMatchObject({ dir: null, paths: ['/opt/x'] })
+  // Its words are joined with spaces into one command line.
+  expect(dirOf('eval cd /tmp; rm -rf x')).toBe('/tmp')
+  // A leading `--` ends eval's options and is not part of the text.
+  expect(dirOf('cd /tmp; eval -- "cd ~"; rm -rf Documents')).toBe('~')
+  // Its text is read once, from where the line was.
+  expect(analyze('eval "cd a; rm -rf x"')).toEqual([{ op: 'delete', dir: 'a', paths: ['x'], recursive: true, cmd: 'rm -rf x' }])
+  // Text that can't be read is held when it looks destructive.
+  expect(only('eval "rm -rf $X"')).toMatchObject({ op: 'unknown', what: 'eval: $X is not set on this command line' })
+  // As a cd in its place would: through pushd and popd, an if, a nested eval and a
+  // prefix assignment, and not out of ( ).
+  expect(dirOf('eval "pushd /a"; rm x')).toBe('/a')
+  expect(dirOf('pushd /a; eval popd; rm x')).toBe(null)
+  expect(dirOf('if eval "cd /tmp"; then rm -rf x; fi')).toBe('/tmp')
+  expect(dirOf(`eval "eval 'cd /tmp'"; rm -rf x`)).toBe('/tmp')
+  expect(dirOf('X=1 eval "cd /tmp"; rm -rf x')).toBe('/tmp')
+  expect(dirOf('(eval "cd /tmp"); rm -rf x')).toBe(null)
+  // Text that can't be read still moves the shell when it could cd, as `cd "$W"` does.
+  expect(only('eval "cd $W"; rm -rf x')).toMatchObject({ op: 'unknown', what: 'paths relative to eval "cd $W"' })
+  expect(endOf('eval "cd $W"')).toEqual({ unknown: 'eval "cd $W"' })
+  expect(endOf('eval "pushd $W"')).toEqual({ unknown: 'eval "pushd $W"' })
+  expect(endOf('pushd /a; eval "popd $N"')).toEqual({ unknown: 'eval "popd $N"' })
+  expect(endOf('eval "echo abcd cdrom $W"')).toBe(null)
+})
+
+test('an eval in a pipeline stage sets nothing for the rest of the line, and one behind a wrapper leaves what it sets unknown', () => {
+  expect(dirOf('eval "cd /tmp" | cat; rm -rf x')).toBe(null)
+  expect(dirOf('cat | eval "cd /tmp"; rm -rf x')).toBe(null)
+  expect(endOf('eval "cd /srv" | cat')).toBe(null)
+  expect(endOf('eval "cd $W" | cat')).toBe(null)
+  expect(only('eval "D=/opt" | cat; rm -rf "$D/x"')).toMatchObject({ op: 'unknown', what: '$D is not set on this command line' })
+  // sudo, nohup and env find no eval program, so it runs nothing, but its text is judged.
+  expect(dirOf('sudo eval "cd /tmp"; rm -rf x')).toBe(null)
+  // builtin, command, time and zsh's `-` run the shell's eval, which keeps what it sets,
+  // so a variable a wrapped eval changes is unknown either way, and others keep their value.
+  expect(only('nohup eval "D=/opt"; rm -rf "$D/x"')).toMatchObject({
+    op: 'unknown',
+    what: '$D is set by nohup eval "D=/opt", which may run in this shell',
+  })
+  for (const w of ['builtin', 'command', 'time', '-']) {
+    expect(only(`D=/tmp; ${w} eval "D=~"; rm -rf "$D"`)).not.toMatchObject({ op: 'delete', paths: ['/tmp'] })
+  }
+  expect(only('D=/tmp; builtin eval "E=1"; rm -rf "$D"')).toMatchObject({ op: 'delete', paths: ['/tmp'] })
+  expect(only('D=/tmp; builtin eval "unset D"; rm -rf "$D"')).toMatchObject({ op: 'unknown' })
+  expect(endOf('env eval "cd $W"')).toBe(null)
+  expect(only('sudo eval "rm -rf ~/x"')).toMatchObject({ op: 'delete', dir: null, paths: ['~/x'] })
+  // Measured from the folder the wrapper would run it in, like any wrapped command.
+  expect(dirOf('env -C /srv eval "rm -rf x"')).toBe('/srv')
+})
+
+test('an eval nested too deep is held, and each eval gives its depth back', () => {
+  expect(analyze(`X='rm -rf y; eval "$X"'; eval "$X"`)).toEqual([
+    { op: 'delete', dir: null, paths: ['y'], recursive: true, cmd: 'rm -rf y' },
+    { op: 'unknown', what: 'commands nested too deep to read', cmd: 'rm -rf y; eval "$X"' },
+  ])
+  expect(only('eval true; eval true; eval true; eval true; eval true; eval "rm -rf x"')).toMatchObject({ op: 'delete', paths: ['x'] })
+  // A wrapped eval counts one level, as a bare one does.
+  expect(only(`builtin eval "builtin eval 'builtin eval rm -rf x'"`)).toMatchObject({ op: 'delete', paths: ['x'] })
+  expect(analyze(`X='rm -rf y; builtin eval "$X"'; builtin eval "$X"`)).toEqual([
+    { op: 'delete', dir: null, paths: ['y'], recursive: true, cmd: 'rm -rf y' },
+    { op: 'unknown', what: 'commands nested too deep to read', cmd: 'rm -rf y; builtin eval "$X"' },
+  ])
+})
+
 // The effects without their command text, which names the wrapper too.
 const bare = (command: string) => analyze(command).map(({ cmd: _cmd, ...effect }) => effect)
 const sameAs = (plain: string, wrapped: string[]) => {
