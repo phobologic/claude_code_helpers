@@ -105,6 +105,7 @@ def main():
     s = Sandbox()
     try:
         deletes(s)
+        unmatched_globs(s)
         outside(s)
         overwrites_and_copies(s)
         finds(s)
@@ -155,6 +156,48 @@ def deletes(s):
     expect("a missing path has nothing to lose", s.judge(delete("nope")), [])
 
 
+def unmatched_globs(s):
+    # Route folders like [id] are globs to bash, which passes one that matches nothing
+    # on as typed. A quoted part reaches the judge escaped, as parse.ts sends it.
+    app = s.p("src", "app")
+    page = "src/app/[id]/page.tsx"
+    write(os.path.join(app, "[id]", "page.tsx"))
+    expect("rm -rf of an unquoted [id] folder holds its untracked work", s.judge(delete("src/app/[id]")), [("uncommitted", page)])
+    expect("  as the quoted form does", s.judge(delete("src/app/[[]id]")), [("uncommitted", page)])
+    write(os.path.join(app, "[slug]", "[id]", "page.tsx"))
+    expect("  a quoted part of the name is read back as typed", s.judge(delete("src/app/[[]slug]/[id]")),
+           [("uncommitted", "src/app/[slug]/[id]/page.tsx")])
+    expect("  and so is one run from inside a folder named like a glob", s.judge(delete("[id]", dir="src/app/[slug]")),
+           [("uncommitted", "src/app/[slug]/[id]/page.tsx")])
+    shutil.rmtree(os.path.join(app, "[slug]"))
+    write(os.path.join(app, "*?", "[id]", "page.tsx"))
+    expect("  and so is a quoted * or ?", s.judge(delete("src/app/[*][?]/[id]")), [("uncommitted", "src/app/*?/[id]/page.tsx")])
+    shutil.rmtree(os.path.join(app, "*?"))
+    write(os.path.join(app, "a[[]b"))
+    expect("  so is a name that only looks escaped", s.judge(delete("src/app/a[[]b")), [("uncommitted", "src/app/a[[]b")])
+    os.remove(os.path.join(app, "a[[]b"))
+    expect("a glob that matches nothing, with no file of that name, passes", s.judge(delete("src/app/[nope]")), [])
+    expect("  and so does its quoted form", s.judge(delete("src/app/[[]nope]")), [])
+    expect("  and a * that matches nothing", s.judge(delete("src/*.nothing")), [])
+    expect("  and a mv of one inside .git has nothing to move", s.judge(copy("mv", [".git/[nope]"], "x")), [])
+    write(os.path.join(s.outside, "[id]", "README.md"))
+    expect("mv into a folder named like a glob holds", s.judge(copy("mv", ["README.md"], os.path.join(s.outside, "[id]"))),
+           [("outside", os.path.join(s.outside, "[id]", "README.md"))])
+    expect("  while a new name like a glob is free", s.judge(copy("cp", ["README.md"], os.path.join(s.outside, "[new]"))), [])
+    shutil.rmtree(os.path.join(s.outside, "[id]"))
+    write(os.path.join(s.outside, "[id]"))
+    expect("ln -sf of a glob that matches nothing replaces the file it names", s.judge(copy("ln", ["[id]"], s.outside)),
+           [("outside", os.path.join(s.outside, "[id]"))])
+    os.remove(os.path.join(s.outside, "[id]"))
+    write(os.path.join(app, "d"))
+    sh("git", "add", "src/app/d", cwd=s.repo)
+    sh("git", "commit", "-q", "-m", "route", cwd=s.repo)
+    expect("a glob that matches a name is not also read as typed", s.judge(delete("src/app/[id]")), [])
+    os.remove(os.path.join(app, "d"))
+    sh("git", "commit", "-q", "-am", "drop route", cwd=s.repo)
+    shutil.rmtree(app)
+
+
 def outside(s):
     v = s.judge(delete(os.path.join(s.outside, "dir")))
     expect("deleting a folder outside the repository holds", v, [("outside", os.path.join(s.outside, "dir"))])
@@ -163,6 +206,18 @@ def outside(s):
     write(os.path.join(s.tmp, "y"))
     expect("files in a temp folder are free", s.judge(delete(os.path.join(s.tmp, "y"))), [])
     expect("Claude's memory files are free", s.judge(delete("~/.claude/projects/p/memory/m.md")), [])
+    memory, other = "~/.claude/projects/p/memory", "~/.claude/projects/q/memory"
+    expect("a memory folder itself is not free", s.judge(delete(memory)), [("outside", memory)])
+    expect("  nor with a trailing slash", s.judge(delete(memory + "/")), [("outside", memory)])
+    write(os.path.join(s.home, ".claude", "projects", "q", "memory", "n.md"))
+    expect("  nor any memory folder a glob matches", s.judge(delete("~/.claude/projects/*/memory")),
+           [("outside", memory), ("outside", other)])
+    expect("  while a glob of the files in them is free", s.judge(delete("~/.claude/projects/*/memory/*")), [])
+    shutil.rmtree(os.path.join(s.home, ".claude", "projects", "q"))
+    transcript = "~/.claude/projects/p/s1/t.jsonl"
+    write(os.path.join(s.home, ".claude", "projects", "p", "s1", "t.jsonl"))
+    expect("other folders in a project are not memory", s.judge(delete(transcript)), [("outside", transcript)])
+    shutil.rmtree(os.path.join(s.home, ".claude", "projects", "p", "s1"))
     expect("~ is the home folder", s.judge(delete("~/.zshrc")), [("outside", "~/.zshrc")])
     expect("$HOME arrives as a placeholder", s.judge(delete("\x01HOME\x01/.zshrc")), [("outside", "~/.zshrc")])
     expect("cd moves where a relative path lands", s.judge(delete("notes.txt", dir=s.outside)), [("outside", os.path.join(s.outside, "notes.txt"))])
@@ -231,6 +286,7 @@ def git_ops(s):
     expect("branch -D of unmerged work holds", s.judge(git("branch", "-D", "side")), [("history", "side")])
     expect("branch -d is left to git", s.judge(git("branch", "-d", "side")), [])
     expect("gc --prune=now holds", s.judge(git("gc", "--prune=now")), [("history", "unreachable commits")])
+    expect("a git subcommand with nothing to lose passes", s.judge(git("log", "-1")), [])
 
 
 def worktrees(s):
@@ -240,6 +296,12 @@ def worktrees(s):
     write(os.path.join(slot, "scratch.txt"))
     expect("an agent's worktree: checkout -- over its change passes", s.judge(git("checkout", "--", "src/a.py"), cwd=slot), [])
     expect("an agent's worktree: reset --hard passes", s.judge(git("reset", "--hard", dir=".worktrees/slot-1")), [])
+    expect("an agent's worktree: reset --hard from inside it passes", s.judge(git("reset", "--hard"), cwd=slot), [])
+    write(os.path.join(slot, ".env"))
+    expect("an agent's worktree: clean -fd over its untracked file passes", s.judge(git("clean", "-fd"), cwd=slot), [])
+    expect("an agent's worktree: clean -fdx over its ignored .env passes", s.judge(git("clean", "-fdx"), cwd=slot), [])
+    os.remove(os.path.join(slot, ".env"))
+    shared_state_from_scratch(s, slot)
     expect("an agent's worktree: deleting its untracked file passes", s.judge(delete("scratch.txt"), cwd=slot), [])
     expect("deleting a whole agent worktree passes", s.judge(delete(".worktrees/slot-1")), [])
     expect("deleting the folder of agent worktrees passes", s.judge(delete(".worktrees")), [])
@@ -258,11 +320,71 @@ def worktrees(s):
            s.judge(git("checkout", "--", "README.md"), cwd=away), [("uncommitted", os.path.join(away, "README.md"))])
     expect("worktree remove --force over its changes holds", s.judge(git("worktree", "remove", "--force", away)),
            [("uncommitted", os.path.join(away, "README.md"))])
+    expect("from an agent's worktree, worktree remove --force of another worktree's changes holds",
+           s.judge(git("worktree", "remove", "--force", away), cwd=slot), [("uncommitted", os.path.join(away, "README.md"))])
 
     copy_repo = os.path.join(s.tmp, "review-scratch")
     sh("git", "clone", "-q", s.repo, copy_repo, cwd=s.root)
     write(os.path.join(copy_repo, "README.md"), "mutant\n")
     expect("a throwaway copy under a temp folder is free", s.judge(git("checkout", "--", "README.md"), cwd=copy_repo), [])
+    throwaway_history(s, copy_repo)
+
+
+# Commands on a repository's history whatever its worktrees hold: each one holds from
+# a scratch worktree of the session's repository and passes in a throwaway copy.
+HISTORY_WIDE = (("reflog", "expire", "--expire=now", "--all"), ("gc", "--prune=now"), ("prune",),
+                ("filter-branch",), ("filter-repo",))
+
+
+def shared_state_from_scratch(s, slot):
+    """Branches, stashes and history are the whole repository's, not the worktree's."""
+    expect("from an agent's worktree, branch -D of unmerged work holds",
+           s.judge(git("branch", "-D", "side"), cwd=slot), [("history", "side")])
+    expect("from an agent's worktree, branch -D of a merged branch passes",
+           s.judge(git("branch", "-D", "merged"), cwd=slot), [])
+    expect("git -C into an agent's worktree, branch -D of unmerged work holds",
+           s.judge(git("-C", ".worktrees/slot-1", "branch", "-D", "side")), [("history", "side")])
+    write(s.p("src", "a.py"), "stashed\n")
+    sh("git", "stash", "-q", cwd=s.repo)
+    for sub in ("clear", "drop"):
+        v = s.judge(git("stash", sub), cwd=slot)
+        check(f"from an agent's worktree, stash {sub} holds", [f["kind"] for f in v["findings"]] == ["history"], v)
+    sh("git", "stash", "drop", "-q", cwd=s.repo)
+    for argv in HISTORY_WIDE:
+        v = s.judge(git(*argv), cwd=slot)
+        check(f"from an agent's worktree, {' '.join(argv)} holds", [f["kind"] for f in v["findings"]] == ["history"], v)
+
+
+def throwaway_history(s, copy_repo):
+    """A throwaway copy's branches and history go with it, but a temp folder alone doesn't make them free."""
+    sh("git", "checkout", "-q", "-b", "copy-side", cwd=copy_repo)
+    sh("git", "commit", "-q", "-am", "copy work", cwd=copy_repo)
+    sh("git", "checkout", "-q", "main", cwd=copy_repo)
+    expect("a throwaway copy's unmerged branch is free to delete", s.judge(git("branch", "-D", "copy-side"), cwd=copy_repo), [])
+    write(os.path.join(copy_repo, "README.md"), "stashed\n")
+    sh("git", "stash", "-q", cwd=copy_repo)
+    expect("a throwaway copy's stashes are free to clear", s.judge(git("stash", "clear"), cwd=copy_repo), [])
+    for argv in HISTORY_WIDE:
+        expect(f"a throwaway copy: {' '.join(argv)} passes", s.judge(git(*argv), cwd=copy_repo), [])
+    copy_wt = os.path.join(s.root, "copy-wt")
+    sh("git", "worktree", "add", "-q", "-b", "copy-wt", copy_wt, cwd=copy_repo)
+    write(os.path.join(copy_wt, "README.md"), "kept outside\n")
+    expect("a throwaway copy's worktree kept outside a temp folder still holds its changes on remove --force",
+           s.judge(git("worktree", "remove", "--force", copy_wt), cwd=copy_repo), [("uncommitted", os.path.join(copy_wt, "README.md"))])
+
+    other = os.path.join(s.root, "other-repo")
+    sh("git", "init", "-q", "-b", "main", other, cwd=s.root)
+    write(os.path.join(other, "f.txt"))
+    sh("git", "add", "-A", cwd=other)
+    sh("git", "commit", "-q", "-m", "init", cwd=other)
+    other_wt = os.path.join(s.tmp, "other-wt")
+    sh("git", "worktree", "add", "-q", "-b", "work", other_wt, cwd=other)
+    write(os.path.join(other_wt, "g.txt"))
+    sh("git", "add", "-A", cwd=other_wt)
+    sh("git", "commit", "-q", "-m", "work", cwd=other_wt)
+    sh("git", "checkout", "-q", "--detach", "main", cwd=other_wt)
+    expect("a worktree in a temp folder still holds its repository's unmerged branch",
+           s.judge(git("branch", "-D", "work"), cwd=other_wt), [("history", "work")])
 
 
 def other_repos(s):

@@ -94,8 +94,46 @@ test('heredoc bodies are text, except where a shell or interpreter reads them', 
   })
 })
 
+test('an unquoted heredoc runs the $( ) and backticks in its body; a quoted one runs nothing', () => {
+  const notes = { op: 'overwrite', dir: null, paths: ['notes.md'], cmd: 'cat > notes.md <<EOF' }
+  expect(analyze('cat > notes.md <<EOF\nRun `rm -rf build` to clean\nEOF')).toEqual([
+    { op: 'delete', dir: null, paths: ['build'], recursive: true, cmd: 'rm -rf build' },
+    notes,
+  ])
+  expect(analyze('cat > notes.md <<EOF\n$(rm -rf ~/x)\nEOF')).toEqual([
+    { op: 'delete', dir: null, paths: ['~/x'], recursive: true, cmd: 'rm -rf ~/x' },
+    notes,
+  ])
+  // Only the expansions run, not the body's lines; quotes, escapes and $(( )) hide nothing else.
+  expect(analyze('cat > notes.md <<EOF\nrm -rf /\nEOF')).toEqual([notes])
+  expect(analyze('cat > notes.md <<EOF\n\\$(rm -rf x) \\`rm -rf y\\` $(( n > 2 ))\nEOF')).toEqual([notes])
+  expect(analyze('cat > notes.md <<EOF\nit\'s "$(rm -rf x)"\nEOF')).toEqual([
+    { op: 'delete', dir: null, paths: ['x'], recursive: true, cmd: 'rm -rf x' },
+    notes,
+  ])
+  for (const delim of ["'EOF'", '"EOF"', '\\EOF', 'E"OF"']) {
+    const command = `cat > notes.md <<${delim}\n$(rm -rf x) \`rm -rf y\`\nEOF`
+    expect({ command, effects: analyze(command) }).toEqual({ command, effects: [{ ...notes, cmd: `cat > notes.md <<${delim}` }] })
+  }
+  // Each heredoc on the line goes by its own delimiter.
+  expect(analyze("cat <<A <<'B'\n$(rm a)\nA\n$(rm b)\nB")).toEqual([
+    { op: 'delete', dir: null, paths: ['a'], recursive: false, cmd: 'rm a' },
+  ])
+  // A commit message written through an unquoted heredoc inside $( ).
+  expect(only('git commit -m "$(cat <<EOF\nFix `rm -rf build`\nEOF\n)"')).toMatchObject({ op: 'delete', paths: ['build'] })
+  // A shell reading an unquoted heredoc gets the body with its escapes taken out.
+  expect(only('bash <<EOF\necho \\`rm -rf build\\`\nEOF')).toMatchObject({ op: 'delete', paths: ['build'] })
+  expect(analyze("bash <<'EOF'\necho \\`rm -rf build\\`\nEOF")).toEqual([])
+  expect(only('bash <<EOF\nrm -rf \\$HOME/x\nEOF')).toMatchObject({ paths: [`${HOME}/x`] })
+  expect(only('bash <<EOF\nrm -rf \\\\$HOME/x\nEOF')).toMatchObject({ paths: [`${HOME}/x`] })
+  expect(only('bash <<EOF\necho \\\\`date` > out.txt\nEOF')).toEqual({ op: 'overwrite', dir: null, paths: ['out.txt'], cmd: 'echo `date` > out.txt' })
+  expect(only("bash <<EOF\nrm -rf 'a\\\\b' 'bu\\\nild'\nEOF")).toMatchObject({ paths: ['a\\b', 'build'] })
+  expect(only("bash <<'EOF'\nrm -rf 'a\\\\b' 'bu\\\nild'\nEOF")).toMatchObject({ paths: ['a\\\\b', 'bu\\\nild'] })
+})
+
 test('commands inside $( ), bash -c and eval are read too', () => {
   expect(only('echo $(rm -rf x)')).toMatchObject({ op: 'delete', paths: ['x'] })
+  expect(only('cat <<< "$(rm -rf x)"')).toMatchObject({ op: 'delete', paths: ['x'] })
   expect(only("bash -lc 'rm -rf build'")).toMatchObject({ op: 'delete', paths: ['build'] })
   expect(only('eval "rm -rf build"')).toMatchObject({ op: 'delete', paths: ['build'] })
   expect(only('sh -c "$CMD"')).toMatchObject({ op: 'unknown' })

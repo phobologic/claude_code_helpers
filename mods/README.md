@@ -55,7 +55,10 @@ a session loads it from a folder you own.
   inside the repository folder (`.worktrees/*`, `.claude/worktrees/*`) is an agent's
   scratch space, so `/run-tickets` agents undoing their test mutations with
   `git checkout -- <file>` are never asked about. The worktree the session itself runs
-  in, and worktrees kept outside the repository folder, get full protection.
+  in, and worktrees kept outside the repository folder, get full protection. Branches,
+  stashes, reflogs and objects belong to the whole repository, so `git branch -D`,
+  `git stash clear` and the like are judged the same from a scratch worktree as from
+  the main checkout, and `git worktree remove` by the worktree it removes.
 - Ignored files are free to delete except `.env*` (not `.env.example` and kin),
   `*.db`, `*.sqlite` and `*.sqlite3`. Folders like `node_modules` and `.venv` are never
   searched.
