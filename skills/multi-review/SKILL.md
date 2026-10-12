@@ -83,7 +83,7 @@ There are two consolidation cases. Apply both.
 
 Query existing tickets to check against in TK mode:
 ```bash
-tk query '.[] | select(.parent=="<epic_id>")'
+tk query '.parent == "<epic_id>"'
 ```
 
 In file mode, compare against your in-memory list of accumulated findings.
@@ -168,7 +168,7 @@ any of the four that are still running.
 ### TK mode — present summary
 
 ```bash
-tk query '.[] | select(.parent=="<epic_id>")'
+tk query '.parent == "<epic_id>"'
 ```
 
 Present an inline summary:
@@ -202,7 +202,7 @@ Analyzed X files. Found:
 Tell the user they can browse tickets with:
 - `tk show <id>` — view a specific ticket
 - `tk triage --epic <epic_id> --sort priority,confidence` — walk findings highest-priority-first, then highest-confidence within each band (the canonical way to review produced findings)
-- `tk query '.[] | select(.parent=="<epic_id>")'` — raw list of review tickets
+- `tk query '.parent == "<epic_id>"'` — raw list of review tickets
 
 Findings carry a priority (Critical/High/Medium/Low → `-p 0..3`) and an
 epistemic confidence score (0–100) — see the reviewer agents for the rubric.

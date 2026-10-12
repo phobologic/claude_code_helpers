@@ -23,7 +23,7 @@ Check your prompt for `TK_MODE=true EPIC_ID=<id>`:
 
 1. Retrieve all child tickets from the epic:
 ```bash
-tk query '.[] | select(.parent=="<EPIC_ID>")'
+tk query '.parent == "<EPIC_ID>"'
 ```
 
 2. For any ticket that needs closer inspection (to compare descriptions, read code examples, etc.), read its full details:

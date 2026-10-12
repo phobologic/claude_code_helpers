@@ -145,7 +145,7 @@ The workflow's merge step and final integration check (both sonnet, medium effor
 - Multi-review creates reports in `.code-review/` directory
 - Issues are rated by importance: Critical, High, Medium, Low
 - Final reports include file locations and line numbers
-- When `tk` is installed, `/multi-review` creates tickets directly instead of writing to `.code-review/*.md` files. An epic is created per review session with child tickets for each finding. Use `tk query '.[] | select(.parent=="<epic-id>")'` to browse results.
+- When `tk` is installed, `/multi-review` creates tickets directly instead of writing to `.code-review/*.md` files. An epic is created per review session with child tickets for each finding. Use `tk query '.parent == "<epic-id>"'` to browse results.
 
 ## Tests
 
