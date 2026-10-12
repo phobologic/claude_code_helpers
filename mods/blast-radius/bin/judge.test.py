@@ -230,6 +230,7 @@ def git_ops(s):
     expect("branch -D of unmerged work holds", s.judge(git("branch", "-D", "side")), [("history", "side")])
     expect("branch -d is left to git", s.judge(git("branch", "-d", "side")), [])
     expect("gc --prune=now holds", s.judge(git("gc", "--prune=now")), [("history", "unreachable commits")])
+    expect("a git subcommand with nothing to lose passes", s.judge(git("log", "-1")), [])
 
 
 def worktrees(s):
@@ -309,6 +310,11 @@ def throwaway_history(s, copy_repo):
     expect("a throwaway copy's stashes are free to clear", s.judge(git("stash", "clear"), cwd=copy_repo), [])
     for argv in HISTORY_WIDE:
         expect(f"a throwaway copy: {' '.join(argv)} passes", s.judge(git(*argv), cwd=copy_repo), [])
+    copy_wt = os.path.join(s.root, "copy-wt")
+    sh("git", "worktree", "add", "-q", "-b", "copy-wt", copy_wt, cwd=copy_repo)
+    write(os.path.join(copy_wt, "README.md"), "kept outside\n")
+    expect("a throwaway copy's worktree kept outside a temp folder still holds its changes on remove --force",
+           s.judge(git("worktree", "remove", "--force", copy_wt), cwd=copy_repo), [("uncommitted", os.path.join(copy_wt, "README.md"))])
 
     other = os.path.join(s.root, "other-repo")
     sh("git", "init", "-q", "-b", "main", other, cwd=s.root)
