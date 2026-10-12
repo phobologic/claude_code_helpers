@@ -1240,7 +1240,7 @@ function run(cmd: Cmd, words: Word[], dir: DirState, ctx: Ctx, piped: Cmd | null
   if (name === 'curl') return outputFile(args, /^-[a-zA-Z]*o$/, ['--output'], dir, local, raw)
   if (name === 'wget') return outputFile(args, /^-[a-zA-Z]*O$/, ['--output-document'], dir, local, raw)
   if (SHELLS.has(name)) return shell(cmd, name, args, local, raw)
-  if (name === 'eval') return wrappedEval(args, local, ctx, raw)
+  if (name === 'eval') return wrappedEval(args, local, raw)
   if (INTERPRETERS.test(name)) return interpreter(cmd, name, args, ctx, raw)
 }
 
@@ -1248,12 +1248,14 @@ function run(cmd: Cmd, words: Word[], dir: DirState, ctx: Ctx, piped: Cmd | null
 // sudo, env and nohup find no eval program and run nothing, but builtin, time, bash's
 // command and zsh's `-` run the shell's own, which keeps what it sets. So its text is
 // read in a context of its own, and every variable it changes is unknown to the rest of
-// the line: right whichever of the two runs it.
-function wrappedEval(args: Word[], local: Ctx, ctx: Ctx, raw: string): void {
-  const inner: Ctx = { ...child(local), depth: local.depth }
+// the line: right whichever of the two runs it. `ctx` may carry the wrapper's folder,
+// but its variables are the line's own.
+function wrappedEval(args: Word[], ctx: Ctx, raw: string): void {
+  // child() counts a level and evalText() counts another; the eval is only one.
+  const inner: Ctx = { ...child(ctx), depth: ctx.depth }
   evalText(args, inner, raw, false)
   for (const [k, val] of inner.vars) {
-    if (local.vars.get(k) !== val) ctx.vars.set(k, { unknown: `$${k} is set by ${short(raw)}, which may run in this shell` })
+    if (ctx.vars.get(k) !== val) ctx.vars.set(k, { unknown: `$${k} is set by ${short(raw)}, which may run in this shell` })
   }
 }
 
