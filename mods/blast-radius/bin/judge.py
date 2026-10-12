@@ -185,11 +185,19 @@ def covered(path, roots):
     return True
 
 
+def listed_worktrees(top):
+    """The worktrees of the repository `top` belongs to, as git recorded their paths, the
+    main one first; [] when git fails. -z keeps a path that holds a newline whole; git
+    before 2.36 has no -z, and there the listing is read by lines."""
+    listing = git_out(["worktree", "list", "--porcelain", "-z"], top)
+    lines = listing.split("\0") if listing is not None else (git_out(["worktree", "list", "--porcelain"], top) or "").splitlines()
+    return [line[9:] for line in lines if line.startswith("worktree ")]
+
+
 def main_checkout(top):
     """The main working tree of the repository `top` belongs to, which every one of its
     worktrees shares branches, stashes and history with."""
-    listing = git_out(["worktree", "list", "--porcelain"], top) or ""
-    paths = [line[9:] for line in listing.splitlines() if line.startswith("worktree ")]
+    paths = listed_worktrees(top)
     if not paths:
         raise Unresolved(f"git worktree list failed in {top}, so whose branches and history these are is unknown")
     return ondisk(paths[0])
@@ -235,9 +243,8 @@ class Ctx:
         self.main = None
         self.worktrees = []
         if self.top:
-            listing = git_out(["worktree", "list", "--porcelain"], self.top) or ""
             # git records a worktree's path as it was typed, not as the volume spells it.
-            paths = [ondisk(line[9:]) for line in listing.splitlines() if line.startswith("worktree ")]
+            paths = [ondisk(p) for p in listed_worktrees(self.top)]
             self.main = paths[0] if paths else self.top
             self.worktrees = paths or [self.top]
         # Linked worktrees inside the repository folder are agents' scratch space.
@@ -892,18 +899,54 @@ def deleted_branches(top, names):
 def git_worktree(ctx, top, cwd, rest):
     if not rest or rest[0] != "remove":
         return []
-    pos, _, _ = positionals(rest[1:])
-    if not pos:
+    pos, after, _ = positionals(rest[1:])
+    names = pos + after  # git takes the worktree after -- too
+    if not names:
         return []
-    p = ondisk(os.path.join(cwd, os.path.expanduser(pos[0])))
+    force = any(a in ("-f", "--force") for a in rest)
+    # A name git finds no worktree for is refused, so it loses nothing.
+    return [f for p in sorted(removed_worktrees(top, cwd, names[0])) for f in worktree_removal(ctx, p, force)]
+
+
+def removed_worktrees(top, cwd, name):
+    """The worktrees, as on disk, that `git worktree remove <name>` run in `cwd` could take.
+
+    git looks the name up the way its find_worktree does: first as the end of exactly one
+    listed worktree's path, on whole names (`feature` is ../feature, never ../my-feature,
+    and a folder named feature in `cwd` doesn't matter), and only when none or several
+    end in it, as a path from `cwd`. git compares them ignoring case when core.ignorecase
+    is set, which a command can set for itself, so both readings are taken.
+    """
+    listed = listed_worktrees(top)
+    if not listed:
+        raise Unresolved(f"git worktree list failed in {top}, so which worktree it removes is unknown")
+    return {w for fold in (False, True) if (w := worktree_named(listed, cwd, name, fold))}
+
+
+def worktree_named(listed, cwd, name, fold):
+    """The worktree in `listed` that git finds for `name`, as on disk, or None. With
+    `fold`, names match ignoring ASCII case, as git's strcasecmp does."""
+
+    def key(s):
+        b = s.encode("utf-8", "surrogateescape")
+        return b.lower() if fold else b
+
+    ends = [w for w in listed if (b"/" + key(w)).endswith(b"/" + key(name))]
+    if len(ends) == 1:
+        return ondisk(ends[0])
+    p = key(ondisk(os.path.join(cwd, name)))
+    return next((ondisk(w) for w in listed if key(ondisk(w)) == p), None)
+
+
+def worktree_removal(ctx, p, force):
+    """What removing the worktree `p` loses."""
     if not os.path.isdir(p) or ctx.where(p) in FREE:
-        return []
+        return []  # a folder already gone leaves git only its own notes on it to drop
     if p not in ctx.worktrees:
-        if not os.path.lexists(os.path.join(p, ".git")):
-            return []  # not a working tree: git refuses
-        return [finding("history", ctx.show(p), SEPARATE)]  # git status there would run its config
+        # Another repository's worktree (git -C there): git status in it would run its config.
+        return [finding("history", ctx.show(p), SEPARATE)]
     findings = []
-    if any(a in ("-f", "--force") for a in rest):
+    if force:
         findings += [finding("uncommitted", ctx.show(spelled(path)), what) for path, what in changes(p, untracked=True)]
     protected = []
     walk(ctx, p, protected, [])

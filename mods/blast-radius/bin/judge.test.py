@@ -651,6 +651,7 @@ def worktrees(s):
     expect("  and so does -ff", s.judge(git("worktree", "remove", "-ff", away)), [("uncommitted", os.path.join(away, "README.md"))])
     expect("from an agent's worktree, worktree remove --force of another worktree's changes holds",
            s.judge(git("worktree", "remove", "--force", away), cwd=slot), [("uncommitted", os.path.join(away, "README.md"))])
+    worktrees_by_name(s, slot, away)
     expect("deleting a worktree outside the repository folder holds over its changes", s.judge(delete(away)),
            [("uncommitted", os.path.join(away, "README.md"))])
     write(os.path.join(away, ".env"))
@@ -664,6 +665,90 @@ def worktrees(s):
     write(os.path.join(copy_repo, "README.md"), "mutant\n")
     expect("a throwaway copy under a temp folder is free", s.judge(git("checkout", "--", "README.md"), cwd=copy_repo), [])
     throwaway_history(s, copy_repo)
+
+
+def worktrees_by_name(s, slot, away):
+    """git worktree remove also takes the end of a worktree's path on whole names, and
+    tries that before the path. `slot` is an agent's worktree with changes, `away` a
+    worktree outside the repository folder with a changed README.md."""
+    write(os.path.join(away, "precious.txt"))
+    lost = [("uncommitted", os.path.join(away, "README.md")), ("uncommitted", os.path.join(away, "precious.txt"))]
+
+    def remove(name, **kw):
+        return s.judge(git("worktree", "remove", "--force", name), **kw)
+
+    expect("worktree remove --force by its last name holds over its changes", remove("wt-away"), lost)
+    expect("  and so does its name after --", s.judge(git("worktree", "remove", "--force", "--", "wt-away")), lost)
+    expect("worktree remove with no name passes, since git refuses it", s.judge(git("worktree", "remove", "--force")), [])
+    expect("  and so does one with nothing after --", s.judge(git("worktree", "remove", "--force", "--")), [])
+    expect("  and so does its last two names", remove(os.path.join(os.path.basename(s.root), "wt-away")), lost)
+    expect("  and its name in another case, which git matches where core.ignorecase is set", remove("WT-AWAY"), lost)
+    os.makedirs(s.p("wt-away"))
+    expect("  and with a folder of that name where it runs, since git tries the name first", remove("wt-away"), lost)
+    os.rmdir(s.p("wt-away"))
+    host = os.path.join(s.root, "wt-host")
+    twin = os.path.join(s.root, "twin", "feat")
+    mine = os.path.join(host, "box", "feat")
+    for branch, path in (("host", host), ("twin", twin), ("mine", mine)):
+        sh("git", "worktree", "add", "-q", "-b", branch, path, cwd=s.repo)
+    write(os.path.join(host, "h.txt"))
+    write(os.path.join(twin, "t.txt"))
+    write(os.path.join(mine, "m.txt"))
+    os.symlink(host, s.p("wt-away"))
+    expect("  and with a link of that name to another worktree, it is still the named one", remove("wt-away"), lost)
+    os.remove(s.p("wt-away"))
+    expect("worktree remove of a name two worktrees end in goes by the path, as git does",
+           remove("feat", cwd=os.path.join(host, "box")), [("uncommitted", os.path.join(mine, "m.txt"))])
+    expect("  and passes where no worktree is at that path, since git refuses it", remove("feat"), [])
+    expect("worktree remove of part of a name passes, since git matches whole names", remove("away"), [])
+    expect("worktree remove of a name no worktree has passes, since git refuses it", remove("nope"), [])
+    os.symlink(away, s.p("to-away"))
+    expect("worktree remove of a link to a worktree goes to the worktree it points to", remove("to-away"), lost)
+    os.remove(s.p("to-away"))
+    nl = os.path.join(s.root, "wt\nnl")
+    sh("git", "worktree", "add", "-q", "-b", "nl", nl, cwd=s.repo)
+    write(os.path.join(nl, "n.txt"))
+    nl_lost = [("uncommitted", os.path.join(nl, "n.txt"))]
+    expect("worktree remove of a worktree whose path holds a newline holds by its path", remove(nl), nl_lost)
+    expect("  and by its last name", remove("wt\nnl"), nl_lost)
+    sh("git", "worktree", "remove", "--force", nl, cwd=s.repo)
+    os.remove(os.path.join(away, "precious.txt"))
+    for path in (mine, twin, host):
+        sh("git", "worktree", "remove", "--force", path, cwd=s.repo)
+    expect("worktree remove --force of an agent's worktree passes by its path", remove(slot), [])
+    expect("  and by its last name", remove("slot-1"), [])
+    gone = os.path.join(s.root, "wt-gone")
+    sh("git", "worktree", "add", "-q", "-b", "gone", gone, cwd=s.repo)
+    shutil.rmtree(gone)
+    expect("worktree remove of a worktree whose folder is gone passes: git drops only its notes on it", remove("wt-gone"), [])
+    sh("git", "worktree", "prune", cwd=s.repo)
+
+    j = load_judge()
+    made_up = os.path.join(s.root, "made-up")  # nothing here exists, so no name is respelled
+    main, feat = os.path.join(made_up, "main"), os.path.join(made_up, "x", "Feat")
+    with mock.patch.object(j, "listed_worktrees", return_value=[main, feat]):
+        got = j.removed_worktrees(main, main, os.path.join("..", "x", "FEAT"))
+    check("a path in another case finds the worktree git finds where it ignores case", got == {feat}, got)
+    lower = os.path.join(made_up, "y", "feat")
+    with mock.patch.object(j, "listed_worktrees", return_value=[main, feat, lower]):
+        got = j.removed_worktrees(main, main, "feat")
+    check("a name two worktrees end in only ignoring case is the one with that case where git keeps case", got == {lower}, got)
+    with mock.patch.object(j, "listed_worktrees", return_value=[]):
+        try:
+            got = j.removed_worktrees(main, main, "feat")
+        except j.Unresolved:
+            got = "unknown"
+    check("a worktree list git can't give leaves the worktree unknown, never passed", got == "unknown", got)
+    real_out = j.git_out
+
+    def no_z(args, cwd):
+        return None if "-z" in args else real_out(args, cwd)
+
+    with mock.patch.object(j, "git_out", no_z):
+        got = j.listed_worktrees(s.repo)
+    want = real_out(["worktree", "list", "--porcelain"], s.repo).splitlines()
+    want = [line[9:] for line in want if line.startswith("worktree ")]
+    check("a git with no worktree list -z still lists the worktrees, read by lines", got == want and len(got) > 1, got)
 
 
 # Commands on a repository's history whatever its worktrees hold: each one holds from
@@ -784,8 +869,11 @@ def other_repos(s):
     expect("a folder holding another repository's worktree holds without running git there", judged(delete("build/box")),
            [("history", "build/box/wt"), ("uncommitted", "build/box/wt/.env")])
     check("  and its config ran nothing", not ran(), ran())
-    expect("worktree remove of a folder that isn't the session's worktree holds without running git there",
-           judged(git("worktree", "remove", "--force", "build/box/wt")), [("history", "build/box/wt")])
+    expect("worktree remove, run in the session's repository, of another one's worktree passes, since git refuses it",
+           judged(git("worktree", "remove", "--force", "build/box/wt")), [])
+    check("  and its config ran nothing", not ran(), ran())
+    expect("git -C into that repository removing it by name holds without running git status there",
+           judged(git("-C", other, "worktree", "remove", "--force", "build/box/wt")), [("history", "build/box/wt")])
     check("  and its config ran nothing", not ran(), ran())
     shutil.rmtree(s.p("build", "box"))
     shutil.rmtree(other)
@@ -936,6 +1024,9 @@ def ignored_case(s):
     write(os.path.join(caps, "README.md"), "mutant\n")
     expect("an agent's worktree git recorded in another case is still scratch",
            s.judge(git("checkout", "--", "README.md"), cwd=caps), [])
+    expect("worktree remove --force of it by its last name passes, judged as on disk",
+           s.judge(git("worktree", "remove", "--force", "caps")), [])
+    expect("  and by its path as on disk", s.judge(git("worktree", "remove", "--force", ".worktrees/caps")), [])
     expect("the worktree a session runs in keeps full protection when named as git recorded it",
            s.judge(delete(s.p(".WORKTREES", "caps", "README.md")), cwd=caps, root=caps),
            [("uncommitted", ".worktrees/caps/README.md")])
