@@ -339,10 +339,10 @@ def tracked_files(s):
     expect("a committed .env passes, while an ignored one holds", v, [("uncommitted", "src/sub/.env"), ("uncommitted", "src/local.db")])
     check("  and an untracked .db says it is untracked, not ignored",
           [f["detail"] for f in v["findings"] if f["path"] == "src/local.db"] == ["untracked"], v["findings"])
-    sh("git", "rm", "-q", "src/.env", cwd=s.repo)
-    s.commit("drop the tracked .env")
     shutil.rmtree(s.p("src", "sub"))
     os.remove(s.p("src", "local.db"))
+    sh("git", "rm", "-q", "src/.env", cwd=s.repo)
+    s.commit("drop the tracked .env")
 
 
 def git_ops(s):
