@@ -105,6 +105,7 @@ def main():
     s = Sandbox()
     try:
         deletes(s)
+        unmatched_globs(s)
         outside(s)
         overwrites_and_copies(s)
         finds(s)
@@ -152,6 +153,42 @@ def deletes(s):
     expect("deleting a folder above it holds", s.judge(delete("..")), [("git", s.root)])
     expect("a glob is expanded like the shell does it", s.judge(delete("*.md")), [])
     expect("a missing path has nothing to lose", s.judge(delete("nope")), [])
+
+
+def unmatched_globs(s):
+    # Route folders like [id] are globs to bash, which passes one that matches nothing
+    # on as typed. A quoted part reaches the judge escaped, as parse.ts sends it.
+    app = s.p("src", "app")
+    page = "src/app/[id]/page.tsx"
+    write(os.path.join(app, "[id]", "page.tsx"))
+    expect("rm -rf of an unquoted [id] folder holds its untracked work", s.judge(delete("src/app/[id]")), [("uncommitted", page)])
+    expect("  as the quoted form does", s.judge(delete("src/app/[[]id]")), [("uncommitted", page)])
+    write(os.path.join(app, "[slug]", "[id]", "page.tsx"))
+    expect("  a quoted part of the name is read back as typed", s.judge(delete("src/app/[[]slug]/[id]")),
+           [("uncommitted", "src/app/[slug]/[id]/page.tsx")])
+    shutil.rmtree(os.path.join(app, "[slug]"))
+    write(os.path.join(app, "*?", "[id]", "page.tsx"))
+    expect("  and so is a quoted * or ?", s.judge(delete("src/app/[*][?]/[id]")), [("uncommitted", "src/app/*?/[id]/page.tsx")])
+    shutil.rmtree(os.path.join(app, "*?"))
+    write(os.path.join(app, "a[[]b"))
+    expect("  so is a name that only looks escaped", s.judge(delete("src/app/a[[]b")), [("uncommitted", "src/app/a[[]b")])
+    os.remove(os.path.join(app, "a[[]b"))
+    expect("a glob that matches nothing, with no file of that name, passes", s.judge(delete("src/app/[nope]")), [])
+    expect("  and so does its quoted form", s.judge(delete("src/app/[[]nope]")), [])
+    expect("  and a * that matches nothing", s.judge(delete("src/*.nothing")), [])
+    expect("  and a mv of one inside .git has nothing to move", s.judge(copy("mv", [".git/[nope]"], "x")), [])
+    write(os.path.join(s.outside, "[id]", "README.md"))
+    expect("mv into a folder named like a glob holds", s.judge(copy("mv", ["README.md"], os.path.join(s.outside, "[id]"))),
+           [("outside", os.path.join(s.outside, "[id]", "README.md"))])
+    expect("  while a new name like a glob is free", s.judge(copy("cp", ["README.md"], os.path.join(s.outside, "[new]"))), [])
+    shutil.rmtree(os.path.join(s.outside, "[id]"))
+    write(os.path.join(app, "d"))
+    sh("git", "add", "src/app/d", cwd=s.repo)
+    sh("git", "commit", "-q", "-m", "route", cwd=s.repo)
+    expect("a glob that matches a name is not also read as typed", s.judge(delete("src/app/[id]")), [])
+    os.remove(os.path.join(app, "d"))
+    sh("git", "commit", "-q", "-am", "drop route", cwd=s.repo)
+    shutil.rmtree(app)
 
 
 def outside(s):
