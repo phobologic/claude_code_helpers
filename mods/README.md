@@ -47,9 +47,9 @@ a session loads it from a folder you own.
 
 `blast-radius` notes:
 - Two parts. `hooks/parse.ts` reads the command text and lists what it could delete or
-  overwrite (following `cd`, subshells, variables set on the line, `$HOME`, mktemp,
-  heredocs, `$(...)`, `bash -c`, `find -delete`, `find | xargs rm`, and git commands
-  that can discard work). `bin/judge.py` expands globs, resolves links, and asks git
+  overwrite (following `cd`, subshells, variables set on the line and how they split
+  into words, brace expansion, `$'...'`, `$HOME`, mktemp, heredocs, `$(...)`, `bash -c`,
+  `find -delete`, `find | xargs rm`, and git commands that can discard work). `bin/judge.py` expands globs, resolves links, and asks git
   what is at stake. Its own checks: `python3 mods/blast-radius/bin/judge.test.py`.
 - It judges by where the files are, not where the command runs. A linked worktree
   inside the repository folder (`.worktrees/*`, `.claude/worktrees/*`) is an agent's

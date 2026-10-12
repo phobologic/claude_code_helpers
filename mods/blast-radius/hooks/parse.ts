@@ -1,8 +1,9 @@
 // Blast Radius, part 1: reads a shell command line and lists what it could destroy.
 //
 // Text only, no filesystem: each effect names its paths as the shell would after the
-// expansions this file can do (quotes, variables set earlier on the line, `cd` along the
-// line, $HOME, mktemp). bin/judge.py then expands globs, resolves links and asks git
+// expansions this file can do (quotes and $'...', braces, variables set earlier on the
+// line and their splitting into words, `cd` along the line, $HOME, mktemp).
+// bin/judge.py then expands globs, resolves links and asks git
 // what is at stake. A path this file cannot know becomes an `unknown` effect, which the
 // judge always holds.
 //
@@ -67,6 +68,7 @@ type Part =
   | { kind: 'lit'; text: string; quoted: boolean }
   | { kind: 'var'; name: string; quoted: boolean }
   | { kind: 'sub'; inner: string; arith: boolean }
+  | { kind: 'unknown'; what: string } // a word brace expansion can't be followed through
 interface Word {
   parts: Part[]
   raw: string
@@ -259,10 +261,8 @@ function readDollar(s: string, i: number, parts: Part[], lit: Lit, quoted: boole
     return end
   }
   if (n === "'" && !quoted) {
-    // $'...': ANSI-C quoting, kept as a quoted literal (escapes are not decoded).
-    let j = i + 2
-    while (j < s.length && s[j] !== "'") j += s[j] === '\\' ? 2 : 1
-    lit(s.slice(i + 2, j), true)
+    const j = ansiEnd(s, i + 2)
+    lit(ansiC(s.slice(i + 2, j)), true)
     return j + 1
   }
   if (n === '"' && !quoted) return readDouble(s, i + 2, parts, lit)
@@ -273,6 +273,42 @@ function readDollar(s: string, i: number, parts: Part[], lit: Lit, quoted: boole
   }
   lit('$', quoted)
   return i + 1
+}
+
+// $'...' (ANSI-C quoting): the index of the ' that ends the text starting at j.
+function ansiEnd(s: string, j: number): number {
+  while (j < s.length && s[j] !== "'") j += s[j] === '\\' ? 2 : 1
+  return j
+}
+
+const C_ESCAPES: Record<string, string> = {
+  a: '\x07', b: '\b', e: '\x1b', E: '\x1b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v', '\\': '\\', "'": "'", '"': '"', '?': '?',
+}
+
+// The character an octal, \x, \u or \U escape stands for (`m` itself past the last code
+// point), or null for any other escape.
+function codeUnit(m: string, oct?: string, hex?: string, u?: string, U?: string): string | null {
+  if (oct !== undefined) return String.fromCharCode(Number.parseInt(oct, 8) & 0xff)
+  if (hex !== undefined) return String.fromCharCode(Number.parseInt(hex, 16))
+  const code = Number.parseInt(u ?? U ?? '', 16)
+  if (Number.isNaN(code)) return null
+  return code <= 0x10ffff ? String.fromCodePoint(code) : m
+}
+
+// The text of a $'...' as bash decodes it: \n, \x2e, \056, \u and \U code points, \cA
+// and kin. A NUL ends it, and an escape bash doesn't know stays as written.
+function ansiC(body: string): string {
+  const text = body.replace(
+    /\\(?:([0-7]{1,3})|x([0-9A-Fa-f]{1,2})|u([0-9A-Fa-f]{1,4})|U([0-9A-Fa-f]{1,8})|c([\s\S])|([\s\S]))/g,
+    (m, oct?: string, hex?: string, u?: string, U?: string, ctl?: string, other?: string) => {
+      const unit = codeUnit(m, oct, hex, u, U)
+      if (unit !== null) return unit
+      if (ctl !== undefined) return ctl === '?' ? '\x7f' : String.fromCharCode(ctl.charCodeAt(0) & 0x1f)
+      return C_ESCAPES[other as string] ?? m
+    },
+  )
+  const nul = text.indexOf('\0')
+  return nul < 0 ? text : text.slice(0, nul)
 }
 
 // Each returns the index just past its closer (or the end of the text when unclosed).
@@ -381,6 +417,223 @@ function text(w: Word | undefined): string | null {
   return w.parts.map(p => (p.kind === 'lit' ? p.text : '')).join('')
 }
 
+// ---------- brace expansion ----------
+
+// Before any other expansion bash makes several words of one with braces: pre{a,b}post,
+// {1..3}, {a..c}. It works on the word as written, where quotes, escapes, ${ }, $( ) and
+// backticks hide what is in them. This follows bash's braces.c.
+type Braced = { values: string[] } | { unknown: string }
+const MAX_BRACE_DEPTH = 8
+
+// The index past the escape, quoted text or substitution that starts at i: \x, '...',
+// "...", `...`, $'...', ${...}, $( ), <( ) or >( ). i itself when none starts there.
+function skipQuoted(s: string, i: number): number {
+  const c = s[i]
+  const n = s[i + 1]
+  if (c === '\\') return i + 2
+  if (c === "'") {
+    const k = s.indexOf("'", i + 1)
+    return k < 0 ? s.length : k + 1
+  }
+  if (c === '"') return skipDouble(s, i + 1)
+  if (c === '`') return closeBacktick(s, i + 1)
+  if (c === '$' && n === "'") return ansiEnd(s, i + 2) + 1
+  if (c === '$' && n === '{') return closeBrace(s, i + 2)
+  if ((c === '$' || c === '<' || c === '>') && n === '(') return closeParen(s, i + 2)
+  return i
+}
+
+// A , or a .. that is not just before a }: what lets a } close braces.
+const opensList = (s: string, i: number): boolean => s[i] === ',' || (s[i] === '.' && s[i + 1] === '.' && s[i + 2] !== '}')
+
+// The index of the first `want` from i that is outside quotes, substitutions and nested
+// braces, or -1. A } only closes once a , or .. has come before it at its own level.
+function gobble(s: string, i: number, want: '{' | '}' | ','): number {
+  let level = 0
+  let ready = want !== '}'
+  while (i < s.length) {
+    const j = skipQuoted(s, i)
+    if (j !== i) {
+      i = j
+      continue
+    }
+    const c = s[i]
+    if (c === want && level === 0 && ready) return i
+    if (c === '{') level += 1
+    else if (c === '}' && level > 0) level -= 1
+    else if (level === 0 && opensList(s, i)) ready = true
+    i += 1
+  }
+  return -1
+}
+
+// The first { in `rest` with a } that closes it, or null. Like bash, a {} at the start
+// of the text opens nothing.
+function findBraces(rest: string): { open: number; close: number } | null {
+  const first = rest.startsWith('{}') ? gobble(rest, 1, '{') : gobble(rest, 0, '{')
+  for (let open = first; open >= 0; open = gobble(rest, open + 1, '{')) {
+    const close = gobble(rest, open + 1, '}')
+    if (close >= 0) return { open, close }
+  }
+  return null
+}
+
+// Braces that make no list or sequence, with `post` after them. bash 3.2 leaves the
+// rest of the word as written; bash 4+ and zsh keep the braces and go on expanding what
+// follows. bash 3.2 also decodes a $'...' before it looks for a , so one it decodes can
+// make a list of the braces. Where the shells' readings can differ the word is unknown;
+// null when every shell leaves it as written.
+function unexpanded(amble: string, post: string, depth: number): { unknown: string } | null {
+  if (amble.includes("$'")) return { unknown: "has $'...' in braces, which bash 3.2 decodes first" }
+  const later = braceExpand(post, depth)
+  // Brace expansion makes each word shorter than its text, so a first value that is the
+  // text itself means nothing after expands.
+  if ('unknown' in later || later.values[0] !== post) {
+    return { unknown: 'has braces that bash 3.2 and later shells expand differently' }
+  }
+  return null
+}
+
+function braceExpand(s: string, depth: number): Braced {
+  if (depth > MAX_BRACE_DEPTH) return { unknown: 'has braces nested too deep to read' }
+  let heads = ['']
+  let rest = s
+  while (rest !== '') {
+    const found = findBraces(rest)
+    if (found === null) break
+    const { open, close } = found
+    const amble = rest.slice(open + 1, close)
+    const post = rest.slice(close + 1)
+    // As in bash, any , not escaped makes a list; without one it is a sequence or plain.
+    const alts = /^(?:\\[\s\S]|[^\\,])*,/.test(amble) ? braceList(amble, depth) : sequence(amble)
+    if (alts === null) {
+      const differs = unexpanded(amble, post, depth)
+      if (differs) return differs
+      break
+    }
+    if ('unknown' in alts) return alts
+    const pre = rest.slice(0, open)
+    const values = alts.values
+    if (heads.length * values.length > MAX_VALUES) return { unknown: 'has too many values to check' }
+    heads = heads.flatMap(h => values.map(v => h + pre + v))
+    rest = post
+  }
+  return { values: heads.map(h => h + rest) }
+}
+
+// The values of a {a,b,...} list: each item split off at a , of its own level, expanded.
+// Each item makes at most MAX_VALUES, and braceExpand caps the list as a whole.
+function braceList(amble: string, depth: number): Braced {
+  const values: string[] = []
+  for (let start = 0; ; ) {
+    const comma = gobble(amble, start, ',')
+    const item = braceExpand(amble.slice(start, comma < 0 ? amble.length : comma), depth + 1)
+    if ('unknown' in item) return item
+    values.push(...item.values)
+    if (comma < 0) return { values }
+    start = comma + 1
+  }
+}
+
+// {x..y}: whole numbers, or letters of one case. bash 3.2 reads a step ({1..9..2}) and
+// zero padding ({01..10}) differently from bash 4+ and zsh, so those are unknown, as is
+// a run of letters through the punctuation between Z and a, and a number past 32 bits,
+// which bash 3.2 wraps ({4294967296..4294967297} is 0 and 1) or crashes on.
+function sequence(amble: string): Braced | null {
+  const m = /^(?:([+-]?\d+)\.\.([+-]?\d+)|([a-zA-Z])\.\.([a-zA-Z]))(\.\.[+-]?\d+)?$/.exec(amble)
+  if (!m) return null
+  const [, lo, hi, a = '', b = '', step] = m
+  const numbers = lo !== undefined && hi !== undefined
+  const [from, to] = numbers ? [Number(lo), Number(hi)] : [a.charCodeAt(0), b.charCodeAt(0)]
+  const padded = /^-?0\d/.test(lo ?? '') || /^-?0\d/.test(hi ?? '')
+  const mixed = /[a-z]/.test(a) !== /[a-z]/.test(b)
+  const huge = [from, to].some(n => n > 2147483647 || n < -2147483648)
+  if (step !== undefined || padded || mixed || huge) return { unknown: "has a brace sequence Blast Radius doesn't expand" }
+  const count = Math.abs(to - from) + 1
+  if (count > MAX_VALUES) return { unknown: 'has too many values to check' }
+  const values = Array.from({ length: count }, (_, k) => from + k * Math.sign(to - from))
+  return { values: values.map(n => (numbers ? String(n) : String.fromCharCode(n))) }
+}
+
+// The words bash makes of `w` by brace expansion; `w` itself when it has none.
+function braceWords(w: Word): Word[] {
+  if (!w.raw.includes('{')) return [w]
+  const v = braceExpand(w.raw, 0)
+  const unread = (what: string): Word => ({ parts: [{ kind: 'unknown', what: `${short(w.raw)} ${what}` }], raw: w.raw })
+  if ('unknown' in v) return [unread(v.unknown)]
+  if (v.values.length === 1 && v.values[0] === w.raw) return [w]
+  return v.values.flatMap(t => {
+    const read = readWord(t, 0)
+    if (read.end !== t.length) return [unread("can't be read after brace expansion")]
+    // Like bash, an unquoted word that brace expansion leaves empty is dropped.
+    return read.word.parts.length > 0 ? [read.word] : []
+  })
+}
+
+// The one value of a variable, or null when it has several or is unknown.
+function oneValue(name: string, ctx: Ctx): string | null {
+  const v = varValue(name, ctx)
+  return 'values' in v && v.values.length === 1 ? (v.values[0] as Val).text : null
+}
+
+// A part that expands to nothing: '' or "$X" with X empty. Among the parts splitWords
+// keeps, only quoted ones can: readWord makes no empty unquoted text, and an unquoted
+// variable that is empty is split away.
+function isNull(p: Part, ctx: Ctx): boolean {
+  if (p.kind === 'lit') return p.text === ''
+  return p.kind === 'var' && oneValue(p.name, ctx) === ''
+}
+
+// The words bash makes of `w` by splitting each unquoted variable's value at spaces, tabs
+// and newlines, dropping a word left with nothing in it. Only a variable with one value
+// is split here: expand() leaves one with several values that would split unknown, and
+// any unquoted variable once $IFS is set on the line. zsh splits nothing, but drops a
+// word made only of unquoted variables that are empty, as bash does.
+function splitWords(w: Word, ctx: Ctx): Word[] {
+  // The value of each unquoted variable that splitting changes: empty, or with a separator.
+  const changes = ctx.zsh ? /^$/ : /^$|[ \t\n]/
+  const values = w.parts.map(p => {
+    const value = p.kind === 'var' && !p.quoted && !ctx.vars.has('IFS') ? oneValue(p.name, ctx) : null
+    return value !== null && changes.test(value) ? value : null
+  })
+  if (values.every(v => v === null)) return [w]
+  const out: Word[] = []
+  let parts: Part[] = []
+  let kept = false // something quoted or not empty is in the word being built
+  w.parts.forEach((p, i) => {
+    const value = values[i] ?? null
+    if (value === null) {
+      parts.push(p)
+      kept = true
+      return
+    }
+    value.split(/[ \t\n]+/).forEach((piece, k) => {
+      if (k > 0) {
+        if (kept) out.push({ parts, raw: w.raw })
+        parts = []
+        kept = false
+      }
+      if (piece !== '') {
+        parts.push({ kind: 'lit', text: piece, quoted: false })
+        kept = true
+      }
+    })
+  })
+  if (kept) out.push({ parts, raw: w.raw })
+  // Where a value did split, bash 3.2 also drops a word left with only quoted nulls in it
+  // (G=' a'; rm ''$G removes a alone). Without a split, '' stays a word of its own.
+  if (!values.some(v => v !== null && v !== '')) return out
+  return out.filter(o => !o.parts.every(p => isNull(p, ctx)))
+}
+
+// The words a command runs with, after brace expansion and splitting. The assignments a
+// declaration builtin takes are not split (`export X=$F` keeps $F whole), as in bash.
+function shellWords(words: Word[], ctx: Ctx): Word[] {
+  const braced = words.flatMap(braceWords)
+  const declares = DECLARE.has(text(braced[0]) ?? '')
+  return braced.flatMap(w => (declares && isAssign(w) ? [w] : splitWords(w, ctx)))
+}
+
 // ---------- expansion ----------
 
 type DirState = string | null | { unknown: string }
@@ -397,6 +650,7 @@ interface Ctx {
   pushed: DirState[]
   out: Effect[]
   depth: number
+  zsh: boolean // the commands are a zsh script's, which never splits a variable into words
 }
 
 export function escapeGlob(s: string): string {
@@ -446,31 +700,47 @@ function varValue(name: string, ctx: Ctx): VarValue {
   return { unknown: `$${name} is not set on this command line` }
 }
 
-function expand(w: Word, ctx: Ctx, mode: 'path' | 'plain'): Expanded {
+type Vals = string[] | { unknown: string }
+
+// A variable's values in a word. Unless `split` is off (or the script is zsh's), one
+// left unquoted that splitting would still change is unknown: shellWords split those it
+// could already.
+function varVals(p: Extract<Part, { kind: 'var' }>, ctx: Ctx, mode: 'path' | 'plain', split: boolean): Vals {
+  const v = varValue(p.name, ctx)
+  if ('unknown' in v) return v
+  if (split && !p.quoted && !ctx.zsh) {
+    if (ctx.vars.has('IFS')) return { unknown: `$IFS is set on this line, so how $${p.name} splits is unknown` }
+    if (v.values.some(x => /[ \t\n]/.test(x.text))) return { unknown: `$${p.name} has several values that split into words` }
+  }
+  return v.values.map(x => (mode === 'path' && p.quoted && !x.pattern ? escapeGlob(x.text) : x.text))
+}
+
+function partVals(p: Part, ctx: Ctx, mode: 'path' | 'plain', split: boolean): Vals {
+  if (p.kind === 'unknown') return { unknown: p.what }
+  if (p.kind === 'lit') return [mode === 'path' && p.quoted ? escapeGlob(p.text) : p.text]
+  if (p.kind === 'var') return varVals(p, ctx, mode, split)
+  const v = p.arith ? null : subValue(p, ctx)
+  return v === null ? { unknown: `$(${short(p.inner)}) is only known when it runs` } : [v]
+}
+
+// A word's values. Its unquoted variables were split already (shellWords), except where
+// `split` is off: assignments and redirect targets, which bash never splits, and
+// here-strings, which only bash 3.2 splits (stdinText reads them both ways).
+function expand(w: Word, ctx: Ctx, mode: 'path' | 'plain', split = true): Expanded {
   let acc = ['']
   for (const p of w.parts) {
-    let vals: string[]
-    if (p.kind === 'lit') {
-      vals = [mode === 'path' && p.quoted ? escapeGlob(p.text) : p.text]
-    } else if (p.kind === 'sub') {
-      const v = p.arith ? null : subValue(p, ctx)
-      if (v === null) return { unknown: `$(${short(p.inner)}) is only known when it runs` }
-      vals = [v]
-    } else {
-      const v = varValue(p.name, ctx)
-      if ('unknown' in v) return v
-      vals = v.values.map(x => (mode === 'path' && p.quoted && !x.pattern ? escapeGlob(x.text) : x.text))
-    }
+    const vals = partVals(p, ctx, mode, split)
+    if (!Array.isArray(vals)) return vals
     acc = acc.flatMap(a => vals.map(v => a + v))
     if (acc.length > MAX_VALUES) return { unknown: `${short(w.raw)} has too many values to check` }
   }
   return { values: acc }
 }
 
-function expandAll(words: Word[], ctx: Ctx, mode: 'path' | 'plain'): Expanded {
+function expandAll(words: Word[], ctx: Ctx, mode: 'path' | 'plain', split = true): Expanded {
   const values: string[] = []
   for (const w of words) {
-    const v = expand(w, ctx, mode)
+    const v = expand(w, ctx, mode, split)
     if ('unknown' in v) return v
     values.push(...v.values)
   }
@@ -495,7 +765,7 @@ export interface Line {
 }
 
 export function analyzeLine(command: string): Line {
-  const ctx: Ctx = { dir: null, vars: new Map(), pushed: [], out: [], depth: 0 }
+  const ctx: Ctx = { dir: null, vars: new Map(), pushed: [], out: [], depth: 0, zsh: false }
   walk(command, ctx)
   const seen = new Set<string>()
   const effects = ctx.out.filter(e => {
@@ -519,7 +789,7 @@ export function looksDestructive(command: string): boolean {
 }
 
 function child(ctx: Ctx): Ctx {
-  return { dir: ctx.dir, vars: new Map(ctx.vars), pushed: [], out: ctx.out, depth: ctx.depth + 1 }
+  return { dir: ctx.dir, vars: new Map(ctx.vars), pushed: [], out: ctx.out, depth: ctx.depth + 1, zsh: ctx.zsh }
 }
 
 function walk(s: string, ctx: Ctx): void {
@@ -581,7 +851,7 @@ function assign(w: Word, ctx: Ctx): void {
     return
   }
   const rest: Part[] = [{ kind: 'lit', text: first.text.slice(eq + 1), quoted: false }, ...w.parts.slice(1)]
-  const v = expand({ parts: rest, raw: w.raw }, ctx, 'plain')
+  const v = expand({ parts: rest, raw: w.raw }, ctx, 'plain', false)
   ctx.vars.set(name, 'unknown' in v ? v : { values: v.values.map(t => ({ text: t, pattern: false })) })
 }
 
@@ -614,6 +884,7 @@ function handle(cmd: Cmd, ctx: Ctx, piped: Cmd | null): void {
   }
   words = words.slice(k)
   while (words.length > 0 && KEYWORDS.has(text(words[0]) ?? '')) words = words.slice(1)
+  words = shellWords(words, ctx)
   const head = text(words[0])
   if (head === null || words.length === 0) return
   if (head === 'for' || head === 'select') {
@@ -650,7 +921,9 @@ function redirect(r: Redir, ctx: Ctx, raw: string): void {
   // >&word with a word that is no file descriptor writes to that file, as &> does.
   const toFile = r.op === '>&' && !/^(\d+-?|-)$/.test(litText(r.target))
   if (!truncates && !toFile) return
-  const v = expand(r.target, ctx, 'path')
+  // bash refuses a target it would make several words of, but zsh writes to each brace
+  // word and to a variable's whole value, so those are what is judged.
+  const v = expandAll(braceWords(r.target), ctx, 'path', false)
   if ('unknown' in v) {
     ctx.out.push({ op: 'unknown', what: `writes to ${short(r.target.raw)}: ${v.unknown}`, cmd: short(raw) })
     return
@@ -959,7 +1232,7 @@ function run(cmd: Cmd, words: Word[], dir: DirState, ctx: Ctx, piped: Cmd | null
   if (name === 'rsync') return rsync(args, dir, local, raw)
   if (name === 'curl') return outputFile(args, /^-[a-zA-Z]*o$/, ['--output'], dir, local, raw)
   if (name === 'wget') return outputFile(args, /^-[a-zA-Z]*O$/, ['--output-document'], dir, local, raw)
-  if (SHELLS.has(name)) return shell(cmd, args, local, raw)
+  if (SHELLS.has(name)) return shell(cmd, name, args, local, raw)
   if (name === 'eval') {
     const v = expandAll(args, ctx, 'plain')
     if ('unknown' in v) {
@@ -1508,38 +1781,73 @@ function rsync(args: Word[], dir: DirState, ctx: Ctx, raw: string): void {
   else emit(ctx, dir, paths, raw, d => ({ op: 'overwrite', dir: d, paths, cmd: short(raw) }))
 }
 
-function stdinText(cmd: Cmd, ctx: Ctx): string | null {
+// What a command reads on stdin: each reading of it, and why bash 3.2's reading of a
+// here-string can't be known, when it can't.
+interface Stdin {
+  texts: string[]
+  unknown?: string
+}
+
+// A here-string's readings. bash 4+ and zsh pass its value whole; bash 3.2 splits its
+// unquoted variables and joins the words with spaces (F=$'rm -rf\nsrc'; bash <<< $F runs
+// rm -rf src). When the two differ, both are returned, and each is read on its own: one
+// reading's cd, variables or open heredoc never reach the other. When bash 3.2's can't be
+// known, only the whole value is returned, with the reason; a shell reader holds on it.
+function hereString(target: Word, ctx: Ctx): Stdin {
+  const v = expand(target, ctx, 'plain', false)
+  if ('unknown' in v) return { texts: [target.raw] }
+  const whole = v.values.join(' ')
+  const split = expandAll(splitWords(target, ctx), ctx, 'plain')
+  if ('unknown' in split) return { texts: [whole], unknown: split.unknown }
+  const joined = split.values.join(' ')
+  return { texts: joined === whole ? [whole] : [whole, joined] }
+}
+
+function stdinText(cmd: Cmd, ctx: Ctx): Stdin | null {
   for (const r of cmd.redirs) {
-    if (r.heredoc) return r.heredoc.quoted ? r.heredoc.body : heredocText(r.heredoc.body)
-    if (r.op === '<<<' && r.target) {
-      const v = expand(r.target, ctx, 'plain')
-      return 'unknown' in v ? r.target.raw : v.values.join(' ')
-    }
+    if (r.heredoc) return { texts: [r.heredoc.quoted ? r.heredoc.body : heredocText(r.heredoc.body)] }
+    if (r.op === '<<<' && r.target) return hereString(r.target, ctx)
   }
   return null
 }
 
-function shell(cmd: Cmd, args: Word[], ctx: Ctx, raw: string): void {
+// sh, bash, dash or ksh, or zsh, which reads the commands it runs without word splitting.
+function shell(cmd: Cmd, name: string, args: Word[], ctx: Ctx, raw: string): void {
+  const inner = (): Ctx => ({ ...child(ctx), zsh: name === 'zsh' })
   for (let k = 0; k < args.length; k += 1) {
     const t = text(args[k])
     if (t !== null && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(t)) {
       const body = args[k + 1]
-      if (body) shellCode(body, ctx, raw)
+      if (body) shellCode(body, ctx, raw, inner)
       return
     }
     if (t === '-o' || t === '+o') k += 1
     else if (t === null || !/^[-+]/.test(t)) return // a script: its commands are not on this line
   }
-  const body = stdinText(cmd, ctx)
-  if (body !== null) walk(body, child(ctx))
+  walkStdin(cmd, ctx, raw, inner)
+}
+
+// A shell reading commands on stdin runs each reading of them, in a context of its own.
+function walkStdin(cmd: Cmd, ctx: Ctx, raw: string, inner: () => Ctx): void {
+  const stdin = stdinText(cmd, ctx)
+  if (stdin === null) return
+  if (stdin.unknown) ctx.out.push({ op: 'unknown', what: `here-string in bash 3.2: ${stdin.unknown}`, cmd: short(raw) })
+  for (const text of stdin.texts) walk(text, inner())
+}
+
+// An interpreter's code on stdin. It is only searched, so a bash 3.2 reading that can't be
+// known is no reason to hold.
+function stdinCode(cmd: Cmd, ctx: Ctx): string | null {
+  const stdin = stdinText(cmd, ctx)
+  return stdin === null ? null : stdin.texts.join('\n')
 }
 
 // A shell's -c code: read as commands when it can be expanded, else held when it could
-// do anything.
-function shellCode(body: Word, ctx: Ctx, raw: string): void {
+// do anything. Each value is walked in a context of its own from inner().
+function shellCode(body: Word, ctx: Ctx, raw: string, inner: () => Ctx): void {
   const v = expand(body, ctx, 'plain')
   if (!('unknown' in v)) {
-    for (const s of v.values) walk(s, child(ctx))
+    for (const s of v.values) walk(s, inner())
   } else if (isInput(body) || opaque(body.raw)) {
     // Code with xargs's or -exec's input in it is held wherever the input sits.
     ctx.out.push({ op: 'unknown', what: v.unknown, cmd: short(raw) })
@@ -1569,7 +1877,7 @@ function interpreter(cmd: Cmd, name: string, args: Word[], ctx: Ctx, raw: string
     ctx.out.push({ op: 'unknown', what: fromInput.unknown, cmd: short(raw) })
     return
   }
-  const code = typeof src === 'object' ? (word?.raw ?? '') : src === 'stdin' ? stdinText(cmd, ctx) : null
+  const code = typeof src === 'object' ? (word?.raw ?? '') : src === 'stdin' ? stdinCode(cmd, ctx) : null
   if (code !== null && CODE_DELETES.test(code)) {
     ctx.out.push({ op: 'unknown', what: `inline ${name} code that deletes files`, cmd: short(raw) })
   }
