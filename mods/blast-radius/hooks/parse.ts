@@ -933,6 +933,9 @@ function xargs(args: Word[], ctx: Ctx, piped: Cmd | null, raw: string): void {
 
 const GIT_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--super-prefix'])
 
+// Whether a short option word (-f, or combined as in -qf) has any of these letters.
+const shortFlag = (a: string, letters: string): boolean => /^-[a-zA-Z]+$/.test(a) && [...a.slice(1)].some(c => letters.includes(c))
+
 // Whether a git command can discard work at all, so the safe majority never reaches the judge.
 export function gitRisky(argv: string[]): boolean {
   let k = 0
@@ -944,17 +947,22 @@ export function gitRisky(argv: string[]): boolean {
     case 'reset':
       return has('--hard')
     case 'checkout':
-      return !has('-b', '-B', '--orphan') || has('-f', '--force')
+      // -b and --orphan make a new branch, which git refuses over one that exists; -B resets it.
+      return !has('-b', '--orphan') || has('--force') || rest.some(a => shortFlag(a, 'f'))
     case 'restore':
       return !has('-S', '--staged') || has('-W', '--worktree')
     case 'switch':
-      return has('-f', '--force', '--discard-changes')
+      return (
+        has('--force', '--discard-changes', '--force-create') ||
+        rest.some(a => a.startsWith('--force-create=') || shortFlag(a, 'fC'))
+      )
     case 'clean':
       return !has('-n', '--dry-run')
     case 'stash':
       return rest[0] === 'drop' || rest[0] === 'clear'
     case 'branch':
-      return has('-D') || (has('-d', '--delete') && has('-f', '--force'))
+      // Forced: -D deletes, -M and -C rename or copy over a branch, and -f with a name moves one.
+      return has('--force') || rest.some(a => shortFlag(a, 'fDMC'))
     case 'worktree':
       return rest[0] === 'remove'
     case 'rm':

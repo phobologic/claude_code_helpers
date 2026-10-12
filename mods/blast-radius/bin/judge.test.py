@@ -109,6 +109,8 @@ def main():
         overwrites_and_copies(s)
         finds(s)
         git_ops(s)
+        branch_moves(s)
+        short_options(s)
         worktrees(s)
         subagent_folders(s)
         odd_cases(s)
@@ -230,6 +232,67 @@ def git_ops(s):
     expect("branch -D of unmerged work holds", s.judge(git("branch", "-D", "side")), [("history", "side")])
     expect("branch -d is left to git", s.judge(git("branch", "-d", "side")), [])
     expect("gc --prune=now holds", s.judge(git("gc", "--prune=now")), [("history", "unreachable commits")])
+
+
+def branch_moves(s):
+    # From git_ops: on main, `side` has a commit no other branch has, `merged` sits on main.
+    lost = [("history", "side")]
+    say = " ".join
+    for argv in (["branch", "-f", "side", "main"], ["branch", "--force", "side", "main"], ["branch", "-qf", "side", "main"],
+                 ["branch", "-f", "side"],
+                 ["checkout", "-B", "side", "main"], ["checkout", "-qB", "side", "main"], ["checkout", "-Bside", "main"],
+                 ["switch", "-C", "side", "main"], ["switch", "-qCside", "main"], ["switch", "--force-create", "side", "main"],
+                 ["switch", "--force-create=side", "main"]):
+        expect(f"{say(argv)} over unmerged work holds", s.judge(git(*argv)), lost)
+    v = s.judge(git("branch", "-f", "side", "main"))
+    check("  and says what would be lost", "1 commit on no other branch, newest:" in v["findings"][0]["detail"], v["findings"])
+    for argv in (["branch", "-f", "fresh", "main"], ["checkout", "-B", "fresh"], ["switch", "-C", "fresh", "main"]):
+        expect(f"{say(argv)} of a new branch passes", s.judge(git(*argv)), [])
+    for argv in (["branch", "-f", "merged", "side"], ["checkout", "-B", "merged", "side"], ["switch", "-C", "merged", "side"]):
+        expect(f"{say(argv)} of a branch another one holds passes", s.judge(git(*argv)), [])
+    for argv in (["branch", "-f", "side", "side"], ["checkout", "-B", "side", "side"], ["switch", "-C", "side", "side"],
+                 ["branch", "-M", "side", "side"], ["branch", "-C", "side", "side"]):
+        expect(f"{say(argv)} leaves the branch where it is, so passes", s.judge(git(*argv)), [])
+
+    for argv in (["branch", "-M", "merged", "side"], ["branch", "-m", "-f", "merged", "side"], ["branch", "--move", "--force", "merged", "side"],
+                 ["branch", "-C", "merged", "side"], ["branch", "-c", "-f", "merged", "side"], ["branch", "--copy", "--force", "merged", "side"]):
+        expect(f"{say(argv)} over unmerged work holds", s.judge(git(*argv)), lost)
+    expect("branch -M of the current branch over unmerged work holds", s.judge(git("branch", "-M", "side")), lost)
+    expect("branch -M onto a branch another one holds passes", s.judge(git("branch", "-M", "side", "merged")), [])
+    expect("branch -m is left to git", s.judge(git("branch", "-m", "merged", "side")), [])
+    for argv in (["branch", "-D", "merged", "side"], ["branch", "-df", "merged", "side"], ["branch", "--delete", "--force", "merged", "side"]):
+        expect(f"{say(argv)} judges every branch it deletes", s.judge(git(*argv)), lost)
+    expect("branch -f -u only sets the upstream", s.judge(git("branch", "-f", "-u", "main", "side")), [])
+    expect("branch -f --set-upstream-to= only sets the upstream", s.judge(git("branch", "-f", "--set-upstream-to=main", "side")), [])
+    expect("branch -fudev reads dev as -u's value", s.judge(git("branch", "-fudev", "side")), [])
+    expect("branch -f with no name only lists", s.judge(git("branch", "-f")), [])
+    sh("git", "update-ref", "refs/remotes/side", "main", cwd=s.repo)
+    expect("branch -r -D drops a remote-tracking branch, not the local one", s.judge(git("branch", "-r", "-D", "side")), [])
+    sh("git", "update-ref", "-d", "refs/remotes/side", cwd=s.repo)
+
+    sh("git", "checkout", "-q", "side", cwd=s.repo)
+    expect("checkout -B of the current branch onto another holds", s.judge(git("checkout", "-B", "side", "main")), lost)
+    expect("checkout -B of the current branch where it is passes", s.judge(git("checkout", "-B", "side")), [])
+    sh("git", "checkout", "-q", "--detach", "side", cwd=s.repo)
+    expect("branch -f passes while a detached HEAD still has the work", s.judge(git("branch", "-f", "side", "main")), [])
+    sh("git", "checkout", "-q", "main", cwd=s.repo)
+
+
+def short_options(s):
+    # Combined short options are read the way git reads them, and never after --.
+    write(s.p("src", "a.py"), "changed\n")
+    changed = [("uncommitted", "src/a.py")]
+    expect("checkout -fq over a change holds", s.judge(git("checkout", "-fq")), changed)
+    expect("switch -qf over a change holds", s.judge(git("switch", "-qf", "main")), changed)
+    expect("checkout -Bfeature reads feature as the branch, not as more options", s.judge(git("checkout", "-Bfeature", "main")), [])
+    expect("checkout -B with no name is left to git", s.judge(git("checkout", "-B")), [])
+    sh("git", "checkout", "--", "src/a.py", cwd=s.repo)
+    expect("checkout -- -B side names files, not a branch", s.judge(git("checkout", "--", "-B", "side")), [])
+    write(s.p("-qf"))
+    s.commit("a file named like options")
+    write(s.p("-qf"), "changed\n")
+    expect("checkout -- -qf names a file", s.judge(git("checkout", "--", "-qf")), [("uncommitted", "-qf")])
+    sh("git", "checkout", "--", "-qf", cwd=s.repo)
 
 
 def worktrees(s):
