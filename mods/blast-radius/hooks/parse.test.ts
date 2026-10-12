@@ -443,6 +443,10 @@ test('an eval nested too deep is held, and each eval gives its depth back', () =
   expect(only('eval true; eval true; eval true; eval true; eval true; eval "rm -rf x"')).toMatchObject({ op: 'delete', paths: ['x'] })
   // A wrapped eval counts one level, as a bare one does.
   expect(only(`builtin eval "builtin eval 'builtin eval rm -rf x'"`)).toMatchObject({ op: 'delete', paths: ['x'] })
+  expect(analyze(`X='rm -rf y; builtin eval "$X"'; builtin eval "$X"`)).toEqual([
+    { op: 'delete', dir: null, paths: ['y'], recursive: true, cmd: 'rm -rf y' },
+    { op: 'unknown', what: 'commands nested too deep to read', cmd: 'rm -rf y; builtin eval "$X"' },
+  ])
 })
 
 // The effects without their command text, which names the wrapper too.
