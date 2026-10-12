@@ -182,6 +182,10 @@ def unmatched_globs(s):
            [("outside", os.path.join(s.outside, "[id]", "README.md"))])
     expect("  while a new name like a glob is free", s.judge(copy("cp", ["README.md"], os.path.join(s.outside, "[new]"))), [])
     shutil.rmtree(os.path.join(s.outside, "[id]"))
+    write(os.path.join(s.outside, "[id]"))
+    expect("ln -sf of a glob that matches nothing replaces the file it names", s.judge(copy("ln", ["[id]"], s.outside)),
+           [("outside", os.path.join(s.outside, "[id]"))])
+    os.remove(os.path.join(s.outside, "[id]"))
     write(os.path.join(app, "d"))
     sh("git", "add", "src/app/d", cwd=s.repo)
     sh("git", "commit", "-q", "-m", "route", cwd=s.repo)
