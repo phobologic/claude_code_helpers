@@ -244,6 +244,42 @@ test('an unquoted variable splits into words at spaces, tabs and newlines', () =
   expect(paths("E=; rm -rf ''$E")).toEqual([''])
 })
 
+test('"" is an empty quoted word, as \'\' is: kept next to an empty variable, dropped next to a split', () => {
+  const paths = (command: string) => (only(command) as { paths: string[] }).paths
+  const bareOnly = (command: string) => {
+    const { cmd: _cmd, ...effect } = only(command)
+    return effect
+  }
+  // bash and zsh run cd '', which stays put, so src goes from where the line started.
+  expect(only('X=; cd ""$X && rm -rf src')).toMatchObject({ op: 'delete', dir: null, paths: ['src'] })
+  expect(only("X=; cd ''$X && rm -rf src")).toMatchObject({ op: 'delete', dir: null, paths: ['src'] })
+  expect(only('cd "" && rm x')).toMatchObject({ dir: null })
+  expect(only('cd /tmp; cd "" && rm x')).toMatchObject({ dir: '/tmp' })
+  expect(only('X=; pushd ""$X && popd && rm x')).toMatchObject({ dir: null })
+  expect(analyzeLine('cd a; X=; cd ""$X').endDir).toBe('a')
+  expect(paths('X=; rm -rf ""$X')).toEqual([''])
+  expect(bareOnly('X=; rm -rf ""$X')).toEqual(bareOnly("X=; rm -rf ''$X"))
+  expect(paths('X=; rm -rf $X""$X')).toEqual([''])
+  expect(paths('X=; rm -rf $""$X')).toEqual([''])
+  expect(paths(`zsh -c 'X=; rm -rf ""$X'`)).toEqual([''])
+  // Next to a split, bash 3.2 drops the quoted null, as it does ''.
+  expect(paths("G=' a'; rm -rf \"\"$G")).toEqual(['a'])
+  expect(paths("G=' a'; rm -rf \"\"$G\"\"")).toEqual(['a'])
+  expect(analyze("G=' '; rm -rf \"\"$G")).toEqual([])
+  // git -C '' runs git where it is, so the clean is judged there, as git clean -fdx is.
+  expect(bareOnly('X=; git -C ""$X clean -fdx')).toEqual({ op: 'git', dir: null, argv: ['-C', '', 'clean', '-fdx'] })
+  expect(bareOnly('X=; git -C ""$X clean -fdx')).toEqual(bareOnly("X=; git -C ''$X clean -fdx"))
+  // Brace expansion keeps a "" word, as bash does.
+  expect(paths('rm {x,""} ""{,b}')).toEqual(['x', '', '', 'b'])
+  // A "" in front makes a word no assignment (bash runs a command named X=1), but a
+  // declaration builtin still reads X=1 once the quotes are gone, split as any word is.
+  expect(analyze('""X=1 rm -rf foo')).toEqual([])
+  expect(paths('F="a b"; export ""X=$F; rm "$X"')).toEqual(['a'])
+  // Text is joined around a "" only with text quoted the same way: a quoted * stays no glob.
+  expect(paths("rm -rf x''y'*' a\"\"\"*\"b")).toEqual(['xy[*]', 'a[*]b'])
+  expect(paths("rm -rf x'*' a\"*\"b")).toEqual(['x[*]', 'a[*]b'])
+})
+
 test('zsh splits no variable into words, and drops one that is unquoted and empty', () => {
   const paths = (command: string) => (only(command) as { paths: string[] }).paths
   expect(paths(`zsh -c 'F="a b"; rm $F'`)).toEqual(['a b'])
@@ -301,6 +337,8 @@ test('a write to any other device is an overwrite, so the judge sees it', () => 
   })
   expect(only('echo x | tee /dev/sda')).toMatchObject({ op: 'overwrite', paths: ['/dev/sda'] })
   expect(only('cd /dev && dd if=x of=disk2')).toMatchObject({ op: 'overwrite', dir: '/dev', paths: ['disk2'] })
+  expect(only('dd if=x o""f=/dev/disk2')).toMatchObject({ op: 'overwrite', paths: ['/dev/disk2'] })
+  expect(only('dd if=x of""=/dev/disk2')).toMatchObject({ op: 'overwrite', paths: ['/dev/disk2'] })
   // A body that can't be expanded is checked by its text: a sink is harmless, a disk is not.
   expect(analyze('bash -c "echo $X > /dev/null"')).toEqual([])
   expect(analyze('bash -c "echo $X >/dev/stderr; echo $Y"')).toEqual([])
@@ -428,6 +466,17 @@ test('every wrapper skips its own options, in any form, to find its command', ()
     'sudo -Eu root rm -rf /opt/x',
     'sudo -uroot -g wheel rm -rf /opt/x',
     'sudo -u"$U" rm -rf /opt/x',
+    // An empty '' or "" next to an option is no part of it once the quotes are gone.
+    'sudo -u"" root rm -rf /opt/x',
+    "sudo -u'' root rm -rf /opt/x",
+    'sudo ""-u root rm -rf /opt/x',
+    "sudo ''-u root rm -rf /opt/x",
+    'X=; sudo ""$X-u root rm -rf /opt/x',
+    // One inside an option leaves the text on each side of it as one option.
+    'sudo -""u root rm -rf /opt/x',
+    'sudo -E""u root rm -rf /opt/x',
+    "sudo -E''u root rm -rf /opt/x",
+    'sudo --user""=root rm -rf /opt/x',
     'doas -u root rm -rf /opt/x',
     'nice -n5 rm -rf /opt/x',
     'nice --adjustment 5 rm -rf /opt/x',

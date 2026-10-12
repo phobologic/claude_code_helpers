@@ -197,7 +197,7 @@ function readWord(s: string, start: number): { word: Word; end: number } {
       lit(s.slice(i + 1, end), true)
       i = end + 1
     } else if (c === '"') {
-      i = readDouble(s, i + 1, parts, lit)
+      i = readQuoted(s, i + 1, parts, lit)
     } else if (c === '$') {
       i = readDollar(s, i, parts, lit, false)
     } else if (c === '`') {
@@ -213,6 +213,15 @@ function readWord(s: string, start: number): { word: Word; end: number } {
 }
 
 type Lit = (text: string, quoted: boolean) => void
+
+// A "..." (or $"...") in a word. One with nothing in it still makes the word something
+// quoted, as '' does: bash and zsh keep ""$X with X empty as an empty word.
+function readQuoted(s: string, i: number, parts: Part[], lit: Lit): number {
+  const before = parts.length
+  const end = readDouble(s, i, parts, lit)
+  if (parts.length === before) parts.push({ kind: 'lit', text: '', quoted: true })
+  return end
+}
 
 function readDouble(s: string, i: number, parts: Part[], lit: Lit): number {
   while (i < s.length && s[i] !== '"') {
@@ -265,7 +274,7 @@ function readDollar(s: string, i: number, parts: Part[], lit: Lit, quoted: boole
     lit(ansiC(s.slice(i + 2, j)), true)
     return j + 1
   }
-  if (n === '"' && !quoted) return readDouble(s, i + 2, parts, lit)
+  if (n === '"' && !quoted) return readQuoted(s, i + 2, parts, lit)
   const m = /^([A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!-])/.exec(s.slice(i + 1))
   if (m) {
     parts.push({ kind: 'var', name: m[1] as string, quoted })
@@ -626,12 +635,29 @@ function splitWords(w: Word, ctx: Ctx): Word[] {
   return out.filter(o => !o.parts.every(p => isNull(p, ctx)))
 }
 
+// A word with its empty text parts ('' and "", the only text that can be empty) taken out
+// when it has other parts. They only keep a word from being dropped, and once the words
+// are split that is settled; left in, one would hide an option's leading `-`
+// (`sudo ""-u root`) or read as its value (`sudo -u"" root`). The text on each side of one
+// is joined again, as readWord's lit() would have joined it, since an option is read from
+// the word's first part alone: `sudo -""u root` runs `-u`, and `dd o""f=x` writes x.
+function withoutNulls(w: Word): Word {
+  const parts: Part[] = []
+  for (const p of w.parts) {
+    if (p.kind === 'lit' && p.text === '') continue
+    const last = parts[parts.length - 1]
+    if (p.kind === 'lit' && last?.kind === 'lit' && last.quoted === p.quoted) parts[parts.length - 1] = { ...last, text: last.text + p.text }
+    else parts.push(p)
+  }
+  return parts.length > 0 ? { parts, raw: w.raw } : w
+}
+
 // The words a command runs with, after brace expansion and splitting. The assignments a
 // declaration builtin takes are not split (`export X=$F` keeps $F whole), as in bash.
 function shellWords(words: Word[], ctx: Ctx): Word[] {
   const braced = words.flatMap(braceWords)
   const declares = DECLARE.has(text(braced[0]) ?? '')
-  return braced.flatMap(w => (declares && isAssign(w) ? [w] : splitWords(w, ctx)))
+  return braced.flatMap(w => (declares && isAssign(w) ? [w] : splitWords(w, ctx))).map(withoutNulls)
 }
 
 // ---------- expansion ----------
@@ -669,6 +695,8 @@ function absDir(dir: DirState): string | null {
 }
 
 function joinDir(dir: DirState, arg: string): DirState {
+  // An empty name moves nowhere: bash and zsh stay put on cd '' and pushd ''.
+  if (arg === '') return dir
   if (isAbs(arg)) return arg
   // A fresh object: a folder that moved never compares equal to the one it moved from.
   if (isUnknown(dir)) return { unknown: dir.unknown }
