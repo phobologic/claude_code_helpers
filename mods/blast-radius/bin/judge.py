@@ -19,7 +19,8 @@ The policy goes by where the affected files are, not where the command runs:
   back: untracked or modified files, ignored files that look like secrets or local
   data, a nested repository's history, commits on no other branch, stashes.
 - An agent's scratch worktree (a linked worktree inside the repository folder, other
-  than the one the session runs in), temp folders and Claude's memory folders: free.
+  than the one the session runs in), and what temp folders and Claude's memory folders
+  hold: free. A temp or memory folder itself is held like anywhere else.
   Only a worktree's own files are its alone: branches, stashes, reflogs and objects
   belong to the whole repository, so git commands on them count where its main
   checkout is, whichever worktree they run in.
@@ -161,8 +162,10 @@ class Ctx:
             return "nogit"
         if any(under(rp, t) and rp != t for t in self.temp):
             return "temp"
+        # What a project's memory folder holds is free, like a temp folder's contents,
+        # but the folder itself is not: deleting it loses every memory at once.
         rel = rp[len(self.memory) + 1 :].split("/") if under(rp, self.memory) else []
-        if len(rel) >= 2 and rel[1] == "memory":
+        if len(rel) >= 3 and rel[1] == "memory":
             return "temp"
         return "outside"
 

@@ -162,6 +162,18 @@ def outside(s):
     write(os.path.join(s.tmp, "y"))
     expect("files in a temp folder are free", s.judge(delete(os.path.join(s.tmp, "y"))), [])
     expect("Claude's memory files are free", s.judge(delete("~/.claude/projects/p/memory/m.md")), [])
+    memory, other = "~/.claude/projects/p/memory", "~/.claude/projects/q/memory"
+    expect("a memory folder itself is not free", s.judge(delete(memory)), [("outside", memory)])
+    expect("  nor with a trailing slash", s.judge(delete(memory + "/")), [("outside", memory)])
+    write(os.path.join(s.home, ".claude", "projects", "q", "memory", "n.md"))
+    expect("  nor any memory folder a glob matches", s.judge(delete("~/.claude/projects/*/memory")),
+           [("outside", memory), ("outside", other)])
+    expect("  while a glob of the files in them is free", s.judge(delete("~/.claude/projects/*/memory/*")), [])
+    shutil.rmtree(os.path.join(s.home, ".claude", "projects", "q"))
+    transcript = "~/.claude/projects/p/s1/t.jsonl"
+    write(os.path.join(s.home, ".claude", "projects", "p", "s1", "t.jsonl"))
+    expect("other folders in a project are not memory", s.judge(delete(transcript)), [("outside", transcript)])
+    shutil.rmtree(os.path.join(s.home, ".claude", "projects", "p", "s1"))
     expect("~ is the home folder", s.judge(delete("~/.zshrc")), [("outside", "~/.zshrc")])
     expect("$HOME arrives as a placeholder", s.judge(delete("\x01HOME\x01/.zshrc")), [("outside", "~/.zshrc")])
     expect("cd moves where a relative path lands", s.judge(delete("notes.txt", dir=s.outside)), [("outside", os.path.join(s.outside, "notes.txt"))])
