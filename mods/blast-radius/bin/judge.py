@@ -356,15 +356,12 @@ def tracked(ctx, paths):
     found = set()
     for repo, ps in by_repo.items():
         out = git_out(["ls-files", "-z"], repo)
+        # `paths` are spelled as on disk, the index as git recorded them: after a case-only
+        # rename git never saw, src/.env is in a folder named SRC. An entry is respelled
+        # only when it could be one of `paths`, so the whole index isn't.
         folded = {p.casefold() for p in ps}
-        for e in (out or "").split("\0"):
-            full = os.path.join(repo, e)
-            # `paths` are spelled as on disk, the index as git recorded them: after a
-            # case-only rename git never saw, src/.env is in a folder named SRC.
-            if full not in ps and full.casefold() in folded:
-                full = spelled(full)
-            if full in ps:
-                found.add(full)
+        entries = (os.path.join(repo, e) for e in (out or "").split("\0"))
+        found |= ps & {spelled(f) if f.casefold() in folded else f for f in entries}
     return found
 
 
