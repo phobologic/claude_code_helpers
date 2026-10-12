@@ -549,6 +549,46 @@ def discard(ctx, top, cwd, pathspecs):
     return found
 
 
+# A subcommand's options that take a value. parse.ts's GIT_VALUED is the same table.
+GIT_VALUED = {
+    "checkout": ("-b", "-B", "--orphan"),
+    "switch": ("-c", "-C", "--orphan"),
+    "restore": ("-s", "--source"),
+    "clean": ("-e", "--exclude"),
+    "branch": ("-u", "--set-upstream-to", "--sort", "--format", "--points-at"),
+}
+
+
+def unbundle(rest, valued=()):
+    """`rest` with short options combined in one word spelled out one per word, as git
+    reads them: -df is -d -f. An option in `valued` takes the rest of its word as its value
+    (-bname is -b name), or else the next word, which is kept as written. So are long
+    options, arguments, and every word from `--` on. parse.ts's unbundle matches it."""
+    out = []
+    i = 0
+    while i < len(rest):
+        a = rest[i]
+        i += 1
+        if a == "--":
+            return out + rest[i - 1 :]
+        takes_next = a in valued
+        if re.match(r"-[^-]", a):
+            for j in range(1, len(a)):
+                out.append("-" + a[j])
+                if "-" + a[j] in valued:
+                    if a[j + 1 :]:
+                        out.append(a[j + 1 :])
+                    else:
+                        takes_next = True
+                    break
+        else:
+            out.append(a)
+        if takes_next:
+            out += rest[i : i + 1]
+            i += 1
+    return out
+
+
 def positionals(rest, valued=()):
     """Arguments that aren't options, and those after `--`."""
     out = []
@@ -571,25 +611,6 @@ def positionals(rest, valued=()):
 def is_commitish(cwd, name):
     r = git(["rev-parse", "--verify", "-q", f"{name}^{{commit}}"], cwd)
     return r is not None and r.returncode == 0
-
-
-def split_short(rest, valued):
-    """Combined short options spelled out one per word, as git reads them: with `valued`
-    "B" (the letters that take a value), -qB x is -q -B x and -Bx is -B x."""
-    out = []
-    for i, a in enumerate(rest):
-        if a == "--":
-            return out + rest[i:]
-        if not re.match(r"^-[a-zA-Z]+$", a):
-            out.append(a)
-            continue
-        for j, ch in enumerate(a[1:], start=2):
-            out.append("-" + ch)
-            if ch in valued:
-                if a[j:]:
-                    out.append(a[j:])
-                break
-    return out
 
 
 def option_value(rest, *names):
@@ -654,8 +675,7 @@ def git_reset(ctx, top, cwd, rest):
 
 
 def git_checkout(ctx, top, cwd, rest):
-    rest = split_short(rest, "bB")
-    pos, paths, dashdash = positionals(rest, ("-b", "-B", "--orphan"))
+    pos, paths, dashdash = positionals(rest, GIT_VALUED["checkout"])
     reset = option_value(rest, "-B")  # -B makes the branch or, when it exists, moves it
     moved = moved_branch(top, reset, pos[0] if pos else None) if reset and not throwaway(ctx, top) else []
     return moved + checkout_discards(ctx, top, cwd, rest, pos, paths, dashdash)
@@ -677,7 +697,6 @@ def checkout_discards(ctx, top, cwd, rest, pos, paths, dashdash):
 
 
 def git_switch(ctx, top, cwd, rest):
-    rest = split_short(rest, "cC")
     findings = []
     reset = option_value(rest, "-C", "--force-create")  # like checkout -B
     if reset and not throwaway(ctx, top):
@@ -693,13 +712,13 @@ def git_restore(ctx, top, cwd, rest):
     worktree = any(a in ("-W", "--worktree") for a in rest)
     if staged and not worktree:
         return []  # only unstages: the file keeps its content
-    pos, paths, _ = positionals(rest, ("-s", "--source"))
+    pos, paths, _ = positionals(rest, GIT_VALUED["restore"])
     specs = pos + paths
     return discard(ctx, top, cwd, specs) if specs else []
 
 
 def git_rm(ctx, top, cwd, rest):
-    if "--cached" in rest or not any(a == "--force" or re.match(r"^-[a-z]*f", a) for a in rest):
+    if "--cached" in rest or not any(a in ("-f", "--force") for a in rest):
         return []  # without -f git refuses to drop changes
     pos, paths, _ = positionals(rest)
     return discard(ctx, top, cwd, pos + paths)
@@ -722,22 +741,10 @@ def git_clean(ctx, top, cwd, rest):
             excludes.append(a)
         elif a in ("-n", "--dry-run"):
             dry = True
-        elif a == "--force":
+        elif a in ("-f", "--force"):
             force += 1
-        elif re.match(r"^-[a-zA-Z]+$", a):
-            letters = a[1:]
-            for j, ch in enumerate(letters):
-                if ch == "e":
-                    pattern = letters[j + 1 :]
-                    if not pattern and i + 1 < len(rest):
-                        i += 1
-                        pattern = rest[i]
-                    excludes += ["-e", pattern]
-                    break
-                force += ch == "f"
-                dry |= ch == "n"
-                if ch in "dxX":
-                    flags.append("-" + ch)
+        elif a in ("-d", "-x", "-X"):
+            flags.append(a)
         elif not a.startswith("-"):
             paths.append(a)
         i += 1
@@ -774,8 +781,7 @@ BRANCH_NO_MOVE = {
 
 
 def git_branch(ctx, top, cwd, rest):
-    rest = split_short(rest, "u")
-    pos, after, _ = positionals(rest, ("--sort", "--format", "--points-at"))
+    pos, after, _ = positionals(rest, GIT_VALUED["branch"])
     # git refuses a branch name that starts with -, and the judge's own git log would read one as an option.
     names = [n for n in pos + after if not n.startswith("-")]
     flags = {a.split("=", 1)[0] for a in rest if a.startswith("-")}
@@ -892,7 +898,7 @@ def judge_git(ctx, base, eff):
     # repository is a throwaway copy, never because a scratch worktree runs the command.
     if args[i] in SHARED and throwaway(ctx, top):
         return []
-    return handler(ctx, top, cwd, args[i + 1 :])
+    return handler(ctx, top, cwd, unbundle(args[i + 1 :], GIT_VALUED.get(args[i], ())))
 
 
 # ---------- main ----------

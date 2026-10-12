@@ -322,6 +322,45 @@ test('git commands that move an existing branch go to the judge; making a new on
   }
 })
 
+test('git short options combined in one word count one by one, as git reads them', () => {
+  for (const argv of [
+    ['branch', '-df', 'x'],
+    ['branch', '-fd', 'x'],
+    ['branch', '-qD', 'x'],
+    ['checkout', '-fb', 'new'],
+    ['checkout', '-qfb', 'new'],
+    ['checkout', '-fbfix/x'],
+    // -bnew holds its own value, so the next word is options again.
+    ['checkout', '-bnew', '-qf'],
+    ['switch', '-qf', 'main'],
+    ['restore', '-SW', 'a'],
+    ['rm', '-qf', 'x'],
+    ['rm', '-r', '--force', 'x'],
+    // A value, and every word after --, is never read as options.
+    ['clean', '-fe', '-nq'],
+    ['clean', '-f', '--exclude', '-nq'],
+    ['clean', '-f', '--', '-nq'],
+  ]) {
+    expect({ argv, risky: gitRisky(argv) }).toEqual({ argv, risky: true })
+  }
+  for (const argv of [
+    ['branch', '-dq', 'x'],
+    ['checkout', '-qb', 'new'],
+    ['checkout', '-bfix'],
+    // A cluster with a non-letter still splits: -q -b, and fix/x is -b's value.
+    ['checkout', '-qbfix/x'],
+    ['switch', '-cf', 'main'],
+    ['restore', '-Sq', 'a'],
+    ['restore', '-SsWIP', 'a'],
+    ['branch', '-uorigin/Dev'],
+    ['rm', '-rq', 'x'],
+    ['clean', '-nfd'],
+  ]) {
+    expect({ argv, risky: gitRisky(argv) }).toEqual({ argv, risky: false })
+  }
+  expect(only('git branch -df topic')).toEqual({ op: 'git', dir: null, argv: ['branch', '-df', 'topic'], cmd: 'git branch -df topic' })
+})
+
 test('mv, cp, ln -f, tee, dd, curl and rsync name what they overwrite', () => {
   expect(only('mv a.txt ~/Desktop/')).toEqual({
     op: 'copy', dir: null, mode: 'mv', sources: ['a.txt'], dest: ['~/Desktop/'], intoDir: false, noTargetDir: false, noClobber: false, cmd: 'mv a.txt ~/Desktop/',
@@ -334,4 +373,68 @@ test('mv, cp, ln -f, tee, dd, curl and rsync name what they overwrite', () => {
   expect(only('curl -sSLo ~/bin/tool https://example.com/tool')).toMatchObject({ op: 'overwrite', paths: ['~/bin/tool'] })
   expect(only('rsync -a --delete src/ ~/backup/')).toMatchObject({ op: 'delete', paths: ['~/backup/'], recursive: true })
   expect(only('rsync -a src/ ~/backup/')).toMatchObject({ op: 'overwrite', paths: ['~/backup/'] })
+})
+
+test('mv, cp, install and ln each read their own options: -n is no-clobber to mv and cp only', () => {
+  const sameAs = (command: string, like: string) =>
+    expect({ command, effect: { ...only(command), cmd: '' } }).toEqual({ command, effect: { ...only(like), cmd: '' } })
+  const none = (command: string) => expect({ command, effects: analyze(command) }).toEqual({ command, effects: [] })
+  const linked = { op: 'copy', dir: null, mode: 'ln', sources: ['x'], dest: ['~/.zshrc'], intoDir: false, noTargetDir: false, noClobber: false }
+  expect(only('ln -sf x ~/.zshrc')).toEqual({ ...linked, cmd: 'ln -sf x ~/.zshrc' })
+  // ln's -n and -h only stop it following a link to a folder; -f, BSD's -F and -i replace.
+  for (const command of ['ln -sfn x ~/.zshrc', 'ln -nsf x ~/.zshrc', 'ln -s -n -f x ~/.zshrc', 'ln -sfh x ~/.zshrc', 'ln -sF x ~/.zshrc', 'ln -si x ~/.zshrc', 'ln -sn --force x ~/.zshrc', 'ln -s --interactive x ~/.zshrc']) {
+    sameAs(command, 'ln -sf x ~/.zshrc')
+  }
+  // Without one ln fails on a destination that exists, and a backup keeps the old file.
+  for (const command of ['ln -s x ~/.zshrc', 'ln -sn x ~/.zshrc', 'ln -snh x ~/.zshrc', 'ln -s --no-dereference x ~/.zshrc', 'ln -sbf x ~/.zshrc', 'ln -sf --backup x ~/.zshrc']) {
+    none(command)
+  }
+  // mv and cp keep -n's no-clobber meaning, until a later -f or -i overrides it.
+  for (const command of ['mv -n a ~/b', 'mv -fn a ~/b', 'mv -i --no-clobber a ~/b']) {
+    expect({ command, effect: only(command) }).toMatchObject({ command, effect: { mode: 'mv', noClobber: true } })
+  }
+  for (const command of ['mv -nf a ~/b', 'mv -n -i a ~/b', 'mv --no-clobber --force a ~/b']) sameAs(command, 'mv a ~/b')
+  for (const command of ['cp -n a ~/b', 'cp -fn a ~/b', 'cp -i --no-clobber a ~/b']) none(command)
+  for (const command of ['cp -nf a ~/b', 'cp -ni a ~/b', 'cp --no-clobber --interactive a ~/b']) sameAs(command, 'cp a ~/b')
+  expect(only('cp a ~/b')).toMatchObject({ mode: 'cp', sources: ['a'], dest: ['~/b'], noClobber: false })
+  // A backup keeps the old file too, but --backup=none and =off make none.
+  for (const command of ['cp -b a ~/b', 'cp -fb a ~/b', 'cp --backup a ~/b', 'cp --backup=numbered a ~/b']) none(command)
+  expect(only('mv -fb a ~/b')).toMatchObject({ mode: 'mv', noClobber: true })
+  for (const command of ['cp --backup=none a ~/b', 'cp --backup=off a ~/b']) sameAs(command, 'cp a ~/b')
+  // BSD cp's and install's -S take no value, so the path after one is still a source.
+  sameAs('cp -S a ~/b', 'cp a ~/b')
+  sameAs('install -S a ~/b', 'install a ~/b')
+  expect(only('mv -S .bak a ~/b')).toMatchObject({ sources: ['a'], dest: ['~/b'] })
+  expect(only('ln -sfS .bak x ~/.zshrc')).toMatchObject({ sources: ['x'], dest: ['~/.zshrc'] })
+  for (const command of ['install -m 644 a ~/b', 'install --mode 644 a ~/b', 'install -o root -g wheel a ~/b']) {
+    expect({ command, effect: only(command) }).toMatchObject({ command, effect: { mode: 'cp', sources: ['a'], dest: ['~/b'], noClobber: false } })
+  }
+  // install -d and --directory make folders and copy nothing.
+  for (const command of ['install -d a ~/b', 'install -vd a ~/b', 'install --directory a ~/b']) none(command)
+  // Target folders, -T, and `--` that ends the options.
+  for (const command of ['cp --target-directory /opt/x a b', 'cp --target-directory=/opt/x a b', 'cp -t/opt/x a b']) {
+    expect({ command, effect: only(command) }).toMatchObject({ command, effect: { sources: ['a', 'b'], dest: ['/opt/x'], intoDir: true } })
+  }
+  for (const command of ['cp -T a ~/b', 'cp --no-target-directory a ~/b', 'ln -sfT x ~/.zshrc']) {
+    expect({ command, effect: only(command) }).toMatchObject({ command, effect: { intoDir: false, noTargetDir: true, noClobber: false } })
+  }
+  // Every command's -t takes the folder, whether apart from or joined to other options.
+  for (const command of ['mv -t ~/d a b', 'install -t ~/d a b', 'ln -sf -t ~/d a b', 'ln -sft ~/d a b']) {
+    expect({ command, effect: only(command) }).toMatchObject({ command, effect: { sources: ['a', 'b'], dest: ['~/d'], intoDir: true } })
+  }
+  // install keeps the backup and -T options it shares with the others.
+  for (const command of ['install -b a ~/b', 'install --backup a ~/b']) none(command)
+  expect(only('install -T a ~/b')).toMatchObject({ noTargetDir: true })
+  for (const kind of ['t', 'numbered', 'existing', 'nil', 'simple', 'never']) none(`cp --backup=${kind} a ~/b`)
+  // `ln [-f] TARGET` links into the working folder under the target's own name.
+  expect(only('ln -sf /x/.zshrc')).toMatchObject({ mode: 'ln', sources: ['/x/.zshrc'], dest: ['.'], intoDir: true, noClobber: false })
+  expect(only('cd ~ && ln -sfn dotfiles/.zshrc')).toMatchObject({ mode: 'ln', sources: ['dotfiles/.zshrc'], dest: ['.'], intoDir: true })
+  none('ln -s /x/.zshrc')
+  // mv, cp and install need two operands, and ln needs one.
+  for (const command of ['mv a', 'cp -f a', 'install a', 'ln -sf']) none(command)
+  // An explicit -t beats the one-operand fallback.
+  expect(only('ln -sf -t ~/d a')).toMatchObject({ sources: ['a'], dest: ['~/d'], intoDir: true })
+  expect(only('cp -- -n ~/b')).toMatchObject({ sources: ['-n'], dest: ['~/b'], noClobber: false })
+  expect(only('cp - ~/b')).toMatchObject({ sources: ['-'], dest: ['~/b'] })
+  expect(only('cp "$SRC" ~/b')).toMatchObject({ op: 'unknown' })
 })
