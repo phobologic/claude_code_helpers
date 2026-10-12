@@ -59,12 +59,14 @@ a session loads it from a folder you own.
 - Ignored files are free to delete except `.env*` (not `.env.example` and kin),
   `*.db`, `*.sqlite` and `*.sqlite3`. Folders like `node_modules` and `.venv` are never
   searched.
-- git only ever runs in the session's own repository and its worktrees. git run in
-  another one (a clone or submodule inside the project, or an archive extracted with its
-  own `.git`) would read that repository's config, which can run commands
-  (`core.fsmonitor`, clean filters) before you are even asked. So deleting anything
-  inside another repository, or `git worktree remove` of a folder that isn't one of the
-  session's worktrees, is always held.
+- When it checks a delete or `git worktree remove`, git only runs in the session's own
+  repository and its worktrees. git run in another one (a clone or submodule inside the
+  project, or an archive extracted with its own `.git`) would read that repository's
+  config, which can run commands (`core.fsmonitor`, clean filters) before you are even
+  asked. So deleting anything inside another repository, or `git worktree remove` of a
+  folder with its own `.git` that isn't one of the session's worktrees, is always held.
+  git commands that name another repository are still checked by running git there (see
+  cc-8res).
 - What it can't expand (`xargs rm`, `rm "$VAR"` with a variable from an earlier call,
   `sh -c "$CMD"`, inline Python or Node that deletes files) is held, since it could be
   anything. What it can't see at all runs: scripts (`make clean`, `./cleanup.sh`),

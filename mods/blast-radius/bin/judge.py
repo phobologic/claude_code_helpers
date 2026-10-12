@@ -19,9 +19,11 @@ The policy goes by where the affected files are, not where the command runs:
   back: untracked or modified files, ignored files that look like secrets or local
   data, a nested repository's history, commits on no other branch, stashes.
 - Another repository inside it (a clone, a submodule, an extracted archive with its
-  own .git): always held. git only ever runs in the session's own worktrees, since git
-  run in another repository reads that repository's config, which can run commands
-  (core.fsmonitor, clean filters) before the person is even asked.
+  own .git): deleting in it is always held. Delete checks run git only in the session's
+  own worktrees, since git run in another repository reads that repository's config,
+  which can run commands (core.fsmonitor, clean filters) before the person is even
+  asked. git commands that name another repository are still checked by running git
+  there (cc-8res).
 - An agent's scratch worktree (a linked worktree inside the repository folder, other
   than the one the session runs in), temp folders and Claude's memory folders: free.
 - Anywhere else: held.
@@ -75,8 +77,8 @@ def decode(b):
 
 def git(args, cwd, timeout=60):
     # A check never starts the repository's file monitor, a command its config names.
-    # Clean filters can't be switched off this way, which is why git only runs in the
-    # session's own worktrees (see judge_deletes).
+    # Clean filters can't be switched off this way, which is why delete checks only run
+    # git in the session's own worktrees (see judge_deletes).
     try:
         return subprocess.run(["git", "-c", "core.fsmonitor=false", *args], cwd=cwd, env=GIT_ENV, capture_output=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired):
@@ -607,6 +609,8 @@ def git_worktree(ctx, top, cwd, rest):
     if not os.path.isdir(p) or ctx.where(p) in ("scratch", "temp"):
         return []
     if p not in ctx.worktrees:
+        if not os.path.lexists(os.path.join(p, ".git")):
+            return []  # not a working tree: git refuses
         return [finding("history", ctx.show(p), SEPARATE)]  # git status there would run its config
     findings = []
     if any(a in ("-f", "--force") for a in rest):

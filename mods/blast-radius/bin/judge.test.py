@@ -351,7 +351,19 @@ def other_repos(s):
     sh("git", "commit", "-q", "-m", "env", cwd=slot)
     expect("a committed .env in the worktree a session runs in is asked of that worktree",
            s.judge(delete(".env"), cwd=slot, root=slot), [])
+    write(s.p(".env"))
+    sh("git", "add", "-f", ".env", cwd=s.repo)
+    sh("git", "commit", "-q", "-m", "main env", cwd=s.repo)
+    expect("a committed .env in another session worktree is asked of that worktree",
+           s.judge(delete(s.p(".env")), cwd=slot, root=slot), [])
+    sh("git", "rm", "-q", "-f", ".env", cwd=s.repo)
+    sh("git", "commit", "-q", "-m", "drop env", cwd=s.repo)
     sh("git", "worktree", "remove", "--force", slot, cwd=s.repo)
+
+    os.makedirs(s.p("build", "plain"))
+    expect("worktree remove of a plain folder passes, since git refuses it",
+           s.judge(git("worktree", "remove", "build/plain")), [])
+    os.rmdir(s.p("build", "plain"))
 
 
 def subagent_folders(s):
