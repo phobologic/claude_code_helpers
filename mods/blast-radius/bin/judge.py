@@ -53,6 +53,8 @@ VENDORED = {
 }
 FIND_ACTIONS = {"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"}
 PLACEHOLDER = re.compile("\x01(\\w+)\x01")
+# How hooks/parse.ts escapeGlob() marks a quoted glob character: [*], [?] or [[].
+ESCAPED = re.compile(r"\[([*?[])\]")
 # Where files are free to lose (see Ctx.where).
 FREE = ("scratch", "temp")
 # git subcommands that change what every worktree of a repository shares rather than
@@ -204,11 +206,18 @@ def base_dir(ctx, d):
 
 def expand(ctx, base, word, must_exist=True):
     w = subst(ctx, word)
+    words = [w]
     if glob.has_magic(w):
         pattern = w if os.path.isabs(w) else os.path.join(glob.escape(base), w)
-        return sorted(glob.glob(pattern))  # like bash: * skips dotfiles
-    p = w if os.path.isabs(w) else os.path.join(base, w)
-    return [p] if not must_exist or os.path.lexists(p) else []
+        found = sorted(glob.glob(pattern))  # like bash: * skips dotfiles
+        if found:
+            return found
+        # Like bash, a pattern that matches nothing is passed on as it is, so `rm -rf
+        # app/[id]` removes the folder named [id]. A quoted glob character arrives as
+        # [*], which can't be told from a typed [*], so both readings are judged.
+        words = sorted({w, ESCAPED.sub(r"\1", w)})
+    paths = [p if os.path.isabs(p) else os.path.join(base, p) for p in words]
+    return [p for p in paths if not must_exist or os.path.lexists(p)]
 
 
 def resolve_delete(p):
