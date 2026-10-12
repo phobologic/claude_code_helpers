@@ -227,7 +227,7 @@ def git_ops(s):
     write(s.p("src", "new.py"))
     expect("clean -fd over untracked work holds", s.judge(git("clean", "-fd")), [("uncommitted", "src/new.py")])
     expect("clean -fde new.py leaves it out", s.judge(git("clean", "-fde", "new.py")), [])
-    expect("clean -fdenew.py leaves it out too", s.judge(git("clean", "-fdenew.py")), [])
+    expect("clean -f -denew.py leaves it out too", s.judge(git("clean", "-f", "-denew.py")), [])
     os.remove(s.p("src", "new.py"))
     write(s.p("build", "out.o"))
     expect("clean -fdX of ignored build output passes", s.judge(git("clean", "-fdX")), [])
