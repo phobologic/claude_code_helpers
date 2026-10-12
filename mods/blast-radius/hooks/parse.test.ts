@@ -659,8 +659,13 @@ test("xargs's options: where its command starts and where its input goes", () =>
   expect(only('R=%; ls | xargs -i"$R" rm -rf build')).toMatchObject({ op: 'delete', paths: ['build'] })
   expect(only('R=x; ls | xargs -I%"$R" rm -rf %x')).toMatchObject(fromInput)
   expect(only('R=x; ls | xargs -I%"$R" rm -rf x')).toMatchObject({ op: 'delete', paths: ['x'] })
+  // The long form's value starts right after its `=`.
+  expect(only('R=x; ls | xargs --replace=%"$R" rm -rf %x')).toMatchObject(fromInput)
+  expect(only('R=x; ls | xargs --replace=%"$R" rm -rf x')).toMatchObject({ op: 'delete', paths: ['x'] })
   expect(only('R=%; ls | xargs --replace="$R" rm -rf build')).toMatchObject({ op: 'delete', paths: ['build'] })
   expect(only('R=%; ls | xargs -J"$R" rm -rf build')).toMatchObject(fromInput)
+  // -J"$R" is BSD's -J too: only the first word that is exactly its text is the input.
+  expect(analyze('R=%; find . -name x | xargs -J"$R" rm -rf % %')).toMatchObject([{ op: 'delete', paths: ['%'] }, { op: 'find' }])
   expect(only('find . -name x | xargs -a"$F" rm')).toMatchObject(fromInput)
   expect(only('find . -name x | xargs --arg-file="$F" rm')).toMatchObject(fromInput)
   // One whose head can't say where the option ends hides where the command starts.
