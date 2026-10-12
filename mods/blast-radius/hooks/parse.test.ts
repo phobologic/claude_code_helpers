@@ -115,10 +115,10 @@ test('braces that are quoted, escaped, unclosed or hold no list or sequence stay
   expect(paths('X={a,b}; rm "$X"')).toEqual(['{a,b}'])
   expect(paths('export X={a,b}; rm "$X"')).toEqual(['b'])
   expect(paths('rm -rf ${HOME:-{a,b}}')).toEqual([HOME])
-  // An escaped , makes no list, and after a .. that makes no sequence the word stays as
-  // written, as in bash 3.2.
-  expect(paths('rm {1..2\\,x} {a..b.} {a..b.}{c,d} {a,b}{c..d.}{e,f}')).toEqual([
-    '{1..2,x}', '{a..b.}', '{a..b.}{c,d}', 'a{c..d.}{e,f}', 'b{c..d.}{e,f}',
+  // An escaped , makes no list, and a .. that makes no sequence leaves the word as
+  // written when nothing after it would expand.
+  expect(paths('rm {1..2\\,x} {a..b.} {a,b}{c..d.} {a..b.}{c}')).toEqual([
+    '{1..2,x}', '{a..b.}', 'a{c..d.}', 'b{c..d.}', '{a..b.}{c}',
   ])
   // Braces inside a substitution are its command's own: they make one word, not two.
   const what = (command: string) => (only(command) as { what: string }).what
@@ -140,9 +140,26 @@ test('braces that make too many words, nest too deep or that shells read differe
   const nest = (n: number): string => (n === 0 ? 'z' : `{${n},${nest(n - 1)}}`)
   expect(only(`rm ${nest(8)}`)).toMatchObject({ op: 'delete', paths: ['8', '7', '6', '5', '4', '3', '2', '1', 'z'] })
   expect(what(`rm ${nest(9)}`)).toContain('has braces nested too deep to read')
-  for (const seq of ['{1..9..2}', '{01..10}', '{1..010}', '{-01..1}', '{a..e..2}', '{a..Z}', '{Y..b}', '{1..99999999999999999999}']) {
+  for (const seq of [
+    '{1..9..2}', '{01..10}', '{1..010}', '{-01..1}', '{a..e..2}', '{a..Z}', '{Y..b}', '{1..99999999999999999999}',
+    '{4294967296..4294967297}', '{2147483647..2147483648}', '{-2147483649..-2147483648}',
+  ]) {
     expect({ seq, what: what(`rm -rf x${seq}`) }).toEqual({ seq, what: `x${seq} has a brace sequence Blast Radius doesn't expand` })
   }
+  // bash 3.2 wraps a number past 32 bits, but those up to it are read as written.
+  expect(only('rm -rf x{2147483646..2147483647}')).toMatchObject({ op: 'delete', paths: ['x2147483646', 'x2147483647'] })
+  expect(only('rm -rf x{-2147483648..-2147483647}')).toMatchObject({ op: 'delete', paths: ['x-2147483648', 'x-2147483647'] })
+  expect((only('rm x{+1..2}') as { paths: string[] }).paths).toEqual(['x1', 'x2'])
+  // After braces that make nothing, bash 3.2 stops, but bash 4+ and zsh go on: in zsh
+  // rm -rf [{a..s.}]{rc,zz} deletes src.
+  for (const word of ['[{a..s.}]{rc,zz}', '{a..b.}{c,d}', '{a,b}{c..d.}{e,f}', '{a..b.}{1..2}', '{a..b.}{c..d.}{e,f}']) {
+    expect({ word, what: what(`rm -rf ${word}`) }).toEqual({ word, what: `${word} has braces that bash 3.2 and later shells expand differently` })
+  }
+  // bash 3.2 decodes $'...' before brace expansion, so its , can make a list: there
+  // rm -rf {.[..$'\x2c'g]it} deletes .git.
+  expect(what("rm -rf {.[..$'\\x2c'g]it}")).toBe("{.[..$'\\x2c'g]it} has $'...' in braces, which bash 3.2 decodes first")
+  expect(what("rm -rf {a..$'b'}")).toContain("has $'...' in braces")
+  expect((only("rm {a,b$'\\x2c'c} {x$'\\x2c'y}") as { paths: string[] }).paths).toEqual(['a', 'b,c', '{x,y}'])
 })
 
 test("$'...' is decoded as bash decodes it", () => {
@@ -183,14 +200,49 @@ test('an unquoted variable splits into words at spaces, tabs and newlines', () =
   expect(paths('F="X=a Y=b"; export $F; rm "$X" "$Y"')).toEqual(['a', 'b'])
   expect(paths('F="a b"; rm X=$F')).toEqual(['X=a', 'b'])
   expect(only('F="a b"; echo x > $F')).toMatchObject({ op: 'overwrite', paths: ['a b'] })
-  expect(analyze("F=$'rm a\\nrm b'; bash <<< $F").map(e => (e as { paths: string[] }).paths)).toEqual([['a'], ['b']])
+  // A here-string is read whole, as bash 4+ and zsh pass it, and split and joined with
+  // spaces, as bash 3.2 does.
+  expect(analyze("F=$'rm a\\nrm b'; bash <<< $F").map(e => (e as { paths: string[] }).paths)).toEqual([['a'], ['b'], ['a', 'rm', 'b']])
+  expect(only("F=$'rm -rf\\nsrc'; bash <<< $F")).toMatchObject({ op: 'delete', paths: ['src'], recursive: true })
+  expect(analyze("F=$'rm -rf\\nsrc'; bash <<< \"$F\"")).toEqual([])
+  expect(only('F="rm  x"; bash <<< $F')).toMatchObject({ op: 'delete', paths: ['x'] })
   // bash 3.2 goes to the first of several folders; later bash refuses, so nothing runs.
   expect(only('F="a b"; cd $F && rm x')).toMatchObject({ op: 'delete', dir: 'a', paths: ['x'] })
+  // Tabs and newlines split as spaces do.
+  expect(paths("F=$'a\\nb'; rm $F")).toEqual(['a', 'b'])
+  expect(paths("F=$'a\\tb'; rm $F")).toEqual(['a', 'b'])
+  // Next to a split, bash 3.2 drops a word left with only quoted nulls; without one it stays.
+  expect(paths("G=' a'; rm -rf ''$G")).toEqual(['a'])
+  expect(paths("H='a '; rm -rf $H''")).toEqual(['a'])
+  expect(paths('X=; G=" a"; rm -rf "$X"$G')).toEqual(['a'])
+  expect(paths("G='a b'; rm -rf ''$G")).toEqual(['a', 'b'])
+  expect(analyze("G=' '; rm -rf ''$G")).toEqual([])
+  expect(paths("E=; rm -rf ''$E")).toEqual([''])
+})
+
+test('zsh splits no variable into words, and drops one that is unquoted and empty', () => {
+  const paths = (command: string) => (only(command) as { paths: string[] }).paths
+  expect(paths(`zsh -c 'F="a b"; rm $F'`)).toEqual(['a b'])
+  expect(paths(`zsh <<'EOF'\nF="a b"; rm -rf $F\nEOF`)).toEqual(['a b'])
+  expect(paths(`zsh -c 'F="a b"; for f in $F; do rm $f; done'`)).toEqual(['a b'])
+  expect(paths(`zsh -c 'IFS=:; F="a b"; rm $F'`)).toEqual(['a b'])
+  expect(paths(`zsh -c 'F="a b"; echo $(rm $F)'`)).toEqual(['a b'])
+  expect(analyze(`zsh -c 'E=; rm -rf $E'`)).toEqual([])
+  expect(paths(`zsh -c "E=; rm -rf ''\\$E"`)).toEqual([''])
+  // A shell it starts splits again, as does the line around it.
+  expect(paths(`zsh -c 'F="a b"; bash -c "rm \\$F"'`)).toEqual(['a', 'b'])
+  expect(analyze(`F="a b"; zsh -c 'rm $F'; rm $F`).map(e => (e as { paths: string[] }).paths)).toEqual([['a b'], ['a', 'b']])
 })
 
 test('splitting that depends on the pass or on a changed $IFS is unknown', () => {
   const what = (command: string) => (only(command) as { what: string }).what
   expect(what('for f in "a b" c; do rm $f; done')).toBe('$f has several values that split into words')
+  expect(what("for f in $'a\\tb' c; do rm $f; done")).toBe('$f has several values that split into words')
+  expect(what("for f in $'a\\nb' c; do rm $f; done")).toBe('$f has several values that split into words')
+  // Every command that reads expanded words splits them: git, cd and bash -c too.
+  expect(only('for f in "a b" c; do git checkout -- $f; done')).toMatchObject({ op: 'unknown' })
+  expect(only('for f in "a b" c; do cd $f; rm x; done')).toMatchObject({ op: 'unknown' })
+  expect(only('for f in "a b" c; do bash -c $f; done')).toMatchObject({ op: 'unknown' })
   expect(only('for f in "a b" c; do rm "$f"; done')).toMatchObject({ op: 'delete', paths: ['a b', 'c'] })
   expect(only('for f in a c; do rm $f; done')).toMatchObject({ op: 'delete', paths: ['a', 'c'] })
   expect(only('for f in "a b" c; do echo x > $f; done')).toMatchObject({ op: 'overwrite', paths: ['a b', 'c'] })
