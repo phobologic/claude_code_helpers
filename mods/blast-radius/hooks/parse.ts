@@ -661,6 +661,7 @@ interface Grammar {
   chdir?: string[] // options whose value is the folder the command runs in
   operands?: number // words between the options and the command: timeout's duration
   sub?: string // the subcommand that runs a command (`uv run`); any other runs none
+  stdin?: string // the interpreter a lone `-` runs on stdin (`uv run -`)
 }
 
 interface Opt {
@@ -698,15 +699,15 @@ function optionWord(w: Word, flag: string, g: Grammar): { opts: Opt[]; next: str
 }
 
 // The options from words[k], up to the first word that isn't one or just past `--`, and
-// the index after them. A lone `-` is skipped too: no wrapper runs a command by that name,
-// and to env it means -i.
+// the index after them. A lone `-` is an operand, as getopt reads it: env takes it as -i,
+// and `uv run -` runs stdin as Python.
 function readOpts(words: Word[], k: number, g: Grammar): { opts: Opt[]; k: number } {
   const opts: Opt[] = []
   while (k < words.length) {
     const w = words[k] as Word
     const head = w.parts[0]
     const flag = head?.kind === 'lit' ? head.text : ''
-    if (!flag.startsWith('-')) break
+    if (!flag.startsWith('-') || text(w) === '-') break
     k += 1
     if (text(w) === '--') break
     const found = optionWord(w, flag, g)
@@ -740,7 +741,9 @@ function grammar(g: Grammar): Wrapper {
       opts = opts.concat(more.opts)
       k = more.k
     }
-    return { words: words.slice(k + (g.operands ?? 0)), dir: moveDir(dir, cmdName(words[0]) ?? '', opts, g.chdir ?? []) }
+    const rest = words.slice(k + (g.operands ?? 0))
+    if (g.stdin !== undefined && text(rest[0]) === '-') rest.unshift(literal(g.stdin))
+    return { words: rest, dir: moveDir(dir, cmdName(words[0]) ?? '', opts, g.chdir ?? []) }
   }
 }
 
@@ -756,8 +759,10 @@ function env(words: Word[], dir: DirState, ctx: Ctx): Wrapped {
     else walk(v.values.join(' '), child(ctx))
     return { words: [], dir }
   }
-  let j = k
-  while (j < words.length && isAssign(words[j] as Word)) j += 1
+  // A `-` right after the options means -i. env takes any word with `=` in it, once the
+  // shell has removed the quotes, as an assignment: `env "X=a b" cmd`.
+  let j = text(words[k]) === '-' ? k + 1 : k
+  while (j < words.length && litText(words[j] as Word).includes('=')) j += 1
   return { words: words.slice(j), dir: moveDir(dir, 'env', opts, ENV.chdir ?? []) }
 }
 
@@ -799,6 +804,7 @@ const UV: Grammar = {
     '--trusted-host', '--upgrade-group', '--upgrade-package', '--with', '--with-editable', '--with-requirements',
   ],
   chdir: ['--directory'],
+  stdin: 'python',
 }
 // Poetry 2 runs the command in -C's folder; -P only says where the project is.
 const POETRY: Grammar = { sub: 'run', short: 'CP', long: ['--directory', '--project'], chdir: ['-C', '--directory'] }

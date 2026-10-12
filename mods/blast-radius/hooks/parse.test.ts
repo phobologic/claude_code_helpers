@@ -133,6 +133,11 @@ test('uv run, poetry run, flock and ionice are judged by the command they run', 
     'ionice --class idle -- rm -rf ~/x',
   ])
   expect(only("uv run python - <<'EOF'\nimport shutil\nshutil.rmtree('x')\nEOF")).toMatchObject({ op: 'unknown' })
+  // A lone `-` runs stdin as Python.
+  const body = "\nimport shutil\nshutil.rmtree('/opt/x')\nEOF"
+  sameAs(`python - <<'EOF'${body}`, [`uv run - <<'EOF'${body}`, `uv run --no-project -- - <<'EOF'${body}`])
+  expect(only(`uv run - <<'EOF'${body}`)).toMatchObject({ op: 'unknown', what: 'inline python code that deletes files' })
+  expect(analyze(`poetry run - <<'EOF'${body}`)).toEqual([])
   expect(only('flock /tmp/l -c "$CMD"')).toMatchObject({ op: 'unknown' })
   // Other subcommands name packages, not commands; flock on a file descriptor runs nothing.
   for (const command of ['uv sync', 'uv remove rm build', 'poetry add rm build', 'uv run', 'flock 9', 'flock -u 9', 'flock /tmp/l -c "echo hi"']) {
@@ -163,8 +168,19 @@ test('every wrapper skips its own options, in any form, to find its command', ()
     'env -i A=1 B=2 rm -rf /opt/x',
     'env - rm -rf /opt/x',
     'env -iu HOME -P /bin rm -rf /opt/x',
+    'env -i - A=1 rm -rf /opt/x',
     "env -S'rm -rf /opt/x'",
+    "env --split-string='rm -rf /opt/x'",
+    "env --split-string 'rm -rf /opt/x'",
+    'env "X=1" rm -rf /opt/x',
+    "env 'X=a b' rm -rf /opt/x",
+    'env "PATH=$PATH:/x" rm -rf /opt/x',
     'sudo env --unset X timeout 5 nice -n 5 rm -rf /opt/x',
+    'stdbuf --output L rm -rf /opt/x',
+    '/usr/bin/time --output log rm -rf /opt/x',
+    "/usr/bin/time --format '%e' rm -rf /opt/x",
+    'flock --wait 5 /tmp/l rm -rf /opt/x',
+    'ionice --classdata 7 rm -rf /opt/x',
   ])
   expect(only('env -S "$CMD"')).toMatchObject({ op: 'unknown', what: 'env -S: $CMD is not set on this command line' })
   // command -v and -V print where each name is found.
