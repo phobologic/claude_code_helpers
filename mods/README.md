@@ -57,8 +57,14 @@ a session loads it from a folder you own.
   `git checkout -- <file>` are never asked about. The worktree the session itself runs
   in, and worktrees kept outside the repository folder, get full protection. Branches,
   stashes, reflogs and objects belong to the whole repository, so `git branch -D`,
-  `git stash clear` and the like are judged the same from a scratch worktree as from
-  the main checkout, and `git worktree remove` by the worktree it removes.
+  `git checkout -B`, `git stash clear` and the like are judged the same from a scratch
+  worktree as from the main checkout, and `git worktree remove` by the worktree it
+  removes.
+- A folder that doesn't exist yet (`mkdir -p x && cd x && ...`) holds only what the
+  command makes, so what runs there passes. It still holds when the command links or
+  moves files there, a path climbs out with `..`, or a git command could reach work or
+  history that exists now (a new subfolder of a checkout, `git branch -D` in a worktree
+  the command adds).
 - Ignored files are free to delete except `.env*` (not `.env.example` and kin),
   `*.db`, `*.sqlite` and `*.sqlite3`. Folders like `node_modules` and `.venv` are never
   searched.

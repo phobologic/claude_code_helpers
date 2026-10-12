@@ -40,6 +40,11 @@ before changing anything.
   `git checkout -m`.
 - Never touch the main repo path or another worktree. Other implementers are
   working in parallel.
+- Throwaway files (probe scripts, mutation scripts, test repos) go in the
+  worktree's `.tmp/` or under `$TMPDIR`, never in your home folder. If a probe
+  needs a folder that is not a temp folder, make it under `$TMPDIR` anyway and
+  point the code under test at it, the way the project's own tests use a fake
+  home folder.
 
 ## Understand the ticket
 

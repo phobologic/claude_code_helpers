@@ -157,6 +157,7 @@ def main():
         worktrees(s)
         other_repos(s)
         subagent_folders(s)
+        new_folders(s)
         odd_cases(s)
         letter_case(s)
     finally:
@@ -850,9 +851,37 @@ def subagent_folders(s):
            s.judge(delete("README.md", dir=s.repo), lostCwd="the subagent ran cd -"), [])
 
 
+def held(name, v):
+    check(name, [f["kind"] for f in v["findings"]] == ["unknown"], v)
+
+
+def new_folders(s):
+    new = os.path.join(s.tmp, "new", "g1")
+    expect("a folder that doesn't exist yet has nothing to lose", s.judge(delete("x", dir="no/such/dir")), [])
+    expect("  a glob there matches nothing", s.judge(delete("*", dir=new)), [])
+    expect("  git checkout in a new temp folder passes", s.judge(git("checkout", "-q", "side", dir=new)), [])
+    expect("  an absolute path from it is still judged", s.judge(delete(os.path.join(s.outside, "notes.txt"), dir=new)),
+           [("outside", os.path.join(s.outside, "notes.txt"))])
+    held("  a path that climbs out of it holds", s.judge(delete("../../x", dir=new)))
+    v = s.judge(find(".", "-name", "x", "-print", dir=new))
+    held("  find there holds, since it can't be dry-run", v)
+    check("  and says why", "doesn't exist yet" in v["findings"][0]["detail"], v["findings"])
+    held("  git on history there holds (a new worktree shares it)", s.judge(git("branch", "-D", "side", dir=new)))
+    write(s.p("src", "a.py"), "changed\n")
+    held("  git reset --hard in a new subfolder of the checkout holds", s.judge(git("reset", "--hard", dir="no/such")))
+    held("  so does git -C into one", s.judge(git("-C", "no/such", "reset", "--hard")))
+    sh("git", "checkout", "--", "src/a.py", cwd=s.repo)
+    link = os.path.join(s.tmp, "link")
+    held("  a folder the command links there holds", s.judge(copy("ln", [s.repo], link), delete("*", dir=link)))
+    held("  git in one holds too", s.judge(copy("ln", [s.repo], link), git("reset", "--hard", dir=link)))
+    moved = os.path.join(s.tmp, "moved")
+    held("  a folder the command moves there holds", s.judge(copy("mv", [s.outside], moved), delete("*", dir=os.path.join(moved, "dir"))))
+    copied = os.path.join(s.tmp, "copied")
+    expect("  a folder the command copies real files to passes", s.judge(copy("cp", ["src"], copied), delete("*", dir=copied)), [])
+    held("  a copy of a link holds", s.judge(copy("cp", ["link"], copied), delete("*", dir=copied)))
+
+
 def odd_cases(s):
-    v = s.judge(delete("x", dir="no/such/dir"))
-    check("a cd into a folder that doesn't exist holds", [f["kind"] for f in v["findings"]] == ["unknown"], v)
     v = s.judge({"op": "unknown", "what": "xargs rm: what it deletes comes from its input", "cmd": "ls | xargs rm"})
     check("an unknown effect holds", v["hold"] and v["findings"][0]["cmd"] == "ls | xargs rm", v)
     plain = os.path.join(s.root, "plain")
@@ -961,8 +990,9 @@ def spelled_by_the_caller(s):
     expect("  and the home folder shows as ~", s.judge(delete("~/.zshrc"), home=home), [("outside", "~/.zshrc")])
     write(os.path.join(s.tmp, "y"))
     expect("with the temp folder in another case, its files are free", s.judge(delete(os.path.join(s.tmp, "y")), temp=temp), [])
+    # A delete there passes now (nothing is in it yet), but find still holds and names it.
     expect("from a working folder in another case, a missing folder is named from the repository",
-           s.judge(delete("x", dir="no/such/dir"), cwd=os.path.join(s.root, "REPO")), [("unknown", "no/such/dir")])
+           s.judge(find(".", "-delete", dir="no/such/dir"), cwd=os.path.join(s.root, "REPO")), [("unknown", "no/such/dir")])
     plain = os.path.join(s.root, "plain")
     write(os.path.join(plain, "f.txt"))
     expect("outside git, a session folder in another case holds its files as the project's",

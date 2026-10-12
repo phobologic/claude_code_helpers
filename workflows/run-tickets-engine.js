@@ -448,8 +448,9 @@ Conditions the implementer says it broke one at a time, and what caught each (st
 re-check at least one of these, and test every condition in the diff that is missing from this list):
 ${conditionLines(conditions)}
 
-Read-only apart from tk: do not edit files or commit. Mutate code only in a \`review-scratch ${slot}\` copy;
-commands for it may \`cd\` to the path it prints (use the literal path: shell variables do not persist between calls). Write the round
+Leave the worktree's code untouched: no commits, and no edits outside its .tmp/ folder (for probe scripts and notes). Mutate code only in a \`review-scratch ${slot}\` copy,
+with the Edit tool or a script you wrote in .tmp/ or under $TMPDIR, never inline interpreter code (\`perl -pi -e\`, \`python3 -c\`): a safety
+check holds that for a person. Commands for the copy may \`cd\` to the path it prints (use the literal path: shell variables do not persist between calls). Write the round
 verdict note on the ticket, then return the verdict with every field your instructions require, including
 \`reviewed_sha\` from \`git rev-parse --short ${branchOf(t)}\`.`
 }
