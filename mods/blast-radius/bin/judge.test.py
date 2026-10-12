@@ -174,7 +174,16 @@ def overwrites_and_copies(s):
     expect("a new file outside the repository is free", s.judge(overwrite("~/new.txt")), [])
     expect("overwriting a file in the repository is free", s.judge(overwrite("README.md")), [])
     expect("overwriting git's own files holds", s.judge(overwrite(".git/config")), [("git", ".git/config")])
-    expect("/dev is never a file to lose", s.judge(overwrite("/dev/null")), [])
+    for sink in ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/fd/1", "/dev/fd/3"):
+        expect(f"writing to {sink} loses nothing", s.judge(overwrite(sink)), [])
+    expect("cp to /dev/stdout loses nothing", s.judge(copy("cp", ["README.md"], "/dev/stdout")), [])
+    v = s.judge(overwrite("/dev/zero"))
+    expect("writing to any other device holds, as outside the repository", v, [("outside", "/dev/zero")])
+    check("  and says it is a device", any("(a device)" in f["detail"] for f in v["findings"]), v["findings"])
+    if os.path.exists("/dev/disk2"):  # the disk from the bug report, where this machine has one
+        expect("dd of=/dev/disk2 holds", s.judge(overwrite("/dev/disk2")), [("outside", "/dev/disk2")])
+        expect("cp onto /dev/disk2 holds", s.judge(copy("cp", ["README.md"], "/dev/disk2")), [("outside", "/dev/disk2")])
+    expect("only a number after /dev/fd/ is a stream", s.judge(overwrite("/dev/fd/../zero")), [("outside", "/dev/zero")])
     expect("mv onto an existing file outside holds", s.judge(copy("mv", ["README.md"], "~/.zshrc")), [("outside", "~/.zshrc")])
     write(os.path.join(s.outside, "README.md"))
     expect("mv into a folder that has the name holds", s.judge(copy("mv", ["README.md"], s.outside)), [("outside", os.path.join(s.outside, "README.md"))])

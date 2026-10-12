@@ -46,8 +46,15 @@ const INTERPRETERS = /^(python[0-9.]*|pypy[0-9.]*|node|nodejs|perl|ruby|deno|bun
 // Inline code that deletes files: unknown, since its targets are only known when it runs.
 const CODE_DELETES =
   /rmtree|unlink|\brmSync|\brmdir|rimraf|remove_dir_all|removedirs|os\.remove|Deno\.remove|FileUtils\.rm|File\.delete|\bfs\.rm\b|promises\.rm\b|shutil\.move|send2trash|\brm\s+-|['"]rm['"]/
+// Where a write loses nothing: the null device, the terminal and the command's own
+// streams. Any other /dev path (a disk, say) goes to the judge like any other file.
+const SINK = /\/dev\/(?:null|stdout|stderr|tty|fd\/[0-9]+)/
+const SINK_PATH = new RegExp(`^${SINK.source}$`)
+const isSink = (p: string): boolean => SINK_PATH.test(p)
 // Text that could delete or clobber, for a command whose words cannot be expanded.
-const DESTRUCTIVE = /\b(rm|unlink|shred|rmtree|truncate|dd)\b|-delete\b|>(?![>&]|\s*\/dev\/)/
+const DESTRUCTIVE = new RegExp(
+  String.raw`\b(rm|unlink|shred|rmtree|truncate|dd)\b|-delete\b|>(?![>&]|\s*${SINK.source}(?=[\s;&|()<>'"]|$))`,
+)
 // Command text that can't be expanded and could do anything: it looks destructive, or
 // the command itself is a variable or substitution (`sh -c "$CMD"`).
 const opaque = (raw: string): boolean => DESTRUCTIVE.test(raw) || /^["']?(\$|`)/.test(raw.trim())
@@ -621,7 +628,7 @@ function redirect(r: Redir, ctx: Ctx, raw: string): void {
     ctx.out.push({ op: 'unknown', what: `writes to ${short(r.target.raw)}: ${v.unknown}`, cmd: short(raw) })
     return
   }
-  const paths = v.values.filter(p => !p.startsWith('/dev/'))
+  const paths = v.values.filter(p => !isSink(p))
   if (paths.length > 0) emit(ctx, ctx.dir, paths, raw, dir => ({ op: 'overwrite', dir, paths, cmd: short(raw) }))
 }
 
@@ -818,7 +825,7 @@ function positionals(args: Word[], valued: Set<string>): Word[] {
 
 function overwrite(files: Word[], dir: DirState, ctx: Ctx, raw: string): void {
   const paths = pathsOf(files, ctx, raw)
-  const kept = (paths ?? []).filter(p => p !== '-' && !p.startsWith('/dev/'))
+  const kept = (paths ?? []).filter(p => p !== '-' && !isSink(p))
   if (kept.length > 0) emit(ctx, dir, kept, raw, d => ({ op: 'overwrite', dir: d, paths: kept, cmd: short(raw) }))
 }
 

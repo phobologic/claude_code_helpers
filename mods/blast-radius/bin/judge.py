@@ -29,6 +29,7 @@ import glob
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -48,6 +49,9 @@ VENDORED = {
     "DerivedData", "site-packages",
 }
 FIND_ACTIONS = {"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"}
+# Where a write loses nothing: the null device, the terminal and the command's own
+# streams. Any other /dev path (a disk, say) is judged like any file outside the repository.
+SINK = re.compile(r"/dev/(?:null|stdout|stderr|tty|fd/[0-9]+)")
 PLACEHOLDER = re.compile("\x01(\\w+)\x01")
 
 # git runs without the caller's repository overrides, and never takes index.lock for
@@ -201,6 +205,9 @@ def resolve_delete(p):
 def describe(rp):
     if os.path.islink(rp):
         return "a symlink"
+    mode = os.lstat(rp).st_mode
+    if stat.S_ISBLK(mode) or stat.S_ISCHR(mode):
+        return "a device"  # its size says nothing about what is on it
     if not os.path.isdir(rp):
         return "a file, " + size(os.lstat(rp).st_size)
     files, total, capped = 0, 0, False
@@ -346,7 +353,7 @@ def judge_in_repo(ctx, owner, entries):
 
 
 def judge_overwrite(ctx, p):
-    if p.startswith("/dev/"):
+    if SINK.fullmatch(p):
         return []
     rp = os.path.realpath(p)  # a write goes through links to their target
     if not os.path.exists(rp):
