@@ -369,8 +369,9 @@ def throwaway_history(s, copy_repo):
     copy_wt = os.path.join(s.root, "copy-wt")
     sh("git", "worktree", "add", "-q", "-b", "copy-wt", copy_wt, cwd=copy_repo)
     write(os.path.join(copy_wt, "README.md"), "kept outside\n")
-    expect("a throwaway copy's worktree kept outside a temp folder still holds its changes on remove --force",
-           s.judge(git("worktree", "remove", "--force", copy_wt), cwd=copy_repo), [("uncommitted", os.path.join(copy_wt, "README.md"))])
+    # Not one of the session's worktrees, so the judge holds it without running git there.
+    expect("a throwaway copy's worktree kept outside a temp folder still holds on remove --force",
+           s.judge(git("worktree", "remove", "--force", copy_wt), cwd=copy_repo), [("history", copy_wt)])
 
     other = os.path.join(s.root, "other-repo")
     sh("git", "init", "-q", "-b", "main", other, cwd=s.root)
