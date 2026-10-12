@@ -158,6 +158,7 @@ def main():
 def deletes(s):
     expect("deleting a committed, unchanged file passes", s.judge(delete("README.md")), [])
     write(s.p("src", "new.py"))
+    expect("an untracked file elsewhere doesn't hold a delete", s.judge(delete("README.md")), [])
     expect("deleting an untracked file holds", s.judge(delete("src/new.py")), [("uncommitted", "src/new.py")])
     expect("deleting a folder holding an untracked file holds", s.judge(delete("src")), [("uncommitted", "src/new.py")])
     os.remove(s.p("src", "new.py"))
@@ -308,6 +309,19 @@ def owners(s):
         os.stat, j.toplevel = real_stat, real_toplevel
     check("a folder on another file system gets git's own answer there, not its parent's", got is None, got)
     shutil.rmtree(mount)
+    ctx = SimpleNamespace(owners={})
+    os.makedirs(s.p("src", "deep"))
+    first = j.owner_of(ctx, s.p("src", "deep"))
+    os.rmdir(s.p("src", "deep"))
+    looks, real_lstat = [], os.lstat
+    os.stat = lambda p, *a, **kw: looks.append(p) or real_stat(p, *a, **kw)
+    os.lstat = lambda p, *a, **kw: looks.append(p) or real_lstat(p, *a, **kw)
+    try:
+        again = j.owner_of(ctx, s.p("src"))
+    finally:
+        os.stat, os.lstat = real_stat, real_lstat
+    check("a folder passed on the way up is answered later without looking at the disk",
+          first == again == s.repo and not looks, (first, again, looks))
     out = []
     t = threading.Thread(target=lambda: out.append(j.owner_of(SimpleNamespace(owners={}), "/")), daemon=True)
     t.start()
