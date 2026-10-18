@@ -177,9 +177,11 @@ test('resolveRole stores the role only when it differs from the stored one', asy
   const same = fake({ env: SIDE_ENV, stored: { ...SIDE } })
   expect(await resolveRole(same.$)).toStrictEqual(SIDE)
   expect(same.seen.sets).toEqual([])
+  // Each field is compared: a stored role that differs in any one of them is replaced.
   for (const old of [
     { kind: 'side', sideTicket: 'x-cd34', herdrPaneId: 'w1:p1' },
     { kind: 'side', sideTicket: 'x-ab12', herdrPaneId: 'w2:p1' },
+    { kind: 'main', sideTicket: 'x-ab12', herdrPaneId: 'w1:p1' },
     { kind: 'main', herdrPaneId: 'w1:p1' },
   ] as Role[]) {
     const changed = fake({ env: SIDE_ENV, stored: old })
@@ -316,7 +318,9 @@ test('AC R1: a ticket found stays found; a missing one is looked for again only 
 })
 
 test('no tickets dir, or a folder named like a ticket file, is no ticket', async () => {
-  expect(await isTicket(fake({ root: '/nowhere' }).$, 'x-ab12')).toBe(false)
+  const nowhere = fake({ root: '/nowhere' })
+  expect(await isTicket(nowhere.$, 'x-ab12')).toBe(false)
+  expect(nowhere.seen.stats).toEqual(['/nowhere/.tickets', '/.tickets'])
   const odd = fake({ root: '/r2', files: { '/r2/.tickets': { kind: 'dir' }, '/r2/.tickets/x-ab12.md': { kind: 'dir' } } })
   expect(await isTicket(odd.$, 'x-ab12')).toBe(false)
 })
