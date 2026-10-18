@@ -1,12 +1,36 @@
 #!/usr/bin/env python3
 """
 Usage: run-tickets-status [--json | --archive] [run-id]
+       run-tickets-status [--ticket <id>] [--watch <N>] [run-id]
+       run-tickets-status --find-ticket <id>
        run-tickets-status --list
 
 --archive writes the --json report to ~/.claude/run-history/<repo>/<run-id>.json.
 Claude Code deletes the journal and agent logs after cleanupPeriodDays (30 by
 default), so the archive is what later analysis of effort, tokens, and rework
 across runs reads.
+
+--ticket <id> limits the text report to its opening lines (the run, its timing,
+MERGES HALTED when present) and that ticket's block. A ticket the run does not
+hold prints "ticket <id> is not in run <run-id>" on stderr and exits 1.
+
+--watch <N> clears the screen and prints the text report again every N seconds
+(a whole number, 1 or more) until Ctrl-C, then exits 0. A round that cannot be
+reported (no such run, not in a repository, the ticket not in the run, a
+journal caught mid-write) prints why, and the next round tries again.
+
+--find-ticket <id> says whether a /run-tickets run is working on the ticket. It
+looks among this repo's runs (those --list shows) for the most recently
+launched one whose state is running (a run whose workflow died without
+finishing included) and which holds the ticket with an outcome other than
+merged. Found: it prints {"run_id": "<run-id>", "state": "running"} and exits 0.
+None: it prints nothing and exits 1. When it cannot tell (not in a git
+repository, an unreadable run record, any other error) it prints the reason on
+stderr and exits 2. A run record with no runId yet (the launch is still being
+written) is skipped, and so is a run that has a record but no journal yet
+(state launching).
+
+A usage error exits 2.
 
 Status snapshot of a /run-tickets workflow run, built from records rather than
 agent prose:
@@ -31,13 +55,17 @@ by run id or repo path, this works from any Claude Code session, not only the
 one that launched the run.
 """
 
+import contextlib
 import glob
+import io
 import json
 import os
 import re
 import sys
+import time
 from datetime import datetime, timezone
 
+USAGE = __doc__.strip().split("\n\n")[0]
 PROJECTS = os.path.expanduser("~/.claude/projects")
 HISTORY = os.path.expanduser("~/.claude/run-history")
 LABEL_RE = re.compile(r"^(impl|ac|review|merge) (\S+)(?: r(\d+))?$")
@@ -45,13 +73,25 @@ STEP_NAMES = {"impl": "implementing", "ac": "verifying AC", "review": "reviewing
 STEP_SHORT = {"impl": "impl", "ac": "AC", "review": "review", "merge": "merge"}
 # The workflow was named run-tickets until 2026-10-05; finished-run metadata keeps the name it ran under.
 WORKFLOW_NAMES = ("run-tickets-engine", "run-tickets")
+NEVER = datetime.min.replace(tzinfo=timezone.utc)
+# Cursor home, then clear the screen and its scrollback, as clear(1) does.
+CLEAR = "\033[H\033[2J\033[3J"
 
 
-def load_json(path):
+def load_json(path, strict=False):
+    """The file's JSON, or None when it is missing or cannot be read or parsed.
+
+    strict raises instead for a file that exists but cannot be read or parsed.
+    A file removed since it was listed is still None: its run was cleaned up.
+    """
     try:
         with open(path) as f:
             return json.load(f)
-    except (OSError, json.JSONDecodeError):
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError) as e:
+        if strict:
+            raise ValueError(f"cannot read {path}: {e}") from e
         return None
 
 
@@ -93,11 +133,16 @@ def fmt_clock(dt):
 
 # ---------- finding runs ----------
 
-def run_candidates(root):
-    """Every run of this repo keyed by run id: its run record and/or final metadata."""
+def run_candidates(root, strict=False):
+    """Every run of this repo keyed by run id: its run record and/or final metadata.
+
+    strict raises on a run record that cannot be read or parsed rather than
+    skipping it. Metadata files are skipped either way: they cover every repo
+    and workflow, so one torn file elsewhere says nothing about this repo.
+    """
     runs = {}
     for path in glob.glob(os.path.join(root, ".worktrees", "run-*.json")):
-        rec = load_json(path)
+        rec = load_json(path, strict)
         if rec and rec.get("runId"):
             runs.setdefault(rec["runId"], {})["record"] = rec
             runs[rec["runId"]]["mtime"] = os.path.getmtime(path)
@@ -134,12 +179,12 @@ def find_journal(run_id):
     return matches[0] if matches else None
 
 
-def read_journal(run_id):
-    path = find_journal(run_id)
-    if not path:
-        return None, []
-    with open(path) as f:
-        return path, [json.loads(line) for line in f if line.strip()]
+def read_events(journal_path):
+    """The journal's events in order; none before the workflow has written one."""
+    if not journal_path:
+        return []
+    with open(journal_path) as f:
+        return [json.loads(line) for line in f if line.strip()]
 
 
 # The journal's last write comes before the metadata is written; allow for clock and filesystem slack.
@@ -165,6 +210,75 @@ def superseded(final, journal_path):
         return os.path.getmtime(journal_path) > written + STALE_AFTER_SECONDS
     except OSError:
         return False
+
+
+def load_run(run_id, entry):
+    """A run's args, final metadata, run record and journal path, and its state.
+
+    The report and --find-ticket both take the state from here, so they never
+    disagree on whether a run is still running.
+    """
+    final, record = entry.get("final"), entry.get("record")
+    args = (final or {}).get("args") or (record or {}).get("args") or {}
+    journal_path = find_journal(run_id)
+    if superseded(final, journal_path):
+        final = None  # an earlier pass's result; the relaunched run is still going
+    state = "finished" if final is not None else ("running" if journal_path else "launching")
+    return {"final": final, "record": record, "args": args, "journal_path": journal_path,
+            "result": (final or {}).get("result"), "state": state}
+
+
+def launch_time(final, record):
+    """When the run started: the finished run's start, else the run record's launch time."""
+    if final and final.get("startTime"):
+        return from_ms(final["startTime"])
+    if record and record.get("launched"):
+        return parse_ts(record["launched"])
+    return None
+
+
+def running_run_holding(ticket_id):
+    """The id of the most recently launched running run that holds the ticket unmerged, or None.
+
+    This is the rule for "the ticket is in a running run": a run of this repo
+    whose state is running and which holds the ticket with an outcome other than
+    merged. Raises when it cannot tell.
+    """
+    held = []
+    for run_id, entry in run_candidates(repo_root(), strict=True).items():
+        run = load_run(run_id, entry)
+        # Only a run holding the ticket needs its journal read, so a torn journal elsewhere cannot fail the lookup.
+        if run["state"] != "running" or ticket_id not in {t["id"] for t in run["args"].get("tickets", [])}:
+            continue
+        tickets, _, _ = ticket_states(run["args"], run["result"], read_events(run["journal_path"]))
+        if any(t["id"] == ticket_id and t["outcome"] != "merged" for t in tickets):
+            held.append((launch_time(run["final"], run["record"]) or NEVER, run_id))
+    return max(held)[1] if held else None
+
+
+def failure(e):
+    """One line naming an error that stopped a lookup or a round."""
+    return f"run-tickets-status: {type(e).__name__}: {e}"
+
+
+def find_ticket(ticket_id):
+    """--find-ticket's exit code.
+
+    0 after printing the running run that holds the ticket, 1 when none does,
+    and 2 after printing the reason on stderr when the lookup fails.
+    """
+    try:
+        run_id = running_run_holding(ticket_id)
+    except SystemExit as e:  # repo_root: not inside a git repository
+        print(e.code, file=sys.stderr)
+        return 2
+    except Exception as e:
+        print(failure(e), file=sys.stderr)
+        return 2
+    if run_id is None:
+        return 1
+    print(json.dumps({"run_id": run_id, "state": "running"}))
+    return 0
 
 
 # ---------- ticket state ----------
@@ -505,36 +619,54 @@ def list_runs():
         print(f"{run_id}  {fmt_clock(started)}  {summary}  [{ids}]")
 
 
-def main(argv):
-    if "--list" in argv:
-        list_runs()
-        return
-    as_json = "--json" in argv
-    rest = [a for a in argv if not a.startswith("--")]
-    run_id, entry = find_run(rest[0] if rest else None)
-    final, record = entry.get("final"), entry.get("record")
-    args = (final or {}).get("args") or (record or {}).get("args") or {}
-    journal_path, events = read_journal(run_id)
-    if superseded(final, journal_path):
-        final = None  # an earlier pass's result; the relaunched run is still going
-    result = (final or {}).get("result")
-    finished = final is not None
+def agent_seconds_by_step(tickets, integration_span):
+    """Agent time by step across the run: where the hours actually went."""
+    totals = {}
+    for t in tickets:
+        for kind, secs in ((t["timing"] or {}).get("steps") or {}).items():
+            totals[kind] = totals.get(kind, 0) + secs
+    if integration_span:
+        totals["integration check"] = (integration_span[1] - integration_span[0]).total_seconds()
+    return totals
 
+
+def tokens_by_step(tickets):
+    tokens = {}
+    for t in tickets:
+        for s in t["steps"]:
+            tokens[s["step"]] = tokens.get(s["step"], 0) + (s.get("tokens") or 0)
+    return tokens
+
+
+def last_agent_activity(run_dir):
+    """Agent transcripts are appended on every tool call, so the newest one is
+    the best "is anything still happening" signal."""
+    stamps = [os.path.getmtime(p) for p in glob.glob(os.path.join(run_dir, "agent-*.jsonl"))] if run_dir else []
+    return datetime.fromtimestamp(max(stamps), timezone.utc).astimezone() if stamps else None
+
+
+def end_time(final, run_start):
+    """When the finished run ended; falsy while it runs."""
+    return run_start and final and final.get("durationMs") and \
+        from_ms(final["startTime"] + final["durationMs"])
+
+
+def iso_seconds(dt):
+    return dt.isoformat(timespec="seconds") if dt else None
+
+
+def build_report(run_id, run, tickets, integration, integration_agent):
+    """The report --json prints, and what the text form needs besides it."""
+    final, record, args, journal_path = (run[k] for k in ("final", "record", "args", "journal_path"))
+    result = run["result"] or {}
     run_dir = os.path.dirname(journal_path) if journal_path else None
-    tickets, integration, integration_agent = ticket_states(args, result, events)
     by_id = {t["id"]: t for t in tickets}
     for t in tickets:
-        t["status"] = describe(t, by_id, finished)
+        t["status"] = describe(t, by_id, final is not None)
 
     now = datetime.now(timezone.utc)
-    if final and final.get("startTime"):
-        run_start = from_ms(final["startTime"])
-    elif record and record.get("launched"):
-        run_start = parse_ts(record["launched"])
-    else:
-        run_start = None
-    run_end = run_start and final and final.get("durationMs") and \
-        from_ms(final["startTime"] + final["durationMs"])
+    run_start = launch_time(final, record)
+    run_end = end_time(final, run_start)
 
     dependents = dependents_of(args.get("tickets", []))
     progress = progress_by_agent(final)
@@ -544,82 +676,76 @@ def main(argv):
         t["dependents"] = dependents.get(t["id"], 0)
         t["prior_findings"] = {"fixed": t["prior_fixed"], "total": t["prior_total"]}
     integration_span = agent_span(run_dir, integration_agent) if run_dir and integration_agent else None
-
-    # Agent time by step across the run: where the hours actually went.
-    totals = {}
-    for t in tickets:
-        for kind, secs in ((t["timing"] or {}).get("steps") or {}).items():
-            totals[kind] = totals.get(kind, 0) + secs
-    if integration_span:
-        totals["integration check"] = (integration_span[1] - integration_span[0]).total_seconds()
-    tokens = {}
-    for t in tickets:
-        for s in t["steps"]:
-            tokens[s["step"]] = tokens.get(s["step"], 0) + (s.get("tokens") or 0)
-
-    # Agent transcripts are appended on every tool call, so the newest one is
-    # the best "is anything still happening" signal.
-    stamps = [os.path.getmtime(p) for p in glob.glob(os.path.join(run_dir, "agent-*.jsonl"))] if run_dir else []
-    last_activity = datetime.fromtimestamp(max(stamps), timezone.utc).astimezone() if stamps else None
+    totals = agent_seconds_by_step(tickets, integration_span)
+    tokens = tokens_by_step(tickets)
+    last_activity = last_agent_activity(run_dir)
 
     report = {
         "run_id": run_id,
-        "state": "finished" if finished else ("running" if journal_path else "launching"),
-        "started": run_start.isoformat(timespec="seconds") if run_start else None,
-        "ended": run_end.isoformat(timespec="seconds") if run_end else None,
+        "state": run["state"],
+        "started": iso_seconds(run_start),
+        "ended": iso_seconds(run_end),
         "duration_seconds": ((run_end or now) - run_start).total_seconds() if run_start else None,
-        "last_activity": last_activity.isoformat(timespec="seconds") if last_activity else None,
+        "last_activity": iso_seconds(last_activity),
         "integration_branch": args.get("integrationBranch"),
-        "merge_halted": (result or {}).get("mergeHalted"),
+        "merge_halted": result.get("mergeHalted"),
         "integration_check": integration,
         "agent_seconds_by_step": totals,
         "tokens_by_step": tokens,  # runtime totals, input included; empty until the run finishes
         # The effort thresholds the run used; absent for runs from before they existed.
-        "policy": (result or {}).get("policy"),
+        "policy": result.get("policy"),
         "tickets": [{k: t[k] for k in ("id", "title", "status", "outcome", "deps", "has_ac", "dependents",
                                        "src_lines_changed", "impl_rounds", "ac_fails", "review_rounds",
                                        "reworks", "conflicts", "gate_fails", "human_checks", "decision",
                                        "prior_findings", "findings", "timing", "steps")}
                     for t in tickets],
     }
-    if "--archive" in argv:
-        path = archive(report)
-        print(f"archived {run_id} to {path}")
-        return
-    if as_json:
-        print(json.dumps(report, indent=2, default=str))
-        return
+    view = {"run_start": run_start, "run_end": run_end, "now": now, "last_activity": last_activity,
+            "integration": integration, "integration_span": integration_span, "totals": totals, "tokens": tokens}
+    return report, view
 
+
+def print_header(report, tickets, view):
+    """The text report's opening lines: the run, its timing, and MERGES HALTED when present."""
+    run_start, run_end = view["run_start"], view["run_end"]
     merged = sum(1 for t in tickets if t["outcome"] == "merged")
-    print(f"run-tickets {run_id}  [{report['state']}]  branch {report['integration_branch']}")
+    print(f"run-tickets {report['run_id']}  [{report['state']}]  branch {report['integration_branch']}")
     if run_end:
         timing = f"launched {fmt_clock(run_start)}, finished {fmt_clock(run_end)} ({fmt_dur(report['duration_seconds'])})"
     else:
         timing = (f"launched {fmt_clock(run_start)}, running {fmt_dur(report['duration_seconds'])}" if run_start
                   else "launch time unknown")
-        timing += f"  last agent activity {fmt_clock(last_activity)}"
+        timing += f"  last agent activity {fmt_clock(view['last_activity'])}"
     print(f"{timing}  merged {merged}/{len(tickets)}")
     if report["merge_halted"]:
         print(f"MERGES HALTED: {report['merge_halted']}")
     print()
-    width = max(len(t["id"]) for t in tickets) if tickets else 4
-    for t in tickets:
-        counts = (f"agent runs: impl {t['impl_rounds']}, AC {t['ac_fails']} failed, "
-                  f"review {t['review_rounds']}, merge conflicts {t['conflicts']}"
-                  + (f", gate fails {t['gate_fails']}" if t["gate_fails"] else ""))
-        print(f"  {t['id']:<{width}}  {t['status']}")
-        print(f"  {'':<{width}}  {t['title']}  ({counts})")
-        if t["decision"]:
-            print(f"  {'':<{width}}  owner decision: {t['decision']}")
-        for check in t["human_checks"]:
-            print(f"  {'':<{width}}  needs a person to check: {check}")
-        if t["timing"]:
-            print(f"  {'':<{width}}  {timing_line(t['timing'], t['outcome'])}")
-        if t["steps"]:
-            print(f"  {'':<{width}}  {started_line(t, run_start, now)}")
-            print(f"  {'':<{width}}  {effort_line(t)}")
-        if t["findings"]:
-            print(f"  {'':<{width}}  findings filed: {', '.join(t['findings'])}")
+
+
+def print_ticket(t, width, run_start, now):
+    """One ticket's block of the text report."""
+    counts = (f"agent runs: impl {t['impl_rounds']}, AC {t['ac_fails']} failed, "
+              f"review {t['review_rounds']}, merge conflicts {t['conflicts']}"
+              + (f", gate fails {t['gate_fails']}" if t["gate_fails"] else ""))
+    print(f"  {t['id']:<{width}}  {t['status']}")
+    print(f"  {'':<{width}}  {t['title']}  ({counts})")
+    if t["decision"]:
+        print(f"  {'':<{width}}  owner decision: {t['decision']}")
+    for check in t["human_checks"]:
+        print(f"  {'':<{width}}  needs a person to check: {check}")
+    if t["timing"]:
+        print(f"  {'':<{width}}  {timing_line(t['timing'], t['outcome'])}")
+    if t["steps"]:
+        print(f"  {'':<{width}}  {started_line(t, run_start, now)}")
+        print(f"  {'':<{width}}  {effort_line(t)}")
+    if t["findings"]:
+        print(f"  {'':<{width}}  findings filed: {', '.join(t['findings'])}")
+
+
+def print_totals(view):
+    """The text report's closing lines: the integration check, and where agent time and tokens went."""
+    integration, integration_span, run_start = view["integration"], view["integration_span"], view["run_start"]
+    totals, tokens = view["totals"], view["tokens"]
     if integration:
         took = (f" (started {fmt_start(integration_span[0], run_start.astimezone().date() if run_start else None)}, "
                 f"{fmt_dur(totals['integration check'])})" if integration_span else "")
@@ -632,6 +758,126 @@ def main(argv):
     if any(tokens.values()):
         print("tokens by step: " + ", ".join(f"{STEP_SHORT[k]} {fmt_tokens(tokens[k])}"
                                                     for k in ("impl", "ac", "review", "merge") if tokens.get(k)))
+
+
+def print_text(report, tickets, view, only=None):
+    """The text report; with only, its opening lines and that ticket's block."""
+    print_header(report, tickets, view)
+    width = max(len(t["id"]) for t in tickets) if tickets else 4
+    for t in tickets:
+        if only in (None, t["id"]):
+            print_ticket(t, width, view["run_start"], view["now"])
+    if only is None:
+        print_totals(view)
+
+
+def show_report(opts):
+    """One report: the text form (whole, or one ticket's part of it), --json, or --archive."""
+    run_id, entry = find_run(opts["run_id"])
+    run = load_run(run_id, entry)
+    tickets, integration, integration_agent = ticket_states(run["args"], run["result"], read_events(run["journal_path"]))
+    if opts["ticket"] is not None and opts["ticket"] not in {t["id"] for t in tickets}:
+        sys.exit(f"ticket {opts['ticket']} is not in run {run_id}")
+    report, view = build_report(run_id, run, tickets, integration, integration_agent)
+    if opts["archive"]:
+        path = archive(report)
+        print(f"archived {run_id} to {path}")
+    elif opts["json"]:
+        print(json.dumps(report, indent=2, default=str))
+    else:
+        print_text(report, tickets, view, opts["ticket"])
+
+
+def watch(seconds, show):
+    """Clear the screen and print a fresh round of show() every `seconds` until Ctrl-C."""
+    try:
+        while True:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                try:
+                    show()
+                except SystemExit as e:
+                    # No such run, not in a repository, or the ticket not in the run.
+                    print(e.code)
+                except Exception as e:
+                    # A journal caught mid-write, say: the next round reads it again.
+                    print(failure(e))
+            sys.stdout.write(CLEAR + out.getvalue())
+            sys.stdout.flush()
+            time.sleep(seconds)
+    except KeyboardInterrupt:
+        pass
+
+
+# ---------- arguments ----------
+
+BOOL_FLAGS = ("--list", "--json", "--archive")
+VALUE_FLAGS = ("--find-ticket", "--ticket", "--watch")
+
+
+def usage_error(msg):
+    """Exit 2 with the problem on stderr's first line and the usage after it."""
+    print(f"run-tickets-status: {msg}\n{USAGE}", file=sys.stderr)
+    sys.exit(2)
+
+
+def watch_seconds(value):
+    try:
+        seconds = int(value)
+    except ValueError:
+        seconds = 0
+    if seconds < 1:
+        usage_error(f"--watch needs a whole number of seconds, 1 or more, not {value}")
+    return seconds
+
+
+def read_args(argv):
+    """Each option by name (find_ticket, ticket, watch, list, json, archive), and the run id.
+
+    A flag's value is read with its flag, so it is never taken for the run id.
+    """
+    opts = {name: None for name in ("find_ticket", "ticket", "watch", "list", "json", "archive", "run_id")}
+    it = iter(argv)
+    for arg in it:
+        name = arg[2:].replace("-", "_")
+        if arg in BOOL_FLAGS:
+            opts[name] = True
+        elif arg in VALUE_FLAGS:
+            value = next(it, None)
+            if value is None or value.startswith("--"):
+                usage_error(f"{arg} needs a value")
+            opts[name] = value
+        elif arg.startswith("--"):
+            usage_error(f"unknown option {arg}")
+        elif opts["run_id"] is None:
+            opts["run_id"] = arg
+        else:
+            usage_error(f"one run id at most, not {opts['run_id']} and {arg}")
+    return opts
+
+
+def parse_args(argv):
+    """The options read_args finds, once they are known to go together."""
+    opts = read_args(argv)
+    if opts["watch"] is not None:
+        opts["watch"] = watch_seconds(opts["watch"])
+    if opts["find_ticket"] is not None and sum(v is not None for v in opts.values()) > 1:
+        usage_error("--find-ticket takes no run id and no other option")
+    if (opts["ticket"] is not None or opts["watch"] is not None) and (opts["list"] or opts["json"] or opts["archive"]):
+        usage_error("--ticket and --watch are for the text report, not --list, --json or --archive")
+    return opts
+
+
+def main(argv):
+    opts = parse_args(argv)
+    if opts["list"]:
+        list_runs()
+    elif opts["find_ticket"] is not None:
+        sys.exit(find_ticket(opts["find_ticket"]))
+    elif opts["watch"] is not None:
+        watch(opts["watch"], lambda: show_report(opts))
+    else:
+        show_report(opts)
 
 
 if __name__ == "__main__":
