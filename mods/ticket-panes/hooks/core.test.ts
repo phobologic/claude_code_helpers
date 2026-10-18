@@ -5,6 +5,7 @@ import { beginNotices, flushNotices, notify } from './notify'
 import { forgetRole, isCountedPrompt, knownRole, resolveRole, role, roleFrom, roleRef } from './role'
 import type { Role } from './role'
 import { recordSession, recordedSession } from './sessions'
+import type { RecordedSession } from './sessions'
 import { isTicket, ticketsDir } from './tickets'
 
 const SIDE: Role = { kind: 'side', sideTicket: 'x-ab12', herdrPaneId: 'w1:p1' }
@@ -283,9 +284,49 @@ test('the tickets dir is the nearest .tickets folder walking up, checked up to /
   // A .tickets that is a file is not the folder; the walk goes on past it.
   const shadowed = { ...LINKED, '/repo/sub/.tickets': { kind: 'file' } } as Record<string, Entry>
   expect(await ticketsDir(fake({ root: '/repo/sub', files: shadowed }).$)).toBe('/repo/.tickets')
-  // A folder whose real path a hook withheld is taken as spelled.
-  const withheld = { '/repo/.worktrees/w1/.tickets': { kind: 'dir', realPath: '/repo/.tickets', isRealPathWithheld: true } } as Record<string, Entry>
-  expect(await ticketsDir(fake({ root: '/repo/.worktrees/w1', files: withheld }).$)).toBe('/repo/.worktrees/w1/.tickets')
+  // A folder whose real path a hook withheld is taken as spelled. (A root of its own: the walk's
+  // answer for /repo/.worktrees/w1 is cached from the first test.)
+  const withheld = { '/repo/.worktrees/w2/.tickets': { kind: 'dir', realPath: '/repo/.tickets', isRealPathWithheld: true } } as Record<string, Entry>
+  expect(await ticketsDir(fake({ root: '/repo/.worktrees/w2', files: withheld }).$)).toBe('/repo/.worktrees/w2/.tickets')
+})
+
+test('the walk runs once per root: later calls, for tickets found or missing, stat no .tickets folder', async () => {
+  const files: Record<string, Entry> = { '/r3/.tickets': { kind: 'dir' }, '/r3/.tickets/x-ab12.md': { kind: 'file' } }
+  const r3 = fake({ root: '/r3/a/b', files })
+  for (let i = 0; i < 5; i++) {
+    expect(await isTicket(r3.$, 'x-ab12')).toBe(true)
+    expect(await isTicket(r3.$, 'x-cd34')).toBe(false)
+  }
+  expect(r3.seen.stats.filter(path => path.endsWith('/.tickets'))).toEqual(['/r3/a/b/.tickets', '/r3/a/.tickets', '/r3/.tickets'])
+})
+
+test('a root with no tickets dir is walked once, and again only after 60 seconds', async () => {
+  const plain = fake({ root: '/plain/proj/sub' })
+  const walk = ['/plain/proj/sub/.tickets', '/plain/proj/.tickets', '/plain/.tickets', '/.tickets']
+  plain.clock.now = 5_000_000
+  for (let i = 0; i < 5; i++) expect(await isTicket(plain.$, 'x-ab12')).toBe(false)
+  expect(plain.seen.stats).toEqual(walk)
+  plain.clock.now += 59_999
+  expect(await ticketsDir(plain.$)).toBeUndefined()
+  expect(plain.seen.stats).toEqual(walk)
+  plain.clock.now += 1
+  expect(await ticketsDir(plain.$)).toBeUndefined()
+  expect(plain.seen.stats).toEqual([...walk, ...walk])
+})
+
+test('a token no tk id could be is no ticket, even when the file it names exists', async () => {
+  const files: Record<string, Entry> = {
+    '/r4/.tickets': { kind: 'dir' },
+    '/r4/.tickets/../README.md': { kind: 'file' },
+    '/r4/.tickets/sub/x-ab12.md': { kind: 'file' },
+    '/r4/.tickets/x-ab12.md': { kind: 'file' },
+  }
+  const r4 = fake({ root: '/r4', files })
+  expect(await isTicket(r4.$, '../README')).toBe(false)
+  expect(await isTicket(r4.$, 'sub/x-ab12')).toBe(false)
+  expect(await isTicket(r4.$, '')).toBe(false)
+  expect(r4.seen.stats).toEqual([])
+  expect(await isTicket(r4.$, 'x-ab12')).toBe(true)
 })
 
 test('TICKETS_DIR, when set, is the tickets dir as given; empty counts as unset', async () => {
@@ -337,6 +378,12 @@ test('AC R3: the session recorded last for a dir and ticket is the one returned;
   expect([...s.store.keys()]).toEqual(['session:/repo/.tickets:x-ab12'])
 })
 
+test('a session is stored as just its sessionId and cwd', async () => {
+  const s = fake()
+  await recordSession(s.$, '/repo/.tickets', 'x-ab12', { sessionId: 'S1', cwd: '/repo', extra: 1 } as unknown as RecordedSession)
+  expect(s.store.get('session:/repo/.tickets:x-ab12')).toStrictEqual({ sessionId: 'S1', cwd: '/repo' })
+})
+
 test('a stored value that is not a session reads as none', async () => {
   const s = fake()
   for (const junk of ['S1', null, 7, { sessionId: 'S1' }, { cwd: '/repo' }, { sessionId: 7, cwd: '/repo' }, { sessionId: 'S1', cwd: 7 }]) {
@@ -363,4 +410,14 @@ test('AC: the notices of one open show as one toast when it ends; any other show
   flushNotices(n.$)
   flushNotices(n.$)
   expect(n.seen.toasts).toEqual(['outside', 'a; b', 'after'])
+})
+
+test('a new open drops what an open that never ended collected', () => {
+  const n = fake()
+  beginNotices()
+  notify(n.$, 'a')
+  beginNotices()
+  notify(n.$, 'b')
+  flushNotices(n.$)
+  expect(n.seen.toasts).toEqual(['b'])
 })

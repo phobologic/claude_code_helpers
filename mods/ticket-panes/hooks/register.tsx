@@ -33,14 +33,10 @@ import { registerSwitch, switchReady } from './switch'
 
 // Runs every module's ready step: role.ts calls it once per load, on the first resolution of the
 // role. That may be inside a draw, so a ready step may start timers but never writes `$.state`.
-// One step failing doesn't stop the others or the resolution.
+// One step failing doesn't stop the others or the resolution; its error goes to the debug log.
 export async function runReady($: EngineInterface, known: Role): Promise<void> {
-  try {
-    $.ui.log(`ticket-panes: role ${JSON.stringify(known)}`, { to: 'debug' })
-  } catch {
-    // Nowhere to log: the steps still run.
-  }
-  await Promise.allSettled([
+  debugLog($, `ticket-panes: role ${JSON.stringify(known)}`)
+  const results = await Promise.allSettled([
     nounReady($, known),
     linksReady($, known),
     guardReady($, known),
@@ -49,6 +45,19 @@ export async function runReady($: EngineInterface, known: Role): Promise<void> {
     switchReady($, known),
     activityReady($, known),
   ])
+  for (const result of results) {
+    if (result.status === 'rejected') debugLog($, `ticket-panes: a ready step failed: ${String(result.reason)}`)
+  }
+}
+
+// A line in the debug log. The role must resolve without throwing (role.ts), so a log that
+// refuses the line is passed over: the line has nowhere else to go.
+function debugLog($: EngineInterface, text: string): void {
+  try {
+    $.ui.log(text, { to: 'debug' })
+  } catch {
+    // Nowhere to log.
+  }
 }
 
 export const register: Register = on => {

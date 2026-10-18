@@ -11,6 +11,15 @@ const MISS_RECHECK_MS = 60_000
 const found = new Set<string>()
 const missedAt = new Map<string, number>()
 
+// The walk's answer per session root: a tickets dir found, kept for the load; a root with none,
+// with when, walked again once 60 seconds have passed. isTicket runs on every draw of a reply, so
+// the walk runs once per root rather than once per call.
+const dirByRoot = new Map<string, string>()
+const noDirAt = new Map<string, number>()
+
+// What a tk id can be: no `/`, so a token never reaches outside the tickets dir.
+const TICKET_ID = /^[A-Za-z0-9._-]+$/
+
 function parentOf(dir: string): string {
   const trimmed = dir.replace(/\/+$/, '')
   const cut = trimmed.lastIndexOf('/')
@@ -28,13 +37,9 @@ async function ticketsFolderIn($: EngineInterface, dir: string): Promise<string 
   }
 }
 
-// The tickets dir (R1), or undefined when there is none: `TICKETS_DIR` as given when set (an empty
-// value counts as unset, as in tk), else the first `.tickets` folder from the session's root up to
-// `/`, as its real path.
-export async function ticketsDir($: EngineInterface): Promise<string | undefined> {
-  const fromEnv = await $.env.get('TICKETS_DIR')
-  if (fromEnv) return fromEnv
-  let dir = await $.session.root()
+// The first `.tickets` folder from `root` up to `/`, as its real path.
+async function walkUp($: EngineInterface, root: string): Promise<string | undefined> {
+  let dir = root
   for (;;) {
     const tickets = await ticketsFolderIn($, dir)
     if (tickets !== undefined) return tickets
@@ -42,6 +47,24 @@ export async function ticketsDir($: EngineInterface): Promise<string | undefined
     if (parent === dir) return undefined
     dir = parent
   }
+}
+
+// The tickets dir (R1), or undefined when there is none: `TICKETS_DIR` as given when set (an empty
+// value counts as unset, as in tk), else the first `.tickets` folder from the session's root up to
+// `/`, as its real path. The walk's answer is cached per root (see `dirByRoot`).
+export async function ticketsDir($: EngineInterface): Promise<string | undefined> {
+  const fromEnv = await $.env.get('TICKETS_DIR')
+  if (fromEnv) return fromEnv
+  const root = await $.session.root()
+  const cached = dirByRoot.get(root)
+  if (cached !== undefined) return cached
+  const now = await $.clock.now()
+  const missed = noDirAt.get(root)
+  if (missed !== undefined && now - missed < MISS_RECHECK_MS) return undefined
+  const walked = await walkUp($, root)
+  if (walked === undefined) noDirAt.set(root, now)
+  else dirByRoot.set(root, walked)
+  return walked
 }
 
 async function isFile($: EngineInterface, path: string): Promise<boolean> {
@@ -53,8 +76,10 @@ async function isFile($: EngineInterface, path: string): Promise<boolean> {
 }
 
 // R1 for one token, with the file checks cached (E2): a ticket found stays found for the load; a
-// file not found is looked for again only once 60 seconds have passed.
+// file not found is looked for again only once 60 seconds have passed. A token no tk id could be
+// (one with a `/`, say) is no ticket, and no file is looked for.
 export async function isTicket($: EngineInterface, token: string): Promise<boolean> {
+  if (!TICKET_ID.test(token)) return false
   const dir = await ticketsDir($)
   if (dir === undefined) return false
   const file = `${dir}/${token}.md`
