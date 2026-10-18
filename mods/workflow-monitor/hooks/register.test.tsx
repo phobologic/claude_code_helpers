@@ -225,6 +225,33 @@ test('with ticket-panes loaded, each unmerged ticket id is a button that opens t
   }
 })
 
+// Read at T0 and drawn 2 minutes later: the run and x-2's step have each run 2 minutes more.
+test('with ticket-panes loaded the button rows move on from when the status was read', { plugins: [TICKET_PANES] }, async ($, on) => {
+  const time = mock.clock(on, { now: T0 })
+  engine(on, { exitCode: 0, stdout: JSON.stringify(REPORT) }, [])
+  ticketPanes(on)
+  await $.command.run(COMMAND)
+  await time.set(T0 + 2 * MIN)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.findAll({ type: 'Button' })).toHaveLength(2)
+  expect((await texts(ui)).map(([text]) => text).slice(0, 2)).toEqual([
+    'run-tickets wf_test-1  running 12m  merged 1/3  epic/x-1',
+    '   reviewing (round 2)  started 16:47  running 5m00s',
+  ])
+})
+
+// texts() flattens the tree, so the row's own Box is checked: one row, indented under the header.
+test('a button row is one indented row', { plugins: [TICKET_PANES] }, async ($, on) => {
+  mock.clock(on, { now: SHOWN })
+  engine(on, { exitCode: 0, stdout: JSON.stringify(REPORT) }, [])
+  ticketPanes(on)
+  await $.command.run(COMMAND)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const kids = ((await ui.drawn()) as { children: unknown[] }).children
+  expect(kids[1]).toMatchObject({ type: 'Box', props: { flexDirection: 'row', paddingLeft: 2 } })
+  expect(kids[2]).toMatchObject({ type: 'Box', props: { flexDirection: 'row', paddingLeft: 2 } })
+})
+
 test('with ticket-panes loaded the run header still says why merges stopped', { plugins: [TICKET_PANES] }, async ($, on) => {
   mock.clock(on, { now: SHOWN })
   const report: Report = { ...REPORT, merge_halted: 'x-2 left the integration tree mid-merge' }
@@ -283,6 +310,17 @@ test('if ticket-panes fails to answer, the band draws the text rows', { plugins:
   expect(seen.asked).toBe(1)
   expect(await ui.findAll({ type: 'Button' })).toEqual([])
   expect(await texts(ui)).toEqual([...TEXT_ROWS, ['engine band', false]])
+})
+
+test('a probe ticket-panes failed is not asked again by later draws', { plugins: [TICKET_PANES] }, async ($, on) => {
+  mock.clock(on, { now: SHOWN })
+  engine(on, { exitCode: 0, stdout: JSON.stringify(REPORT) }, [])
+  const seen = ticketPanes(on, { isAvailable: false })
+  await $.command.run(COMMAND)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await ui.redraw()
+  await ui.redraw()
+  expect(seen.asked).toBe(1)
 })
 
 test('ticket-panes is asked once at session start, and not again by the draws', { plugins: [TICKET_PANES] }, async ($, on) => {
