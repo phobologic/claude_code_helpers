@@ -225,6 +225,23 @@ test('with ticket-panes loaded, each unmerged ticket id is a button that opens t
   }
 })
 
+test('with ticket-panes loaded the run header still says why merges stopped', { plugins: [TICKET_PANES] }, async ($, on) => {
+  mock.clock(on, { now: SHOWN })
+  const report: Report = { ...REPORT, merge_halted: 'x-2 left the integration tree mid-merge' }
+  engine(on, { exitCode: 0, stdout: JSON.stringify(report) }, [])
+  ticketPanes(on)
+  await $.command.run(COMMAND)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await texts(ui)).map(([text]) => text)).toEqual([
+    'run-tickets wf_test-1  running 10m  merged 1/3  epic/x-1',
+    '  MERGES HALTED: x-2 left the integration tree mid-merge',
+    '   reviewing (round 2)  started 16:47  running 3m00s',
+    '  queued for a worktree slot',
+    'engine band',
+  ])
+  expect(await ui.findAll({ type: 'Button' })).toHaveLength(2)
+})
+
 test('without ticket-panes the band draws the text rows it always did, above the band beneath', async ($, on) => {
   mock.clock(on, { now: SHOWN })
   engine(on, { exitCode: 0, stdout: JSON.stringify(REPORT) }, [])
