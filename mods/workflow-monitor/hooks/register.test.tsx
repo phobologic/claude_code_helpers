@@ -155,6 +155,9 @@ test('a ticket line is its id and the rest, which the run lines pad between', ()
   const s = summarize(REPORT, T0)
   expect(ticketLine(s.open[0]!, 120)).toEqual({ id: 'x-2', rest: '  reviewing (round 2)  started 16:47  running 5m00s', isDim: false })
   expect(ticketLine(s.open[1]!, 120)).toEqual({ id: 'x-10', rest: '  queued for a worktree slot', isDim: true })
+  // The times show only for a step that is running and says when it started.
+  expect(ticketLine({ id: 'x-3', status: 'blocked', isActive: false, startedClock: '16:30' }, 0).rest).toBe('  blocked')
+  expect(ticketLine({ id: 'x-4', status: 'implementing', isActive: true, runningFor: 30 }, 0).rest).toBe('  implementing')
 })
 
 // Stands in for the ticket-panes mod: it puts `$.ticketPanes` on the engine interface and
