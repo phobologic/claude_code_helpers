@@ -128,6 +128,8 @@ prompt with a wall of inline code.
 
 - **Never run `git push`**. The user will push manually.
 - **Don't use `git -C <path>` when you're already inside the target worktree**, including from a subdirectory of it. If you've `cd`'d into a subdir for another command (e.g. `npm` in `frontend/`), translate paths to cwd-relative or `cd` back to the worktree root before running git. Only use `-C` when operating on a *different* worktree than the current one (e.g. a team-lead orchestrator reaching into an implementer's worktree).
+- **Commit only what you changed this session.** Stage files by path, never `git add -A` or `git add .`. If other staged or unstaged changes are present, mention them and leave them alone; another session may own them.
+- **Don't commit a change that rests on an unverified assumption about how a tool or agent behaves.** Verify it first (run it, read the docs or source), or ask.
 
 ## Hooks
 
