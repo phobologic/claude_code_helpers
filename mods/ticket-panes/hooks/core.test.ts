@@ -329,6 +329,17 @@ test('a token no tk id could be is no ticket, even when the file it names exists
   expect(await isTicket(r4.$, 'x-ab12')).toBe(true)
 })
 
+// tk keeps the folder name's case in an id's prefix, and its short fallback prefix can carry '.' or '_'.
+test('a tk id with capitals, dots or underscores is a ticket when its file exists', async () => {
+  const ids = ['AbC-ab12', 'a.b-ab12', 'a_b-ab12']
+  const files: Record<string, Entry> = { '/r5/.tickets': { kind: 'dir' } }
+  for (const id of ids) files[`/r5/.tickets/${id}.md`] = { kind: 'file' }
+  const r5 = fake({ root: '/r5', files })
+  const answers: [string, boolean][] = []
+  for (const id of ids) answers.push([id, await isTicket(r5.$, id)])
+  expect(answers).toEqual(ids.map(id => [id, true]))
+})
+
 test('TICKETS_DIR, when set, is the tickets dir as given; empty counts as unset', async () => {
   const given = fake({ env: { TICKETS_DIR: '/data/tickets' }, root: '/repo', files: LINKED })
   expect(await ticketsDir(given.$)).toBe('/data/tickets')
