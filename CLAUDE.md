@@ -4,15 +4,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Purpose
 
-This repository is the source of truth for most of `~/.claude/` — personal Claude Code dotfiles.
-It provides global skills, sub-agents, the run-tickets workflow, language plugins for
-auto-formatting, tool rules for deployment and database conventions, the global
-`~/.claude/CLAUDE.md` (`CLAUDE.global.md`), and the global hooks. Everything Claude
-belongs here. The one exception is `~/.claude/settings.json`, which lives in the private
-`myhome` repo (`.claude_global/settings.json`, linked by that repo's `install.sh`): this
-repo is public on GitHub, the settings hold private context (auto mode's description of
-private repos), and Claude Code edits the file in place, so anything it adds later would
-be published. Edit settings there; put everything else here.
+This repository is the Claude Code development toolkit layered on top of `~/.claude/`:
+global skills, sub-agents, the run-tickets workflow, language plugins for
+auto-formatting, tool rules for deployment and database conventions, and the dev rules
+(`CLAUDE.dev.md`, linked to `~/.claude/rules/dev.md`). Its `install.sh` runs only on
+machines used for software development.
+
+The base config every machine gets lives in the private `myhome` repo's
+`.claude_global/`, linked by that repo's `install.sh`: `settings.json`, the global
+`~/.claude/CLAUDE.md`, and the hook scripts `settings.json` turns on. A rule that applies
+to any use of Claude Code goes in myhome's `CLAUDE.md`; one that only matters when writing
+software goes in `CLAUDE.dev.md`. Keep each rule in exactly one of them. Settings must stay
+in myhome because this repo is public, the settings hold private context (auto mode's
+description of private repos), and Claude Code edits the file in place.
 
 ## Repository Structure
 
@@ -26,16 +30,15 @@ tools/          Per-tool rules files (railway, sqlalchemy) — loaded via .claud
 bin/            Utility scripts (tk plugins, etc.)
 tests/          Tests for the run-tickets workflow script and planner (plain node / python3)
 docs/           Documentation and migration guides
-hooks/          Global hook scripts, linked into ~/.claude/hooks/ (turned on by settings.json)
-CLAUDE.global.md  Global CLAUDE.md, symlinked to ~/.claude/CLAUDE.md
-install.sh      Sets up ~/.claude/ symlinks from scratch
+CLAUDE.dev.md   Dev rules, symlinked to ~/.claude/rules/dev.md
+install.sh      Sets up the ~/.claude/ dev symlinks from scratch
 ```
 
 ## Installation
 
-Run `./install.sh` to configure `~/.claude/`:
-- `~/.claude/CLAUDE.md` → `CLAUDE.global.md`
-- `~/.claude/hooks/<name>.sh` → `hooks/<name>.sh`
+Run myhome's `install.sh` first for the base config, then this repo's `./install.sh`:
+- `~/.claude/rules/dev.md` → `CLAUDE.dev.md`
+- `~/.claude/tk.md` → `tk.md`
 - `~/.claude/skills/` → `skills/`
 - `~/.claude/agents/` → `agents/`
 - `~/.claude/workflows/` → `workflows/`
@@ -150,6 +153,6 @@ The workflow test runs the real script with fake agents and checks scheduling (c
 ## Important Notes
 
 - **This repo is public on GitHub.** Keep other projects out of it: no names, paths, ticket IDs, code or data from them in files, test fixtures, or commit messages. Describe what a run or project showed in general terms instead. Private Claude config (`~/.claude/settings.json`) stays in the private `myhome` repo (see Repository Purpose)
-- `CLAUDE.global.md` is symlinked to `~/.claude/CLAUDE.md`. It can't be named `CLAUDE.md` here, because then it would be loaded twice when working in this repo
-- `~/.claude/settings.json` is not in this repo (see Repository Purpose); there is no user-level `~/.claude/settings.local.json`
+- `CLAUDE.dev.md` is symlinked to `~/.claude/rules/dev.md`. It can't be named `CLAUDE.md` here, because then it would be loaded twice when working in this repo
+- `~/.claude/settings.json`, the global `~/.claude/CLAUDE.md` and the hook scripts are not in this repo (see Repository Purpose); there is no user-level `~/.claude/settings.local.json`
 - Local settings should be in `settings.local.json` (gitignored)

@@ -14,10 +14,9 @@ ticket runner, language plugins, tool rules, and working style rules for `~/.cla
 | `plugins/` | General-purpose Claude Code plugins — workflow automation and tool integrations |
 | `tools/` | Per-tool rule files (Railway, SQLAlchemy) — loaded via `.claude/rules/` symlinks |
 | `bin/` | Utility scripts: tk plugins (`tk-show-multi`, `tk-epic-status`, `tk-triage`, `tk-set`, `tk-backlog`) and `git-auto-commit.sh` |
-| `hooks/` | Global Claude Code hooks (e.g. `no-inline-scripts.sh` — flags inline-interpreter and heredoc-to-file Bash patterns as a non-blocking, in-context nudge toward Write/Edit) |
 | `tests/` | Dependency-free tests for the `run-tickets-engine` workflow script (run in Node with fake agents), `bin/run-tickets-plan`, `bin/run-tickets-setup` and `bin/run-tickets-finish`, and `bin/wrap-epic-plan` |
-| `CLAUDE.global.md` | Global CLAUDE.md with personal working style rules |
-| `install.sh` | Sets up `~/.claude/` symlinks from scratch |
+| `CLAUDE.dev.md` | Global rules for development machines (testing, tk, living document), loaded as `~/.claude/rules/dev.md` |
+| `install.sh` | Sets up the `~/.claude/` dev symlinks from scratch |
 
 ## Installation
 
@@ -28,8 +27,8 @@ cd ~/git/claude_code
 ```
 
 This creates:
-- `~/.claude/CLAUDE.md` → `CLAUDE.global.md`
-- `~/.claude/hooks/<name>.sh` → `hooks/<name>.sh` *(every script in `hooks/`)*
+- `~/.claude/rules/dev.md` → `CLAUDE.dev.md` *(loads in every session)*
+- `~/.claude/tk.md` → `tk.md`
 - `~/.claude/skills/` → `skills/`
 - `~/.claude/agents/` → `agents/`
 - `~/.claude/workflows/` → `workflows/` *(saved workflow scripts, runnable as `/<name>`)*
@@ -42,24 +41,17 @@ This creates:
 - `~/.local/bin/tk-set` → `bin/tk-set` *(tk plugin)*
 - `~/.local/bin/tk-backlog` → `bin/tk-backlog` *(tk plugin: the repo's standing backlog epic, and duplicate search)*
 
-It also adds `.tickets/` and `.tmp/` to `~/.config/git/ignore` so ticket files
-and scratch files are never accidentally committed.
+It also adds `.tickets/` to `~/.config/git/ignore` so ticket files are never
+accidentally committed.
 
-**`~/.claude/settings.json` is the one thing not here.** This repo is public, and
-the settings hold private context (such as auto mode's description of private
-repos) and get edited in place by Claude Code itself (plugin installs, `/config`),
-so anything added later would be published too. Keep it in a private repo and link
-it from there; the hooks in `hooks/` only run once `settings.json` turns them on.
-There is no user-level `~/.claude/settings.local.json` for machine-only overrides:
-`settings.local.json` is project-scoped.
-
-### Scratch files
-
-When Claude needs to write a temporary file (long heredocs, generated prompts,
-ad-hoc analysis output), `CLAUDE.global.md` instructs it to prefer a project-local
-`.tmp/` directory over `/tmp`. This keeps the working directory inside the repo
-and makes the artifacts inspectable after the fact. `.tmp/` is globally
-gitignored by `install.sh` — no per-project setup needed.
+**The base config is not here.** `~/.claude/settings.json`, the global
+`~/.claude/CLAUDE.md` (working-style rules for any use of Claude Code) and the hook
+scripts `settings.json` turns on live in a private dotfiles repo, which every machine
+installs, including ones not used for development. Settings can't be in a public repo:
+they hold private context (such as auto mode's description of private repos) and get
+edited in place by Claude Code itself (plugin installs, `/config`), so anything added
+later would be published too. There is no user-level `~/.claude/settings.local.json`
+for machine-only overrides: `settings.local.json` is project-scoped.
 
 ## Skills
 

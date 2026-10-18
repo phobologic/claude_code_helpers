@@ -77,6 +77,12 @@ Present the context brief to the user and confirm before proceeding.
 
 ## Phase 2 — Spawn the team
 
+There is no team object: no `TeamCreate`/`TeamDelete`, and the `Agent` tool's
+`team_name` parameter is ignored. A session has one implicit team, and the
+`name` given at spawn is each agent's address for `SendMessage`. Names are
+session-wide, so a second sprint in the same session must not reuse
+`evaluator` or `designer-N` while the first one's agents are alive.
+
 ### Spawn the evaluator first
 
 The evaluator (opus, effort: high — see `agents/design-evaluator.md`) persists
@@ -288,7 +294,9 @@ SendMessage({ to: 'evaluator',  message: 'Sprint complete. Shutting down.' })
 ```
 
 Wait for each of the four to acknowledge. Then call `ListAgents` and
-`TaskStop({ task_id: '<name>' })` for any that are still running.
+`TaskStop({ task_id: '<name>' })` for any that are still running. `TaskStop`
+gives an agent no shutdown window, so it is only for agents that never
+answered, never the first step.
 
 ## Edge Cases
 

@@ -11,12 +11,6 @@ link() {
   local dst="$2"
   if [[ -L "$dst" && "$(readlink "$dst")" == "$src" ]]; then
     echo "  ok:   $dst"
-  elif [[ -L "$dst" && "$(readlink "$dst")" == */.claude_global/* ]]; then
-    # Linked from the myhome repo's .claude_global/, where these files used to live.
-    local old
-    old="$(readlink "$dst")"
-    ln -sfn "$src" "$dst"
-    echo "  move: $dst -> $src (was $old)"
   elif [[ -e "$dst" ]]; then
     echo "  skip: $dst already exists (not a symlink to $src)"
   else
@@ -40,23 +34,16 @@ remove_obsolete() {
 
 remove_obsolete "$CLAUDE/commands" "$DOTFILES/commands" "migrated to skills/"
 remove_obsolete "$HOME/.local/bin/review-setup" "$DOTFILES/bin/review-setup" "/review runs /code-review now"
+remove_obsolete "$CLAUDE/agent-teams.md" "$DOTFILES/agent-teams.md" "folded into /design-sprint and /playwright-explore"
 
-# Everything Claude lives in this repo except ~/.claude/settings.json, which the
-# private myhome repo links: it holds private context (auto mode's description of
-# private repos), and Claude Code edits it in place, so it can't be in a public repo.
-link "$DOTFILES/CLAUDE.global.md"     "$CLAUDE/CLAUDE.md"
+# This repo is the development toolkit. The base config every machine gets
+# (~/.claude/settings.json, the global CLAUDE.md, and the hooks) is linked by the
+# private myhome repo's install.sh, so this script leaves those paths alone.
 link "$DOTFILES/tk.md"                "$CLAUDE/tk.md"
-link "$DOTFILES/agent-teams.md"       "$CLAUDE/agent-teams.md"
 link "$DOTFILES/skills"               "$CLAUDE/skills"
 link "$DOTFILES/agents"               "$CLAUDE/agents"
 link "$DOTFILES/workflows"            "$CLAUDE/workflows"
 link "$DOTFILES/optional_rules"       "$CLAUDE/optional_rules"
-
-mkdir -p "$CLAUDE/hooks"
-for hook in "$DOTFILES/hooks"/*.sh; do
-  [[ -f "$hook" ]] || continue
-  link "$hook" "$CLAUDE/hooks/$(basename "$hook")"
-done
 
 # Symlink all scripts from bin/ into ~/.local/bin/
 mkdir -p "$HOME/.local/bin"
@@ -66,14 +53,15 @@ for script in "$DOTFILES/bin"/*; do
 done
 
 mkdir -p "$CLAUDE/rules"
+link "$DOTFILES/CLAUDE.dev.md"                    "$CLAUDE/rules/dev.md"
 link "$DOTFILES/languages/go/rules/CLAUDE.md"     "$CLAUDE/rules/go.md"
 link "$DOTFILES/languages/python/rules/CLAUDE.md" "$CLAUDE/rules/python.md"
 link "$DOTFILES/languages/js/rules/CLAUDE.md"     "$CLAUDE/rules/js.md"
 
-# Ensure ephemeral dirs are globally gitignored
+# Ensure tk's ticket dir is globally gitignored (myhome's install adds .tmp/)
 GIT_IGNORE="${XDG_CONFIG_HOME:-$HOME/.config}/git/ignore"
 mkdir -p "$(dirname "$GIT_IGNORE")"
-for entry in '.tickets/' '.tmp/'; do
+for entry in '.tickets/'; do
   if ! grep -qF "$entry" "$GIT_IGNORE" 2>/dev/null; then
     echo "$entry" >> "$GIT_IGNORE"
     echo "  add:  $entry to $GIT_IGNORE"

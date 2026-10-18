@@ -372,6 +372,13 @@ Track these variables throughout the run:
 Each agent prompt is assembled from the **shared agent prompt** (below) plus
 a **wave assignment block** plus a **role delta** (wave 1 only).
 
+There is no team object: no `TeamCreate`/`TeamDelete`, and the `Agent` tool's
+`team_name` parameter is ignored. A session has one implicit team, and the
+`name` given at spawn is each agent's address for `SendMessage`. Names are
+session-wide and must match `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`; if another run
+in this session could still have a `<role>` agent alive, prefix the names with
+a run stamp.
+
 Spawn all roles in parallel (single message, multiple `Agent` tool calls).
 Each uses **sonnet**:
 
