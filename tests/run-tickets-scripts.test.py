@@ -336,7 +336,11 @@ def add_run(root, home, run_id, tickets, launched=None, events=None, agents=None
     run_dir = os.path.join(session, "subagents", "workflows", run_id)
     if events is not None:
         os.makedirs(run_dir)
-        Path(run_dir, "journal.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
+        journal = Path(run_dir, "journal.jsonl")
+        journal.write_text("".join(json.dumps(e) + "\n" for e in events))
+        # A fixed time, not the clock's: a journal written after its run's metadata marks the run as
+        # relaunched and still going, so a finished fixture run would read as running from that date on.
+        os.utime(journal, (utc("11:00"), utc("11:00")))
     for agent, (start, end, effort) in (agents or {}).items():
         reply = {"type": "assistant", "timestamp": iso(start), "message": {"model": "claude-test"}}
         if effort:
@@ -683,13 +687,16 @@ with tempfile.TemporaryDirectory() as tmp:
 # ---------- status: arguments ----------
 
 def usage_error_of(argv):
-    """parse_args' exit code and first stderr line for argv, or None when it takes argv."""
+    """parse_args' exit code and first stderr line for argv, None when it takes argv, or the
+    exception it raised in place of a usage error."""
     err = io.StringIO()
     try:
         with contextlib.redirect_stderr(err):
             status.parse_args(argv)
     except SystemExit as e:
         return e.code, err.getvalue().splitlines()[0]
+    except Exception as e:
+        return e
     return None
 
 
