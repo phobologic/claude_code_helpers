@@ -1,0 +1,7 @@
+{
+  "name": "ticket-panes",
+  "version": "0.1.0",
+  "description": "Clickable tk tickets: a button row under replies that mention them opens a Claude agent for the ticket in a herdr side pane, or a read-only ticket pane",
+  "author": { "name": "mike" },
+  "types": "./types/index.d.ts"
+}
