@@ -616,6 +616,10 @@ with tempfile.TemporaryDirectory() as tmp:
             events=[{"type": "launched"}, started("e1", "impl x-5")],
             final={"startTime": int(utc("09:00") * 1000), "durationMs": 60_000, "timestamp": "2020-01-01T00:00:00Z",
                    "result": {"tickets": [{"id": "x-5", "outcome": "blocked"}]}})
+    # wf_f's record has no launch time, so it counts as launched before any run that has one.
+    add_run(root, home, "wf_f", ["x-7"], events=[{"type": "launched"}, started("f1", "impl x-7")])
+    add_run(root, home, "wf_g", ["x-7"], launched="2030-03-01T08:00:00",
+            events=[{"type": "launched"}, started("g1", "impl x-7")])
     # A record the lead has written but not yet given the run id.
     Path(root, ".worktrees", "run-pending.json").write_text(json.dumps(
         {"stamp": "pending", "args": {"tickets": [{"id": "x-6", "title": "t", "deps": [], "has_ac": True}]}}))
@@ -630,6 +634,8 @@ with tempfile.TemporaryDirectory() as tmp:
     check_output("status --find-ticket: a run whose metadata a resume has outdated is running",
                  found("x-5", root, env), '{"run_id": "wf_e", "state": "running"}\n')
     check_output("status --find-ticket: a record with no run id yet is skipped, not a failure", found("x-6", root, env), "", 1)
+    check_output("status --find-ticket: a run with no launch time loses to one that has it",
+                 found("x-7", root, env), '{"run_id": "wf_g", "state": "running"}\n')
 
     good = journal_of(home, "wf_c").read_text()
     journal_of(home, "wf_c").write_text(good + '{"type": "star')
