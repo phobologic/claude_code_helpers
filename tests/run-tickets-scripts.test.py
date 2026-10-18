@@ -384,7 +384,12 @@ def report_runs(root, home):
 
 
 def run_status(*args, cwd, env):
-    res = subprocess.run([STATUS, *args], cwd=cwd, env=env, capture_output=True, text=True)
+    """Exit code, stdout and stderr. A run still going after 30s fails the check instead of
+    hanging the suite: an argument mistake that starts a watch would never end."""
+    try:
+        res = subprocess.run([STATUS, *args], cwd=cwd, env=env, capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        return "timeout", "", "no exit after 30s"
     return res.returncode, res.stdout, res.stderr
 
 
