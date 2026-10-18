@@ -659,8 +659,11 @@ with tempfile.TemporaryDirectory() as tmp:
           (code, out) == (2, "") and err.startswith(f"run-tickets-status: ValueError: cannot read {torn}: "),
           f"{code} {out!r} {err!r}")
     os.remove(torn)
-    check("status: a record removed after it was listed is not a failure",
-          status.load_json(torn, strict=True) is None)
+    try:
+        removed = status.load_json(torn, strict=True)
+    except ValueError as e:
+        removed = e
+    check("status: a record removed after it was listed is not a failure", removed is None, removed)
 
 with tempfile.TemporaryDirectory() as tmp:
     root, home, env = status_repo(tmp)
