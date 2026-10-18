@@ -242,6 +242,26 @@ test('with ticket-panes loaded the run header still says why merges stopped', { 
   expect(await ui.findAll({ type: 'Button' })).toHaveLength(2)
 })
 
+// With no other mod's band, what the hooks beneath answer is the engine's own band.
+test('with no band beneath, the band draws above the engine\'s own', { plugins: [TICKET_PANES] }, async ($, on) => {
+  mock.clock(on, { now: SHOWN })
+  on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine', ref: 0 }))
+  on('process.run', () => ({
+    value: { exitCode: 0, stdout: JSON.stringify(REPORT), stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+  }))
+  ticketPanes(on)
+  await $.command.run(COMMAND)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...BAND, surface })
+    const drawn = await ui.drawn()
+    expect(drawn.type).toBe('Box')
+    expect((drawn as { children: unknown[] }).children.at(-1)).toEqual({ type: 'engine', ref: 0 })
+    expect(await ui.findAll({ type: 'Button' })).toHaveLength(2)
+    expect((await texts(ui))[0]?.[0]).toBe('run-tickets wf_test-1  running 10m  merged 1/3  epic/x-1')
+    await ui.unmount()
+  }
+})
+
 test('without ticket-panes the band draws the text rows it always did, above the band beneath', async ($, on) => {
   mock.clock(on, { now: SHOWN })
   engine(on, { exitCode: 0, stdout: JSON.stringify(REPORT) }, [])
