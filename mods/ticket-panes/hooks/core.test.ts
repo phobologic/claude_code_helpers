@@ -6,7 +6,7 @@ import { forgetRole, isCountedPrompt, knownRole, resolveRole, role, roleFrom, ro
 import type { Role } from './role'
 import { recordSession, recordedSession } from './sessions'
 import type { RecordedSession } from './sessions'
-import { isTicket, ticketsDir } from './tickets'
+import { isTicket, ticketFile, ticketsDir } from './tickets'
 
 const SIDE: Role = { kind: 'side', sideTicket: 'x-ab12', herdrPaneId: 'w1:p1' }
 const SIDE_ENV = { TICKET_PANES_TICKET: 'x-ab12', HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p1' }
@@ -370,6 +370,25 @@ test('AC R1: a ticket found stays found; a missing one is looked for again only 
   // A ticket that is gone stays found for the load.
   delete files['/r1/.tickets/x-ab12.md']
   expect(await isTicket(r1.$, 'x-ab12')).toBe(true)
+})
+
+test('ticketFile is <tickets dir>/<id>.md for a tk id, and undefined for an id holding / or with no tickets dir', async () => {
+  const given = fake({ env: { TICKETS_DIR: '/data/tickets' }, root: '/r6' })
+  expect(await ticketFile(given.$, 'x-ab12')).toBe('/data/tickets/x-ab12.md')
+  // It names the file whether or not it exists: no file is looked at.
+  expect(given.seen.stats).toEqual([])
+  // An id no tk id could be names no file, so nothing outside the tickets dir is reached, and the
+  // tickets dir is not even looked for.
+  const odd = fake({ root: '/r7', files: { '/r7/.tickets': { kind: 'dir' }, '/r7/x.md': { kind: 'file' } } })
+  expect(await ticketFile(odd.$, '../x')).toBeUndefined()
+  expect(await ticketFile(odd.$, 'sub/x-ab12')).toBeUndefined()
+  expect(await ticketFile(odd.$, '')).toBeUndefined()
+  expect(odd.seen.stats).toEqual([])
+  expect(await ticketFile(odd.$, 'x-ab12')).toBe('/r7/.tickets/x-ab12.md')
+  // No tickets dir: no file, for a tk id too.
+  const nowhere = fake({ root: '/r8' })
+  expect(await ticketFile(nowhere.$, 'x-ab12')).toBeUndefined()
+  expect(nowhere.seen.stats).toEqual(['/r8/.tickets', '/.tickets'])
 })
 
 test('no tickets dir, or a folder named like a ticket file, is no ticket', async () => {

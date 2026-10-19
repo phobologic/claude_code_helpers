@@ -75,14 +75,22 @@ async function isFile($: EngineInterface, path: string): Promise<boolean> {
   }
 }
 
+// The file ticket `id` would be (R1): `<tickets dir>/<id>.md`, or undefined when no tk id could be
+// `id` (one with a `/`, say, which would reach outside the tickets dir) or there is no tickets
+// dir. It says nothing of whether the file exists: that is isTicket's to say. Every module that
+// needs a ticket's file builds its path here, so R1's layout lives in this file alone.
+export async function ticketFile($: EngineInterface, id: string): Promise<string | undefined> {
+  if (!TICKET_ID.test(id)) return undefined
+  const dir = await ticketsDir($)
+  return dir === undefined ? undefined : `${dir}/${id}.md`
+}
+
 // R1 for one token, with the file checks cached (E2): a ticket found stays found for the load; a
 // file not found is looked for again only once 60 seconds have passed. A token no tk id could be
 // (one with a `/`, say) is no ticket, and no file is looked for.
 export async function isTicket($: EngineInterface, token: string): Promise<boolean> {
-  if (!TICKET_ID.test(token)) return false
-  const dir = await ticketsDir($)
-  if (dir === undefined) return false
-  const file = `${dir}/${token}.md`
+  const file = await ticketFile($, token)
+  if (file === undefined) return false
   if (found.has(file)) return true
   const now = await $.clock.now()
   const missed = missedAt.get(file)

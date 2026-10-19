@@ -1,7 +1,7 @@
 import type { ElementTable, EngineInterface, RenderElement } from 'claude-code'
 
 import type { TicketPanesBandMode } from '../types'
-import { isTicket, ticketsDir } from './tickets'
+import { isTicket, ticketFile } from './tickets'
 
 // A ticket drawn from its file, as the side session's band (band.tsx) and the read-only ticket
 // pane (noun.tsx) show it. `readTicket` reads the file tk keeps and parses it; `TicketView` draws
@@ -172,8 +172,8 @@ function oneLine(err: unknown): string {
 // never rejects, so a draw that calls it always has something to draw.
 export async function readTicket($: EngineInterface, id: string): Promise<TicketRead> {
   try {
-    if (!(await isTicket($, id))) return { id, problem: NOT_FOUND }
-    const path = `${await ticketsDir($)}/${id}.md`
+    const path = await ticketFile($, id)
+    if (path === undefined || !(await isTicket($, id))) return { id, problem: NOT_FOUND }
     try {
       return parseTicket(id, await $.fs.read(path))
     } catch (err) {

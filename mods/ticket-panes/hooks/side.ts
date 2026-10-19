@@ -3,7 +3,7 @@ import type { EngineInterface, On } from 'claude-code'
 import { isCountedPrompt, role } from './role'
 import type { Role } from './role'
 import { recordSession } from './sessions'
-import { ticketsDir } from './tickets'
+import { ticketFile, ticketsDir } from './tickets'
 
 // The side session's agent: its rules and the ticket's text in the system prompt (D5, D6), the
 // ticket's changes as notes on the person's messages (D16), and the record of the conversation a
@@ -44,20 +44,15 @@ function debugLog($: EngineInterface, text: string): void {
   }
 }
 
-// The side ticket's file: `<tickets dir>/<id>.md` (R1), or undefined without a tickets dir.
-async function ticketPath($: EngineInterface, id: string): Promise<string | undefined> {
-  const dir = await ticketsDir($)
-  return dir === undefined ? undefined : `${dir}/${id}.md`
-}
-
 // The ticket's file as it stands. Its mtime is read before its text, so a change that lands between
 // the two leaves the mtime older than the text: the next prompt sends the text again rather than
-// missing a change.
+// missing a change. R1 gives no file for an id no tk id could be (TICKET_PANES_TICKET holding a
+// `/`, say), so nothing outside the tickets dir is read.
 async function readTicket($: EngineInterface, id: string): Promise<TicketText | TicketMiss> {
   let path: string | undefined
   try {
-    path = await ticketPath($, id)
-    if (path === undefined) return { reason: 'no tickets folder was found' }
+    path = await ticketFile($, id)
+    if (path === undefined) return { reason: 'no tickets folder was found, or the id is not a tk id' }
     const { mtimeMs } = await $.fs.stat(path)
     const text = await $.fs.read(path)
     return { path, mtimeMs, text }

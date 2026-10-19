@@ -3,7 +3,7 @@ import type { EngineInterface, On } from 'claude-code'
 
 import { isCountedPrompt, role } from './role'
 import type { Role } from './role'
-import { ticketsDir } from './tickets'
+import { ticketFile } from './tickets'
 import { TicketView, readTicket } from './view'
 
 // The side session's band above the prompt: its ticket, drawn from the file (D7), above whatever
@@ -49,13 +49,13 @@ function sideTicketOf(known: Role): string | undefined {
   return known.kind === 'side' && known.sideTicket ? known.sideTicket : undefined
 }
 
-// The mtime of ticket `id`'s file (R1), or undefined when there is no tickets dir or the file
-// can't be stat'd (gone, say).
+// The mtime of ticket `id`'s file (R1), or undefined when R1 gives no file (no tickets dir, or an
+// id no tk id could be) or the file can't be stat'd (gone, say).
 async function ticketMtime($: EngineInterface, id: string): Promise<number | undefined> {
   try {
-    const dir = await ticketsDir($)
-    if (dir === undefined) return undefined
-    return (await $.fs.stat(`${dir}/${id}.md`)).mtimeMs
+    const file = await ticketFile($, id)
+    if (file === undefined) return undefined
+    return (await $.fs.stat(file)).mtimeMs
   } catch {
     return undefined
   }
