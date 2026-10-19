@@ -5,6 +5,7 @@ import { SidePaneError } from './herdr'
 import type { SideRecord } from './herdr'
 import { forgetRole } from './role'
 import { openSidePane } from './route'
+import { decideSwitch } from './switch'
 
 // openSidePane is called by no hook of this task (the noun, Task 2.4, will call it), and a test's
 // own `$` has no env, store or clock, so it runs against a stand-in `$`, as herdr.test.ts does: its
@@ -358,6 +359,20 @@ test('AC: with the record showing another ticket whose agent is working, a click
   expect(changes(f)).toEqual([])
   expect(f.panes.get('w1:p2')).toStrictEqual(live)
   expect(f.store.get(KEY)).toStrictEqual(AB12)
+})
+
+// The stub declines every click, so this passes with it either way; with Task 2.3's decideSwitch,
+// which switches from an idle agent, it fails when the click does not go to decideSwitch.
+test('a click on another ticket while the side agent is live answers what decideSwitch answers for it', async () => {
+  for (const status of ['idle', 'working']) {
+    const world = (): World => ({ store: { [KEY]: AB12 }, panes: { 'w1:p2': { terminalId: 'term-2', agent: { name: 'tp-x-ab12', status } } } })
+    const direct = fake(world())
+    const decided = await decideSwitch(direct.$, { ...AB12, sideAgentLive: true }, 'x-cd34')
+    const routed = fake(world())
+    expect(await openSidePane(routed.$, 'x-cd34'), status).toStrictEqual(decided)
+    expect([...routed.panes.keys()], status).toEqual([...direct.panes.keys()])
+    expect(routed.store.get(KEY), status).toStrictEqual(direct.store.get(KEY))
+  }
 })
 
 // ---------- step 1: an agent for the ticket outside the record ----------
