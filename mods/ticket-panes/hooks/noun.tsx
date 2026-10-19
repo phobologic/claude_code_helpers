@@ -102,7 +102,9 @@ async function openTicket($: EngineInterface, id: unknown): Promise<void> {
 
 // `$.ticketPanes.open`'s body: the lock (E10), then the open with its messages collected into one
 // toast. Anything else that fails is toasted by its first line; the lock is let go either way.
-async function open($: EngineInterface, id: unknown): Promise<void> {
+// Exported for the mod's own ticket buttons (links.tsx): a `$.ticketPanes.open` made from this
+// mod's own hooks skips them (the engine's recursion skip), so only the stub would answer it.
+export async function open($: EngineInterface, id: unknown): Promise<void> {
   if (opening !== undefined) {
     // This click's own answer, shown at once: through notify it would join the messages of the
     // open in flight, shown only when that ends.
