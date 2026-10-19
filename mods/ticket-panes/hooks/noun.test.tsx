@@ -12,7 +12,8 @@ import { paneTicketRef } from './role'
 // with `$.ui.close`, which raises `ui.close` as the person's close does (origin `plugin` there). The
 // test's hooks stand in for the world beneath: the environment, the clock, the store, the ticket
 // files, herdr and the run lookup (faked by `process.run`), and the surface's panes and toasts.
-// They cannot hook `ticketPanes.*`: the test's hooks load before the plugin that adds the noun.
+// They do not hook `ticketPanes.*`: the engine refuses that (`the $ build failed (registered
+// ticketPanes.open, but no loaded plugin provides $.ticketPanes)`), and such a hook never runs.
 
 const DIR = '/repo/.tickets'
 const MAIN = 'w1:p1'
