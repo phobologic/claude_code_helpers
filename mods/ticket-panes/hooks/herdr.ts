@@ -66,7 +66,7 @@ type Activity = Required<Pick<SideRecord, 'activityPaneId' | 'activityTerminalId
 type Split = { from: string; cwd: string; env: string[] }
 // A herdr call's answer: its result, or the code herdr gave (when it gave one) and why it failed.
 // A failed call has no result, so a reader of one finds nothing there.
-export type Ran ={ isOk: true; result: unknown } | { isOk: false; result?: undefined; code?: string; reason: string }
+export type Ran = { isOk: true; result: unknown } | { isOk: false; result?: undefined; code?: string; reason: string }
 
 const SIDE_FIELDS = ['ticketId', 'paneId', 'paneTerminalId', 'agentName'] as const
 const ACTIVITY_FIELDS = ['activityPaneId', 'activityTerminalId', 'activityTicketId'] as const
