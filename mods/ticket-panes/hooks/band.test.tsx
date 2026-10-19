@@ -34,6 +34,8 @@ type World = {
   ticket: Ticket | undefined
   // Whether `$.env.get` answers; while not, it refuses every variable.
   isEnvReadable: boolean
+  // How long, on the test's clock, each `$.env.get` takes to answer.
+  envDelayMs: number
   // Every path the plugin stat'd.
   stats: string[]
   // How many periods of `$.clock.every` timers the plugin asked for: a timer asks for its first
@@ -56,6 +58,7 @@ function world(on: On, env: Record<string, string>, kept?: Role): World {
   const w = {
     ticket: { mtimeMs: 100, text: V1 },
     isEnvReadable: true,
+    envDelayMs: 0,
     stats: [],
     periods: 0,
     modes: [],
@@ -71,7 +74,8 @@ function world(on: On, env: Record<string, string>, kept?: Role): World {
     return next(e)
   })
   w.time = mock.clock(on, { now: 1_000_000 })
-  on('env.get', ($, e) => {
+  on('env.get', async ($, e) => {
+    if (w.envDelayMs > 0) await w.time.sleep(w.envDelayMs)
     if (!w.isEnvReadable) return { deny: 'the environment cannot be read here' }
     if (kept !== undefined && e.name === 'TICKET_PANES_TICKET') return { deny: 'the variable cannot be read here' }
     return { value: env[e.name] }
@@ -237,6 +241,15 @@ test('a kept role of kind side that names no ticket draws no ticket and polls no
   expect(w.periods).toBe(0)
 })
 
+test('a kept role of kind side whose ticket is empty draws no ticket and polls nothing', async ($, on) => {
+  const w = world(on, { TICKETS_DIR: DIR }, { kind: 'side', sideTicket: '' })
+  const ui = await mount($)
+  expect(await ui.drawn()).toMatchObject({ type: 'Text', children: [BENEATH] })
+  await say($)
+  expect(w.modes).toEqual([])
+  expect(w.periods).toBe(0)
+})
+
 test('a kept role of kind side with its ticket draws the band', async ($, on) => {
   world(on, { TICKETS_DIR: DIR }, { kind: 'side', sideTicket: 'x-ab12' })
   expect(await form(await mount($))).toBe('compact')
@@ -260,6 +273,27 @@ test('the band draws again once the role is stored', async ($, on) => {
   w.isEnvReadable = true
   await start($)
   expect(await form(ui)).toBe('compact')
+})
+
+// A draw that joins a resolution another event started reads no role of its own (role.ts reads
+// the stored one only in the resolution it runs), so only the band's own read of it draws the band
+// once a later event stores it.
+test('a draw that joined a resolution that could not say draws the band once a later event stores the role', async ($, on) => {
+  const w = world(on, SIDE_ENV)
+  w.isEnvReadable = false
+  w.envDelayMs = 1000
+  const starting = start($)
+  await w.time.settle()
+  const mounting = mount($)
+  await w.time.advance(3000)
+  await starting
+  const ui = await mounting
+  expect(await ui.drawn()).toMatchObject({ type: 'Text', children: [BENEATH] })
+  w.isEnvReadable = true
+  w.envDelayMs = 0
+  // The prompt resolves and stores the role, and collapses the band.
+  await say($)
+  expect(await form(ui)).toBe('collapsed')
 })
 
 // ---------- the modes ----------
