@@ -50,6 +50,9 @@ function closesFence(line: string, fence: string): boolean {
 // One blockquote marker leading a line: `>` after any indent. The space after it may stay, as the
 // fence checks take any indent.
 const QUOTE_MARKER = /^\s*>/
+// A list item's marker leading a line: `-`, `*`, `+`, or up to nine digits and `.` or `)`, after
+// any indent, then a space or tab (CommonMark). A fence may start on the marker's line (`1. ```sh`).
+const LIST_MARKER = /^\s*(?:[-*+]|\d{1,9}[.)])[ \t]+/
 
 // How many blockquote markers lead `line`, at most `most`, and the line after them.
 function unquote(line: string, most = Number.POSITIVE_INFINITY): [number, string] {
@@ -69,7 +72,9 @@ function unquote(line: string, most = Number.POSITIVE_INFINITY): [number, string
 // line with fewer markers ends the quote, and the block with it (CommonMark). Inside a block
 // opened outside a quote, a `> ``` line is the block's text. A fence not closed runs to the end
 // of the text, as CommonMark has it (a reply still streaming shows the ids after it once it
-// closes). Lines end in LF or CRLF.
+// closes). A fence on a list marker's line opens a block too, the marker before or after the
+// quote markers (`- > ```, `> - ```); the block's indented lines and close need no marker. Lines
+// end in LF or CRLF.
 function linesOutsideFences(text: string): string[] {
   const kept: string[] = []
   let fence = ''
@@ -83,7 +88,8 @@ function linesOutsideFences(text: string): string[] {
       }
       // The quote holding the block ended, and the block with it: the line is read afresh.
     }
-    const [depth, line] = unquote(raw)
+    const [depth, quoted] = unquote(raw.replace(LIST_MARKER, ''))
+    const line = quoted.replace(LIST_MARKER, '')
     fence = fenceOpenedBy(line)
     fenceDepth = depth
     if (fence === '') kept.push(line)

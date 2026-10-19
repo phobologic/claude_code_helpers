@@ -153,6 +153,16 @@ test('an indented fence, as in a list item, is a fence', () => {
   expect(ticketsIn('1. Run:\n   ```\n   tk show x-ab12\n   ```\n2. Then x-cd34')).toEqual(['x-cd34'])
 })
 
+test('a fence on a list marker line is a fence', () => {
+  expect(ticketsIn('1. ```sh\n   tk show x-ab12\n   ```\n2. then x-cd34')).toEqual(['x-cd34'])
+  expect(ticketsIn('- > ```\n  > x-ab12\n  > ```\nx-cd34')).toEqual(['x-cd34'])
+  expect(ticketsIn('> - ```\n>   x-ab12\n>   ```\n> x-cd34')).toEqual(['x-cd34'])
+  expect(ticketsIn('* ~~~\n  x-ab12\n  ~~~\n+ x-cd34\n3) x-ef56')).toEqual(['x-cd34', 'x-ef56'])
+  // A list item's ids count, and a marker with no space after it is no marker.
+  expect(ticketsIn('- x-ab12\n2. x-cd34')).toEqual(['x-ab12', 'x-cd34'])
+  expect(ticketsIn('-```\nx-ab12\n```\nx-cd34')).toEqual(['x-ab12'])
+})
+
 test('a tab-indented fence is a fence', () => {
   expect(ticketsIn('\t```\nx-ab12\n\t```\nx-cd34')).toEqual(['x-cd34'])
 })
@@ -165,6 +175,10 @@ test('a fence inside a blockquote, or with CRLF line ends, is a fence', () => {
   expect(ticketsIn('> > ```\n> > x-ab12\n> > ```\n> x-cd34')).toEqual(['x-cd34'])
   // Markers may be indented, and come without a space between them.
   expect(ticketsIn('  >>```\n  >> x-ab12\n  >>```\nx-cd34')).toEqual(['x-cd34'])
+  // The depth counts markers, not their indent; a tab may follow a marker; quotes nest deep.
+  expect(ticketsIn('  > ```\n> x-ab12\n> ```\nx-cd34')).toEqual(['x-cd34'])
+  expect(ticketsIn('>\t> ```\n>\t> x-ab12\n>\t> ```\nx-cd34')).toEqual(['x-cd34'])
+  expect(ticketsIn('> > > ```\n> > > x-ab12\n> > > ```\nx-cd34')).toEqual(['x-cd34'])
   expect(ticketsIn('run\r\n```sh\r\ntk show x-ab12\r\n```\r\nthen x-cd34')).toEqual(['x-cd34'])
 })
 
