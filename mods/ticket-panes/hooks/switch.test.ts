@@ -61,7 +61,7 @@ const ACTIVITY_PANE: Record<string, FakePane> = { 'w1:p3': { terminalId: 'term-3
 function fake(world: World = {}) {
   forgetRole()
   forgetSwitch()
-  const seen = { runs: [] as string[][], toasts: [] as string[], writes: [] as string[] }
+  const seen = { runs: [] as string[][], timeouts: [] as (number | undefined)[], toasts: [] as string[], writes: [] as string[] }
   const clock = { now: 0 }
   const store = new Map<string, unknown>()
   const panes = new Map<string, FakePane>()
@@ -140,6 +140,7 @@ function fake(world: World = {}) {
 
   const run = async (argv: readonly string[], init?: ProcessRunInit): Promise<ProcessRunResult> => {
     seen.runs.push([...argv])
+    seen.timeouts.push(init?.timeoutMs)
     if (init?.timeoutMs === undefined) throw new Error(`${argv.join(' ')}: no timeout given`)
     if (argv[0] === 'herdr') return herdr(argv.slice(1))
     if (argv[0] === '/usr/bin/uuidgen') return { exitCode: 0, stdout: `${UUID}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
@@ -378,6 +379,8 @@ test('AC: an activity pane that is ours closes before the side agent is exited',
   const f = fake({ panes: sidePanes('idle', ACTIVITY_PANE) })
   expect(await decideSwitch(f.$, WITH_ACTIVITY, 'x-cd34')).toStrictEqual({ kind: 'opened', paneId: 'w1:p4' })
   expect(steps(f)).toEqual(['agent get tp-x-ab12', 'pane get w1:p3', 'pane close w1:p3', ...IDLE_EXIT, ...launchSteps('w1:p4')])
+  // The look and the close each get herdr's 10 s.
+  expect(f.seen.timeouts.slice(1, 3)).toEqual([10_000, 10_000])
   expect([...f.panes.keys()]).toEqual(['w1:p4'])
   // The fresh side pane's record has no activity part.
   expect(f.store.get(KEY)).toStrictEqual(cd34Record('w1:p4', 'term-4'))

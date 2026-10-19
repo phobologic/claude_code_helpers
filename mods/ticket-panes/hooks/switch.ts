@@ -33,13 +33,12 @@ function field(value: unknown, key: string): unknown {
   return typeof value === 'object' && value !== null ? (value as Record<string, unknown>)[key] : undefined
 }
 
-// The terminal herdr shows in pane `paneId`, or undefined when the look fails.
-async function terminalOf($: EngineInterface, paneId: string): Promise<string | undefined> {
+// What herdr shows as pane `paneId`'s terminal id, or undefined when the look fails.
+async function terminalOf($: EngineInterface, paneId: string): Promise<unknown> {
   try {
     const out = await $.process.run(['herdr', 'pane', 'get', paneId], { timeoutMs: HERDR_MS })
     if (out.exitCode !== 0) return undefined
-    const terminal = field(field(field(JSON.parse(out.stdout), 'result'), 'pane'), 'terminal_id')
-    return typeof terminal === 'string' ? terminal : undefined
+    return field(field(field(JSON.parse(out.stdout), 'result'), 'pane'), 'terminal_id')
   } catch {
     return undefined // herdr is missing, ran past its time, or wrote no JSON
   }
