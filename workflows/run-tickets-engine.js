@@ -49,7 +49,7 @@ const oneLine = s => typeof s === 'string' && s.trim() !== '' && !s.includes('\n
 for (const g of GATES) {
   const ok = typeof g === 'string' ? oneLine(g)
     : Boolean(g) && typeof g === 'object' && Object.keys(g).sort().join() === 'command,paths' && oneLine(g.command)
-      && Array.isArray(g.paths) && g.paths.length > 0 && g.paths.every(oneLine)
+      && Array.isArray(g.paths) && g.paths.length > 0 && g.paths.every(p => oneLine(p) && !/^\.?\//.test(p))
   if (!ok) throw new Error(`gate ${JSON.stringify(g)} must be a command string or {command, paths: [glob, ...]} with at least one path`)
 }
 const gateCommand = g => typeof g === 'string' ? g : g.command

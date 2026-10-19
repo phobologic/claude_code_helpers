@@ -314,7 +314,8 @@ const scopedGates = [
 
 // A malformed gate is refused before anything runs.
 for (const bad of [{ command: 'x', paths: [] }, { command: 'x' }, { command: 'x', paths: ['a/**'], extra: 1 }, { command: '', paths: ['a'] },
-  { command: 'x', paths: [''] }, { command: 'x', paths: 'a/**' }, 'two\nlines', '', null, 3]) {
+  { command: 'x', paths: [''] }, { command: 'x', paths: 'a/**' }, { command: 'x', paths: ['/a/**'] }, { command: 'x', paths: ['./a/**'] },
+  'two\nlines', '', null, 3]) {
   // The message names the gate and the shape, rather than a TypeError from deeper in.
   let message = ''
   try { await run({ ...base, slots: ['s1'], gates: [bad], tickets: [T('BG')] }) } catch (e) { message = e.message }

@@ -12,13 +12,13 @@ GATES_JSON is the workflow's `gates` list. Each gate is either
                                        runs when the merge changes at least one
                                        file matching any of its paths
 
-The changed files are `git diff --name-only --no-renames HEAD` in the current
+The changed files are `git diff -z --name-only --no-renames HEAD` in the current
 directory: what the merge in progress changes relative to the integration
 branch. --no-renames lists a moved file under both its old and new path, so a
 file moved out of a gate's paths still runs that gate. --files gives the list
 directly instead (for tests).
 
-Paths are globs relative to the repo root:
+Paths are globs relative to the repo root (no leading / or ./):
   **     any number of characters, across folders (mods/** is everything under mods/)
   *      any characters within one folder name
   ?      one character within one folder name
@@ -62,6 +62,8 @@ def problem(gate):
     paths = gate["paths"]
     if not isinstance(paths, list) or not paths or not all(text(p) for p in paths):
         return "paths must be a non-empty list of globs (a gate that always runs is a plain string)"
+    if any(p.startswith(("/", "./")) for p in paths):
+        return "paths are relative to the repo root: no leading / or ./"
     return None
 
 
@@ -104,10 +106,12 @@ def select(gates, files):
 
 
 def changed_files():
-    res = subprocess.run(["git", "diff", "--name-only", "--no-renames", "HEAD"], capture_output=True, text=True)
+    # -z: without it git quotes names it would escape (non-ASCII, ", tab, backslash), and no glob matches those.
+    res = subprocess.run(["git", "diff", "-z", "--name-only", "--no-renames", "HEAD"], capture_output=True)
     if res.returncode != 0:
-        die(f"git diff failed: {(res.stderr or res.stdout).strip()}", 1)
-    return [line for line in res.stdout.splitlines() if line]
+        die(f"git diff failed: {(res.stderr or res.stdout).decode(errors='replace').strip()}", 1)
+    # The trailing NUL leaves an empty last entry.
+    return [name for name in res.stdout.decode("utf-8", "surrogateescape").split("\0") if name]
 
 
 def main(argv):

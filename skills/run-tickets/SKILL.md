@@ -178,7 +178,7 @@ in series. Scope a gate that only some files can affect:
 `{ "command": "<command>", "paths": ["<glob>", ...] }`. A merge runs it only
 when the merge changes a file matching one of its paths;
 `bin/run-tickets-gates` decides from the merged result, not the merge agent.
-A plain string runs on every merge. Paths are globs from the repo root: `**`
+A plain string runs on every merge. Paths are globs relative to the repo root (no leading / or ./): `**`
 crosses folders, `*` and `?` stay within one folder name, a trailing `/`
 means everything under that folder, and a path with no wildcard is that file
 or everything under it. Take the scope from something that states it:

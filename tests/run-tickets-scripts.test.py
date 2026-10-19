@@ -500,6 +500,17 @@ with tempfile.TemporaryDirectory() as tmp:
           res.stdout.splitlines() == ["make lint", "suite"], res.stdout + res.stderr)
     sh("git", "merge", "--abort", cwd=root)
 
+    # A name git would quote (non-ASCII) still matches its gate.
+    sh("git", "checkout", "-qb", "ticket/q", "main", cwd=root)
+    os.makedirs(os.path.join(root, "mods", "q"))
+    commit(root, "mods/q/café.txt", "x\n", "quoted")
+    sh("git", "checkout", "-q", "main", cwd=root)
+    sh("git", "merge", "--no-ff", "--no-commit", "ticket/q", cwd=root)
+    res = subprocess.run([GATES, json.dumps(SAMPLE_GATES)], cwd=root, capture_output=True, text=True)
+    check("gates: a changed file whose name git would quote still runs its gate",
+          res.stdout.splitlines() == ["make lint", "mods-check"], res.stdout + res.stderr)
+    sh("git", "merge", "--abort", cwd=root)
+
     res = subprocess.run([GATES, json.dumps(SAMPLE_GATES)], cwd=tmp, capture_output=True, text=True)
     check("gates: outside a git repo it fails instead of choosing from nothing", res.returncode == 1 and not res.stdout,
           res.stdout + res.stderr)
@@ -507,13 +518,15 @@ with tempfile.TemporaryDirectory() as tmp:
 for bad in ('{"command": "x"}', "[3]", '[{"command": "x", "paths": []}]', '[{"command": "x"}]', '[{"command": "x", "path": ["a"]}]',
             '[{"command": "x", "paths": ["a"], "extra": 1}]',
             '[{"command": "", "paths": ["a"]}]', '[{"command": "x", "paths": [""]}]', '[{"command": "x", "paths": "a"}]',
-            '["a\\nb"]', '[""]', "not json"):
+            '["a\\nb"]', '[""]', "not json", '[{"command": "x", "paths": ["/a"]}]', '[{"command": "x", "paths": ["./a"]}]'):
     res = subprocess.run([GATES, bad, "--files", "a"], capture_output=True, text=True)
     check(f"gates: malformed gates exit 2 without choosing: {bad}", res.returncode == 2 and not res.stdout, res.stdout + res.stderr)
 res = subprocess.run([GATES, "[]", "--bogus"], capture_output=True, text=True)
 check("gates: an unknown argument exits 2", res.returncode == 2 and not res.stdout)
 res = subprocess.run([GATES], capture_output=True, text=True)
 check("gates: no arguments exits 2 with the usage", res.returncode == 2 and "Usage" in res.stderr)
+res = subprocess.run([GATES, "--help"], capture_output=True, text=True)
+check("gates: --help exits 2 with the usage", res.returncode == 2 and "Usage" in res.stderr, res.stderr)
 
 # ---------- run-capped ----------
 
