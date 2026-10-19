@@ -466,19 +466,20 @@ test('opening the ticket the pane shows again replaces nothing', WITH_CALLER, as
   expect(w.opens).toEqual([PANE_OPEN('x-ab12'), PANE_OPEN('x-ab12')])
 })
 
-test('AC: once the pane is closed it shows no ticket, and the next open replaces none', WITH_CALLER, async ($, on) => {
+// The pane shows x-ab12 when it closes, so only the close keeps the toast away from x-cd34.
+test('AC: once the pane is closed it shows no ticket, and opening x-cd34 replaces none', WITH_CALLER, async ($, on) => {
   const w = world(on, { TICKETS_DIR: DIR })
   await open($, 'x-ab12')
-  await open($, 'x-cd34')
   await close($)
   expect(w.closes).toEqual([PANE_ID])
-  expect(w.paneTickets).toEqual(['x-ab12', 'x-cd34', null])
+  expect(w.paneTickets).toEqual(['x-ab12', null])
   expect(await texts(await mountPane($))).toEqual(['no ticket'])
-  // Another ticket than the one shown last, so only the close keeps the toast away.
-  await open($, 'x-ab12')
-  expect(w.toasts).toEqual(['Showing x-cd34 (replaced x-ab12)'])
   await open($, 'x-cd34')
-  expect(w.toasts).toEqual(['Showing x-cd34 (replaced x-ab12)', 'Showing x-cd34 (replaced x-ab12)'])
+  expect(w.toasts).toEqual([])
+  expect(w.opens).toEqual([PANE_OPEN('x-ab12'), PANE_OPEN('x-cd34')])
+  // Open again, the pane replaces its ticket as before.
+  await open($, 'x-ab12')
+  expect(w.toasts).toEqual(['Showing x-ab12 (replaced x-cd34)'])
 })
 
 test('a close refused beneath the plugin leaves the pane on its ticket', WITH_CALLER, async ($, on) => {
