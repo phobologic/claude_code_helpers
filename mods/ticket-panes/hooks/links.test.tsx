@@ -158,6 +158,11 @@ test('a fence on a list marker line is a fence', () => {
   expect(ticketsIn('- > ```\n  > x-ab12\n  > ```\nx-cd34')).toEqual(['x-cd34'])
   expect(ticketsIn('> - ```\n>   x-ab12\n>   ```\n> x-cd34')).toEqual(['x-cd34'])
   expect(ticketsIn('* ~~~\n  x-ab12\n  ~~~\n+ x-cd34\n3) x-ef56')).toEqual(['x-cd34', 'x-ef56'])
+  expect(ticketsIn('+ ```\n  x-ab12\n  ```\n10) ```\n    x-cd34\n    ```\nx-ef56')).toEqual(['x-ef56'])
+  // A nested item's marker is indented.
+  expect(ticketsIn('- a\n  - ```\n    x-ab12\n    ```\nx-cd34')).toEqual(['x-cd34'])
+  // Ten digits make no list marker (CommonMark).
+  expect(ticketsIn('1234567890. ```\nx-ab12\n```\nx-cd34')).toEqual(['x-ab12'])
   // A list item's ids count, and a marker with no space after it is no marker.
   expect(ticketsIn('- x-ab12\n2. x-cd34')).toEqual(['x-ab12', 'x-cd34'])
   expect(ticketsIn('-```\nx-ab12\n```\nx-cd34')).toEqual(['x-ab12'])
