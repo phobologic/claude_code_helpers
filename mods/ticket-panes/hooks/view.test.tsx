@@ -192,6 +192,26 @@ test('a file with CRLF or CR line endings reads as the same ticket', () => {
   expect(parseTicket('x-ab12', TASK.replace(/\n/g, '\r'))).toStrictEqual(parseTicket('x-ab12', TASK))
 })
 
+test('fields come only from the frontmatter, and its closing --- is not body text', () => {
+  const ticket = parseTicket('x-ab12', ['---', 'status: open', '---', 'Body text.', 'status: closed', 'parent: x-zz99'].join('\n'))
+  expect([ticket.status, ticket.parent, ticket.title, ticket.description]).toEqual(['open', '', '', 'Body text.\nstatus: closed\nparent: x-zz99'])
+})
+
+test('a stamp without its Z still starts a note', () => {
+  const text = ['# T', '', '## Notes', '', '**2030-03-01T11:00:00Z**', '', 'One.', '', '**2030-03-01T12:00:00**', '', 'Two.'].join('\n')
+  expect(parseTicket('x-ab12', text).notes).toEqual(['**2030-03-01T11:00:00Z**\n\nOne.', '**2030-03-01T12:00:00**\n\nTwo.'])
+})
+
+test('a # line inside a fenced block does not end the criteria', () => {
+  for (const fence of ['```', '~~~']) {
+    const criteria = ['## Acceptance Criteria', '- Running the setup prints ok:', `  ${fence}bash`, '  # from the repo root', '  ./setup.sh', `  ${fence}`, '- A second run changes nothing.']
+    const ticket = parseTicket('x-ab12', ['# T', '', 'Intro.', '', ...criteria, '', '## Design', 'Plain.'].join('\n'))
+    expect(ticket.criteria).toBe(criteria.join('\n'))
+    // After the fence closes, a heading ends them again.
+    expect(ticket.description).toBe('Intro.\n\n## Design\nPlain.')
+  }
+})
+
 // ---------- readTicket ----------
 // readTicket is called by no hook of this task, and a test's own hooks cannot call `$`, so it
 // runs against this stand-in. R1's caches (tickets.ts) carry over from test to test in this
@@ -508,6 +528,29 @@ test('control characters in the file are dropped, so the tree still draws; tabs 
     shown.ticket = { id: 'x-ab12\x07', problem: 'EIO: \x1b[1mbad\x1b[0m read\x00' }
     await ui.redraw()
     expect(await texts(ui)).toEqual(['ticket x-ab12: EIO: bad read'])
+    await ui.unmount()
+  }
+})
+
+test('CSI sequences of any final or intermediate byte go whole', async ($, on) => {
+  const shown: Shown = { ticket: { ...parseTicket('x-ab12', TASK), title: 'Draw\x1b[2K the\x1b[?25l widget\x1b[1 q', notes: [] }, mode: 'compact' }
+  drawView(on, shown)
+  for (const surface of SURFACES) {
+    const ui = await mountView($, surface)
+    expect((await texts(ui))[2]).toBe('Draw the widget')
+    await ui.unmount()
+  }
+})
+
+test('OSC strings to BEL or ST, an unterminated one to the end of its line, and short escapes go whole', async ($, on) => {
+  const title = 'see \x1b]8;;file:///a.ts\x1b\\a.ts\x1b]8;;\x1b\\ and\x1b(B \x1b]0;tab\x07done'
+  const description = 'Output:\x1b]0;no end\nnext line\x1b=.'
+  const shown: Shown = { ticket: { ...parseTicket('x-ab12', TASK), title, description, notes: [] }, mode: 'compact' }
+  drawView(on, shown)
+  for (const surface of SURFACES) {
+    const ui = await mountView($, surface)
+    expect((await texts(ui))[2]).toBe('see a.ts and done')
+    expect((await markdowns(ui))[0]).toEqual([VIEW_KEYS.description, 'Output:\nnext line.'])
     await ui.unmount()
   }
 })

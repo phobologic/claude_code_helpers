@@ -20,7 +20,7 @@ export type Ticket = {
   // Markdown: everything between the title and `## Notes` that is not the criteria.
   description: string
   // Markdown: the acceptance criteria (E18), from the line that starts them up to the next
-  // heading; '' when there are none.
+  // heading outside a fenced block; '' when there are none.
   criteria: string
   // Each note as written, oldest first: its `**<time>**` line and its text.
   notes: string[]
@@ -69,6 +69,8 @@ const CRITERIA_START = /^\s*(#+\s*acceptance criteria|\*\*acceptance criteria\*\
 // What ends them, as the planner's count of them stops: a line led by `#` or `**`, though not by
 // `**-` (a bold flag such as `**--watch**` opens no section).
 const NEXT_HEADING = /^\s*(#|\*\*(?!-))/
+// A line that opens or closes a fenced code block.
+const FENCE = /^\s*(```|~~~)/
 const FIELD = /^(status|type|priority|parent):(.*)$/
 
 type Fields = Pick<Ticket, 'status' | 'type' | 'priority' | 'parent'>
@@ -86,12 +88,23 @@ function splitFrontmatter(lines: string[]): { fields: Fields; body: string[] } {
   return { fields, body: lines.slice(end + 1) }
 }
 
+// Where the criteria starting at `start` end: the next heading line outside a fenced block (a
+// shell `# comment` in an example is not a heading), else the end of the lines.
+function criteriaEnd(lines: string[], start: number): number {
+  let isFenced = false
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i]!
+    if (FENCE.test(line)) isFenced = !isFenced
+    else if (!isFenced && NEXT_HEADING.test(line)) return i
+  }
+  return lines.length
+}
+
 // The criteria's lines and the rest, from the lines between the title and `## Notes`.
 function splitCriteria(lines: string[]): { criteria: string[]; rest: string[] } {
   const start = lines.findIndex(line => CRITERIA_START.test(line))
   if (start < 0) return { criteria: [], rest: lines }
-  const after = lines.slice(start + 1).findIndex(line => NEXT_HEADING.test(line))
-  const end = after < 0 ? lines.length : start + 1 + after
+  const end = criteriaEnd(lines, start)
   return { criteria: lines.slice(start, end), rest: [...lines.slice(0, start), ...lines.slice(end)] }
 }
 
@@ -158,9 +171,11 @@ export async function readTicket($: EngineInterface, id: string): Promise<Ticket
 // ---------- drawing ----------
 
 // The engine refuses a whole tree whose text holds a control character other than tab and
-// newline, so pasted terminal output in a note would blank the view. Escape sequences (colours)
-// go whole, any other control character alone.
-const ESCAPE_SEQUENCE = /\x1b\[[0-?]*[ -/]*[@-~]/g
+// newline, so pasted terminal output in a note would blank the view. Escape sequences go whole:
+// CSI (`ESC [`, colours and cursor moves), the OSC, DCS, SOS, PM and APC strings (hyperlinks,
+// titles) up to BEL or ST, or to the end of the line when unterminated, and the short escapes
+// (`ESC ( B`). Any other control character goes alone.
+const ESCAPE_SEQUENCE = /\x1b(?:\[[0-?]*[ -/]*[@-~]|[\]PX^_][^\x07\x1b\n]*(?:\x07|\x1b\\)?|[ -/]*[0-~])/g
 const CONTROL = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g
 
 function drawable(text: string): string {
