@@ -74,6 +74,17 @@ test('agent lines count every agent and list the running ones, newest first', ()
   expect(done).toEqual([{ text: 'agents  0 running, 1 finished', isDim: true }])
 })
 
+test('agent lines leave out running agents a ticket row already shows', () => {
+  const lines = agentLines([
+    { key: 'a', runId: 'wf_1', label: 'impl x-2', startedAt: T0 },
+    { key: 'b', runId: 'wf_1', label: 'integration check', startedAt: T0 + MIN },
+  ], T0 + 5 * MIN, 0, new Set(['x-2']))
+  expect(lines.map(l => l.text)).toEqual([
+    'agents  2 running, 0 finished',
+    '  23:51  integration check  running 4m00s',
+  ])
+})
+
 const BAND = {
   plugin: 'workflow-monitor', component: 'AbovePrompt',
   props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 120, scroll: { offset: 0, bodyRows: 19 }, view: {} },
