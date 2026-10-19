@@ -190,7 +190,7 @@ test('commandsIn answers undefined for text it cannot split', () => {
 })
 
 test('deniedGitOf names each commit-making subcommand', () => {
-  const subs = ['commit', 'push', 'merge', 'revert', 'cherry-pick', 'am', 'rebase']
+  const subs = ['commit', 'push', 'merge', 'revert', 'cherry-pick', 'am', 'rebase', 'pull']
   expect(subs.map(sub => deniedGitOf(['git', sub, 'x']))).toStrictEqual(subs)
   for (const sub of ['status', 'log', 'diff', 'add', 'show', 'branch']) expect(deniedGitOf(['git', sub])).toBeUndefined()
   expect(deniedGitOf(['git'])).toBeUndefined()
@@ -238,6 +238,21 @@ test('tkUseOf finds tk by its basename, after assignments, env and a group\'s op
   const lines = [['/usr/local/bin/tk', 'close'], ['env', 'A=1', '/usr/local/bin/tk', 'close'], ['/usr/bin/env', 'tk', 'close'], ['A=1', 'tk', 'close'], ['(', 'tk', 'close'], ['{', 'tk', 'close'], ['!', 'tk', 'close'], ['!{tk', 'close'], ['', 'tk', 'close']]
   expect(lines.map(words => tkUseOf(words))).toStrictEqual(lines.map(() => ({ label: 'tk close' })))
   for (const words of [['echo', 'tk', 'close'], ['tkx', 'close'], ['atk', 'close'], ['tk/', 'close'], ['1A=1', 'tk', 'close'], []]) expect(tkUseOf(words)).toBeUndefined()
+})
+
+// The reserved words a command can follow, each passed over before the command name.
+const RESERVED_WORDS = ['if', 'then', 'elif', 'else', 'do', 'while', 'until', 'time']
+
+test('tk and git are found after a reserved word that begins a command', () => {
+  expect(RESERVED_WORDS.map(w => [w, tkUseOf([w, 'tk', 'close', 'x'])])).toStrictEqual(RESERVED_WORDS.map(w => [w, { label: 'tk close' }]))
+  expect(RESERVED_WORDS.map(w => [w, deniedGitOf([w, 'git', 'commit'])])).toStrictEqual(RESERVED_WORDS.map(w => [w, 'commit']))
+  // More than one, and with `!` after.
+  expect(tkUseOf(['if', '!', 'tk', 'close', 'x'])).toStrictEqual({ label: 'tk close' })
+  expect(deniedGitOf(['while', 'time', 'git', 'push'])).toBe('push')
+  // Only at the front: as an argument a reserved word is a word.
+  expect(tkUseOf(['echo', 'do', 'tk', 'close'])).toBeUndefined()
+  expect(deniedGitOf(['echo', 'then', 'git', 'commit'])).toBeUndefined()
+  expect(tkUseOf(['tk', 'show', 'do'])).toBeUndefined()
 })
 
 test('tkUseOf reads a create\'s --parent as tk does: the last one, never an option\'s value', () => {
@@ -577,6 +592,22 @@ test('AC: commit-making git is refused in a side session, in a run or not', asyn
     // Refused without a lookup.
     expect(w.runs).toStrictEqual([])
   }
+})
+
+test('tk and git in a loop or a conditional are judged like any other', async ($, on) => {
+  const w = world(on, SIDE_ENV)
+  expect(denial(await bash($, 'for t in x-ab12 x-cd34; do tk close "$t"; done'))).toContain('`tk close` is refused')
+  expect(denial(await bash($, 'if git diff --quiet; then echo same; else git commit -am x; fi'))).toContain('`git commit` is refused')
+  expect(denial(await bash($, 'while true; do git pull; done'))).toContain('`git pull` is refused')
+  expect(w.ran).toStrictEqual([])
+})
+
+test('git is refused after a tk use, and a refusal names the use it refuses', async ($, on) => {
+  const w = world(on, SIDE_ENV, { lookup: NOT_IN_RUN })
+  expect(denial(await bash($, 'tk close x-ab12 && git commit -m x'))).toContain('`git commit` is refused')
+  w.lookup = IN_RUN
+  expect(denial(await bash($, `tk create "t" --parent ${BACKLOG} && tk close x-ab12`))).toContain('`tk close` is refused')
+  expect(w.ran).toStrictEqual([])
 })
 
 test('git that makes no commit runs in a side session', async ($, on) => {

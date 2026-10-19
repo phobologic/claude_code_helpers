@@ -55,11 +55,15 @@ const TK_CREATE_VALUE_OPTIONS = new Set([
 ])
 
 // The git subcommands that make or publish commits: always refused in a side session (E16).
-const GIT_DENIED = new Set(['commit', 'push', 'merge', 'revert', 'cherry-pick', 'am', 'rebase'])
+// `pull` is a fetch and a merge or rebase, so it makes commits too.
+const GIT_DENIED = new Set(['commit', 'push', 'merge', 'revert', 'cherry-pick', 'am', 'rebase', 'pull'])
 // git's global options that may take their value as the next word. Any other word before the
 // subcommand that starts with `-` (`--no-pager`, `--git-dir=<dir>`, `-p`) is an option alone.
 const GIT_VALUE_OPTIONS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--super-prefix', '--config-env'])
 
+// The shell's reserved words that a command can follow (`do tk close "$t"`, `else git commit`,
+// `time tk close x`), read as words: `(`, `{` and `!` are stripped as characters instead.
+const RESERVED = new Set(['if', 'then', 'elif', 'else', 'do', 'while', 'until', 'time'])
 // A word that sets a variable for the command after it (`ID=...`), read after quote removal.
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/
 // What a tk id can be, as tickets.ts reads one; an empty answer from `tk backlog` is none.
@@ -80,86 +84,161 @@ export function commandsIn(text: string): string[][] | undefined {
   return scan(text, 0, false, out) === undefined ? undefined : out
 }
 
+// One scan's reading: the words of the command being read, the word being read (undefined
+// between words), how many groups are open, and the commands ended so far (`out`, shared with the
+// scans of the groups inside it).
+class Reading {
+  words: string[] = []
+  word: string | undefined
+  depth = 0
+
+  constructor(readonly out: string[][]) {}
+
+  add(part: string): void {
+    this.word = (this.word ?? '') + part
+  }
+
+  endWord(): void {
+    if (this.word !== undefined) this.words.push(this.word)
+    this.word = undefined
+  }
+
+  endCommand(): void {
+    this.endWord()
+    if (this.words.length > 0) this.out.push(this.words)
+    this.words = []
+  }
+}
+
+// How the character at `i` is read: the index to read on from, or undefined when the text can't
+// be split there.
+type Step = (text: string, i: number, r: Reading) => number | undefined
+
+// Any character with no step of its own is part of its word.
+const plain: Step = (text, i, r) => {
+  r.add(text[i] ?? '')
+  return i + 1
+}
+
+// A backslash and newline join two lines; any other character after a backslash is taken as is.
+const escaped: Step = (text, i, r) => {
+  const after = text[i + 1] ?? ''
+  if (after !== '\n') r.add(after)
+  return i + 2
+}
+
+const singleQuoted: Step = (text, i, r) => {
+  const close = text.indexOf("'", i + 1)
+  if (close < 0) return undefined
+  r.add(text.slice(i + 1, close))
+  return close + 1
+}
+
+const doubleQuotedStep: Step = (text, i, r) => {
+  const close = doubleQuoted(text, i + 1, r.out)
+  if (close === undefined) return undefined
+  r.add(close.text)
+  return close.end
+}
+
+// A `$(...)` or backtick group: its commands are scanned, and its text is part of the word. A `$`
+// that opens no group is a character of its word.
+const group: Step = (text, i, r) => {
+  if (!isGroupAt(text, i)) return plain(text, i, r)
+  const end = groupEnd(text, i, r.out)
+  if (end === undefined) return undefined
+  r.add(text.slice(i, end))
+  return end
+}
+
+// A `#` that starts a word comments out the rest of its line.
+const comment: Step = (text, i, r) => {
+  if (r.word !== undefined) return plain(text, i, r)
+  const eol = text.indexOf('\n', i)
+  return eol < 0 ? text.length : eol
+}
+
+const blank: Step = (_text, i, r) => {
+  r.endWord()
+  return i + 1
+}
+
+const commandEnd: Step = (_text, i, r) => {
+  r.endCommand()
+  return i + 1
+}
+
+// `&&`, `||`, `|&` (each character ending the command in turn), or one `&` or `|`. An `&` in a
+// redirection (`2>&1`, `<&3`, `&>file`) is part of its word.
+const operator: Step = (text, i, r) => {
+  const before = text[i - 1] ?? ''
+  const after = text[i + 1] ?? ''
+  const isRedirection = after !== '&' && (before === '>' || before === '<' || after === '>')
+  if (text[i] === '&' && isRedirection) r.add('&')
+  else r.endCommand()
+  return i + 1
+}
+
+const groupOpen: Step = (_text, i, r) => {
+  r.endCommand()
+  r.depth += 1
+  return i + 1
+}
+
+// A `)` that closes a group opened in this scan, or one with no group open at the top.
+const groupClose: Step = (_text, i, r) => {
+  r.endCommand()
+  if (r.depth > 0) r.depth -= 1
+  return i + 1
+}
+
+const STEPS = new Map<string, Step>([
+  ['\\', escaped],
+  ["'", singleQuoted],
+  ['"', doubleQuotedStep],
+  ['$', group],
+  ['`', group],
+  ['#', comment],
+  [' ', blank],
+  ['\t', blank],
+  ['\n', commandEnd],
+  [';', commandEnd],
+  ['&', operator],
+  ['|', operator],
+  ['(', groupOpen],
+  [')', groupClose],
+])
+
 // Scans `text` from `from`, adding each command it ends to `out`. Inside a `$(...)` (`isInner`)
 // it stops after the `)` that closes it and answers the index after it; at the top it reads to
 // the end. Undefined when the text can't be split.
 function scan(text: string, from: number, isInner: boolean, out: string[][]): number | undefined {
-  let words: string[] = []
-  let word: string | undefined
-  let depth = 0
-  const endWord = () => {
-    if (word !== undefined) words.push(word)
-    word = undefined
-  }
-  const endCommand = () => {
-    endWord()
-    if (words.length > 0) out.push(words)
-    words = []
-  }
-  const add = (part: string) => {
-    word = (word ?? '') + part
-  }
+  const r = new Reading(out)
   let i = from
   while (i < text.length) {
     const c = text[i] ?? ''
-    const after = text[i + 1] ?? ''
-    if (c === '\\') {
-      // A backslash and newline join two lines; any other character after it is taken as is.
-      if (after !== '\n') add(after)
-      i += 2
-    } else if (c === "'") {
-      const close = text.indexOf("'", i + 1)
-      if (close < 0) return undefined
-      add(text.slice(i + 1, close))
-      i = close + 1
-    } else if (c === '"') {
-      const close = doubleQuoted(text, i + 1, out)
-      if (close === undefined) return undefined
-      add(close.text)
-      i = close.end
-    } else if (c === '$' && after === '(') {
-      const end = scan(text, i + 2, true, out)
-      if (end === undefined) return undefined
-      add(text.slice(i, end))
-      i = end
-    } else if (c === '`') {
-      const end = backticks(text, i, out)
-      if (end === undefined) return undefined
-      add(text.slice(i, end))
-      i = end
-    } else if (c === '#' && word === undefined) {
-      const eol = text.indexOf('\n', i)
-      i = eol < 0 ? text.length : eol
-    } else if (c === ' ' || c === '\t') {
-      endWord()
-      i += 1
-    } else if (c === '\n' || c === ';') {
-      endCommand()
-      i += 1
-    } else if (c === '&' || c === '|') {
-      // `&&`, `||`, `|&` (each character ending the command in turn), or one `&` or `|`. An `&`
-      // in a redirection (`2>&1`, `&>file`) is part of its word.
-      const before = text[i - 1] ?? ''
-      if (c === '&' && after !== '&' && (before === '>' || before === '<' || after === '>')) add(c)
-      else endCommand()
-      i += 1
-    } else if (c === '(') {
-      endCommand()
-      depth += 1
-      i += 1
-    } else if (c === ')') {
-      endCommand()
-      i += 1
-      if (depth > 0) depth -= 1
-      else if (isInner) return i
-    } else {
-      add(c)
-      i += 1
+    if (isInner && c === ')' && r.depth === 0) {
+      r.endCommand()
+      return i + 1
     }
+    const next = (STEPS.get(c) ?? plain)(text, i, r)
+    if (next === undefined) return undefined
+    i = next
   }
   if (isInner) return undefined
-  endCommand()
+  r.endCommand()
   return i
+}
+
+// Whether a `$(...)` or backtick group opens at `i`.
+function isGroupAt(text: string, i: number): boolean {
+  return text[i] === '`' || (text[i] === '$' && text[i + 1] === '(')
+}
+
+// The index after the group that opens at `i` (isGroupAt), its commands added to `out`; undefined
+// when it is left open.
+function groupEnd(text: string, i: number, out: string[][]): number | undefined {
+  return text[i] === '`' ? backticks(text, i, out) : scan(text, i + 2, true, out)
 }
 
 // A double-quoted string from just after its opening quote: its text with quotes removed, and the
@@ -169,28 +248,29 @@ function doubleQuoted(text: string, from: number, out: string[][]): { text: stri
   let value = ''
   let i = from
   while (i < text.length) {
-    const c = text[i] ?? ''
-    const after = text[i + 1] ?? ''
-    if (c === '"') return { text: value, end: i + 1 }
-    if (c === '\\' && '"\\$`\n'.includes(after)) {
-      if (after !== '\n') value += after
-      i += 2
-    } else if (c === '$' && after === '(') {
-      const end = scan(text, i + 2, true, out)
-      if (end === undefined) return undefined
-      value += text.slice(i, end)
-      i = end
-    } else if (c === '`') {
-      const end = backticks(text, i, out)
+    if (text[i] === '"') return { text: value, end: i + 1 }
+    if (isGroupAt(text, i)) {
+      const end = groupEnd(text, i, out)
       if (end === undefined) return undefined
       value += text.slice(i, end)
       i = end
     } else {
-      value += c
-      i += 1
+      const [part, size] = quotedChar(text, i)
+      value += part
+      i += size
     }
   }
   return undefined
+}
+
+// The character at `i` in double quotes, as the text it stands for and how many characters it
+// takes. A backslash escapes a `"`, `\`, `$`, backtick or newline after it (a newline is
+// dropped, joining the lines); before anything else it is itself.
+function quotedChar(text: string, i: number): [string, number] {
+  const c = text[i] ?? ''
+  const after = text[i + 1] ?? ''
+  if (c !== '\\' || !'"\\$`\n'.includes(after)) return [c, 1]
+  return [after === '\n' ? '' : after, 2]
 }
 
 // A backtick group at `at`: scans its commands (with `\``, `\\` and `\$` unescaped, as the shell
@@ -217,13 +297,14 @@ function basename(word: string): string {
   return word.slice(word.lastIndexOf('/') + 1)
 }
 
-// A command's words from its name on: `(`, `{` and `!` stripped from the front, and variable
-// assignments and `env` (with the assignments after it) passed over.
+// A command's words from its name on: `(`, `{` and `!` stripped from the front, and the reserved
+// words that begin a command (RESERVED), variable assignments and `env` (with the assignments
+// after it) passed over.
 function fromName(words: readonly string[]): string[] {
   const rest = [...words]
   while (rest.length > 0) {
     const head = (rest[0] ?? '').replace(/^[({!]+/, '')
-    if (head !== '' && !ASSIGNMENT.test(head) && basename(head) !== 'env') {
+    if (head !== '' && !RESERVED.has(head) && !ASSIGNMENT.test(head) && basename(head) !== 'env') {
       rest[0] = head
       break
     }
