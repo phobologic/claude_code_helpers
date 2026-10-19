@@ -26,8 +26,9 @@ const SPLIT_FAILED = 'no run activity for x-ab12: pane split'
 // What a faked herdr command does instead of its work: herdr's error, or a call that never answers
 // in time (`$.process.run` rejects).
 type Failure = { code: string; message?: string } | 'rejects'
-// A pane: its terminal, the agent in it, and the commands `pane run` gave it.
-type FakePane = { terminalId: string; agent?: string; ran?: string[] }
+// A pane: its terminal, the agent in it, the commands `pane run` gave it, and what
+// `pane process-info` lists as its foreground in place of what `ran` gives.
+type FakePane = { terminalId: string; agent?: string; ran?: string[]; foreground?: unknown }
 type World = {
   env?: Record<string, string>
   store?: Record<string, unknown>
@@ -62,6 +63,27 @@ function refusal(code: string, message = `${code} (faked)`): ProcessRunResult {
   return exit(1, '', JSON.stringify({ error: { code, message }, id: 'cli' }))
 }
 
+// What `pane process-info` lists as a pane's foreground, in the shape herdr gave it in a scratch
+// workspace (herdr on macOS, the watch started by `pane run`): run-tickets-status starts through
+// its `#!/usr/bin/env python3` line, so its argv is the interpreter's path, the script's path, then
+// the watch's arguments, and its `name` and `argv0` are the interpreter's. After Ctrl-C the
+// foreground is the pane's login shell. Paths here are stand-ins for the real ones.
+const PYTHON = '/opt/python/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python'
+const SCRIPT = '/home/me/.local/bin/run-tickets-status'
+const SHELL = { argv: ['-bash'], argv0: 'bash', cmdline: '-bash', cwd: ROOT, name: 'bash', pid: 41 }
+
+function watching(args: string[]): unknown {
+  const argv = [PYTHON, SCRIPT, ...args]
+  return { argv, argv0: 'Python', cmdline: argv.join(' '), cwd: ROOT, name: 'Python', pid: 42 }
+}
+
+// The pane's foreground: the process its last `pane run` started, or its shell when it ran none.
+function foregroundOf(pane: FakePane): unknown {
+  if ('foreground' in pane) return pane.foreground
+  const last = pane.ran?.at(-1)?.split(' ')
+  return last?.[0] === 'run-tickets-status' ? [watching(last.slice(1))] : [SHELL]
+}
+
 function fake(world: World = {}) {
   forgetRole()
   const seen = { runs: [] as string[][], inits: [] as (ProcessRunInit | undefined)[], toasts: [] as string[], writes: [] as string[] }
@@ -80,8 +102,13 @@ function fake(world: World = {}) {
     const failed = world.fails?.[label]
     if (failed === 'rejects') throw new Error(`process.run: herdr ${label} ran past its timeout`)
     if (failed !== undefined) return refusal(failed.code, failed.message)
-    const pane = panes.get(rest[0] ?? '')
+    const pane = panes.get((label === 'pane process-info' ? rest[1] : rest[0]) ?? '')
     switch (label) {
+      case 'pane process-info': {
+        if (!pane) return refusal('pane_not_found')
+        const processInfo = { foreground_processes: foregroundOf(pane), pane_id: rest[1], shell_pid: 41 }
+        return answer({ process_info: processInfo, type: 'pane_process_info' })
+      }
       case 'pane get':
         return pane ? answer({ pane: info(rest[0] ?? '', pane), type: 'pane_info' }) : refusal('pane_not_found')
       case 'pane split': {
@@ -157,14 +184,23 @@ function fake(world: World = {}) {
   return { $: $ as unknown as EngineInterface, seen, store, panes }
 }
 
-// Each call a stand-in saw, in short: `find-ticket x-ab12`, `pane split w1:p2`, `pane run w1:p3`.
+// Each call a stand-in saw, in short: `find-ticket x-ab12`, `pane split w1:p2`, `pane run w1:p3`,
+// `pane process-info w1:p3`.
 function steps(f: ReturnType<typeof fake>): string[] {
-  return f.seen.runs.map(argv => (argv[0] === 'herdr' ? `${argv[1]} ${argv[2]} ${argv[3]}` : `find-ticket ${argv[2]}`))
+  return f.seen.runs.map(argv => {
+    if (argv[0] !== 'herdr') return `find-ticket ${argv[2]}`
+    const [group, verb, ...rest] = argv.slice(1).filter(arg => arg !== '--pane')
+    return `${group} ${verb} ${rest[0]}`
+  })
 }
 
-// The side pane, with its agent, and the activity pane below it.
+// The side pane, with its agent, and the activity pane below it running x-ab12's watch of wf_1.
 const SIDE_PANE: Record<string, FakePane> = { 'w1:p2': { terminalId: 'term-2', agent: 'tp-x-ab12' } }
-const BOTH_PANES: Record<string, FakePane> = { ...SIDE_PANE, 'w1:p3': { terminalId: 'term-3' } }
+const BOTH_PANES: Record<string, FakePane> = { ...SIDE_PANE, 'w1:p3': { terminalId: 'term-3', ran: [WATCH] } }
+// What a click sees before it keeps or replaces the activity pane: the lookup, readSide's looks,
+// then the activity pane's foreground.
+const LOOKED = ['find-ticket x-ab12', 'pane get w1:p2', 'pane get w1:p3', 'agent get tp-x-ab12', 'pane process-info w1:p3']
+const REPLACED = [...LOOKED, 'pane close w1:p3', 'pane split w1:p2', 'pane run w1:p4']
 
 // ---------- in a running run ----------
 
@@ -185,16 +221,65 @@ test('AC: a ticket in a running run gets a pane split down from the side pane, u
   expect(f.seen.toasts).toEqual([])
 })
 
-test('AC: an activity pane of ours for the ticket is kept, whatever run the lookup names', async () => {
-  // The record names no run, so the pane is kept by its ticket alone.
-  for (const runId of ['wf_1', 'wf_2']) {
-    const f = fake({ store: { [KEY]: WITH_ACTIVITY }, panes: BOTH_PANES, runs: { 'x-ab12': runId } })
+test('AC: an activity pane of ours still running the watch of the run the lookup names is kept', async () => {
+  const f = fake({ store: { [KEY]: WITH_ACTIVITY }, panes: BOTH_PANES, runs: { 'x-ab12': 'wf_1' } })
+  await syncActivity(f.$, 'x-ab12')
+  expect(steps(f)).toEqual(LOOKED)
+  expect(f.seen.runs.at(-1)).toEqual(['herdr', 'pane', 'process-info', '--pane', 'w1:p3'])
+  expect(f.seen.inits.at(-1)).toEqual({ timeoutMs: 10_000 })
+  expect(f.seen.writes).toEqual([])
+  expect(f.store.get(KEY)).toStrictEqual(WITH_ACTIVITY)
+  expect([...f.panes.keys()]).toEqual([MAIN, 'w1:p2', 'w1:p3'])
+  expect(f.seen.toasts).toEqual([])
+  // Kept the same way when the watch is one of several foreground processes, and whatever
+  // interpreter or script path its argv starts with.
+  const among = [SHELL, { argv: ['/usr/bin/python3', 'run-tickets-status', '--ticket', 'x-ab12', '--watch', '30', 'wf_1'] }]
+  const several = fake({ store: { [KEY]: WITH_ACTIVITY }, panes: { ...SIDE_PANE, 'w1:p3': { terminalId: 'term-3', foreground: among } }, runs: { 'x-ab12': 'wf_1' } })
+  await syncActivity(several.$, 'x-ab12')
+  expect(steps(several)).toEqual(LOOKED)
+  expect(several.seen.writes).toEqual([])
+})
+
+// A replaced activity pane: the old one closed, a new one below the side pane running the watch of
+// `runId`, and the record naming it.
+function expectReplaced(f: ReturnType<typeof fake>, runId: string, label: string): void {
+  expect(steps(f), label).toEqual(REPLACED)
+  expect(f.panes.has('w1:p3'), label).toBe(false)
+  expect(f.panes.get('w1:p4')?.ran, label).toEqual([`run-tickets-status --ticket x-ab12 --watch 30 ${runId}`])
+  expect(f.store.get(KEY), label).toStrictEqual({ ...SIDE, activityPaneId: 'w1:p4', activityTerminalId: 'term-4', activityTicketId: 'x-ab12' })
+  expect(f.seen.toasts, label).toEqual([])
+}
+
+test('AC: an activity pane of ours watching another run (the run was resumed under a new id) is replaced with a watch of this one', async () => {
+  const f = fake({ store: { [KEY]: WITH_ACTIVITY }, panes: BOTH_PANES, runs: { 'x-ab12': 'wf_2' } })
+  await syncActivity(f.$, 'x-ab12')
+  expectReplaced(f, 'wf_2', 'wf_2')
+})
+
+test('AC: an activity pane of ours whose watch was stopped, or whose foreground herdr cannot show, is replaced', async () => {
+  const stopped: [string, FakePane][] = [
+    // Ctrl-C in the pane: its login shell is the foreground again (as herdr lists it).
+    ['stopped', { terminalId: 'term-3', ran: [WATCH], foreground: [SHELL, { ...SHELL, pid: 40 }] }],
+    // A watch of another ticket, or with its words out of order or cut short.
+    ['another ticket', { terminalId: 'term-3', foreground: [watching(['--ticket', 'x-cd34', '--watch', '30', 'wf_1'])] }],
+    ['out of order', { terminalId: 'term-3', foreground: [watching(['--watch', '30', '--ticket', 'x-ab12', 'wf_1'])] }],
+    ['cut short', { terminalId: 'term-3', foreground: [watching(['--ticket', 'x-ab12', '--watch', '30'])] }],
+    // The watch's words in what herdr gives besides argv count for nothing.
+    ['no argv', { terminalId: 'term-3', foreground: [{ name: 'Python', cmdline: `${PYTHON} ${SCRIPT} --ticket x-ab12 --watch 30 wf_1` }] }],
+    ['argv not a list', { terminalId: 'term-3', foreground: [{ argv: `${SCRIPT} --ticket x-ab12 --watch 30 wf_1` }] }],
+    ['no processes', { terminalId: 'term-3', foreground: [] }],
+    ['processes not a list', { terminalId: 'term-3', foreground: { argv: [SCRIPT, '--ticket', 'x-ab12', '--watch', '30', 'wf_1'] } }],
+  ]
+  for (const [label, pane] of stopped) {
+    const f = fake({ store: { [KEY]: WITH_ACTIVITY }, panes: { ...SIDE_PANE, 'w1:p3': pane }, runs: { 'x-ab12': 'wf_1' } })
     await syncActivity(f.$, 'x-ab12')
-    expect(steps(f), runId).toEqual(['find-ticket x-ab12', 'pane get w1:p2', 'pane get w1:p3', 'agent get tp-x-ab12'])
-    expect(f.seen.writes).toEqual([])
-    expect(f.store.get(KEY)).toStrictEqual(WITH_ACTIVITY)
-    expect([...f.panes.keys()]).toEqual([MAIN, 'w1:p2', 'w1:p3'])
-    expect(f.seen.toasts).toEqual([])
+    expectReplaced(f, 'wf_1', label)
+  }
+  // A look that fails, by herdr's error or by running past its time.
+  for (const failed of [BOOM, 'rejects'] as const) {
+    const f = fake({ store: { [KEY]: WITH_ACTIVITY }, panes: BOTH_PANES, runs: { 'x-ab12': 'wf_1' }, fails: { 'pane process-info': failed } })
+    await syncActivity(f.$, 'x-ab12')
+    expectReplaced(f, 'wf_1', JSON.stringify(failed))
   }
 })
 
