@@ -6,7 +6,7 @@ marketplace, `claude-mods`, like `languages/`.
 
 | Mod | What it does |
 |---|---|
-| `workflow-monitor` | A live band above the prompt, full width, under the transcript. It shows the newest `/run-tickets` run of the session's repo (from `run-tickets-status --json`): its progress and each ticket not merged yet, with when its current step started. Below that, a count of the agents workflow scripts started in the session, and each one still running with its start time and how long it has run. Shows on the first workflow agent of a session. `/workflow-monitor` shows or hides it, and once hidden it stays hidden for the session until shown again. When it is taller than its room (at most half the terminal) it scrolls; its `[-]` mark collapses it. While `ticket-panes` is loaded, each of those tickets' ids is a button that opens the ticket, as a reply's ticket button does. It draws above another mod's band (`ticket-panes`' ticket band in a side pane), not in its place. |
+| `workflow-monitor` | A live band above the prompt, full width, under the transcript. It shows the newest `/run-tickets` run of the session's repo (from `run-tickets-status --json`): its progress and each ticket not merged yet, with when its current step started. Below that, a count of the agents workflow scripts started in the session, and each one still running with its start time and how long it has run. Shows on the first workflow agent of a session. `/workflow-monitor` shows or hides it, and once hidden it stays hidden for the session until shown again. When it is taller than its room (at most half the terminal) it scrolls; its `[-]` mark collapses it. While `ticket-panes` is loaded, each of those tickets' ids is a button that opens the ticket, as a reply's ticket button does. It draws its rows above what the hooks beneath it draw (another mod's band, such as `ticket-panes`' ticket band in a side pane), not in its place, so both show. |
 | `blast-radius` | Holds a Bash command or Write that could destroy something and asks you first, in Claude Code's own question dialog: deleting or overwriting anything outside the repository, touching `.git` or the repository folder, or losing work git can't give back (untracked or modified files, an ignored `.env` or database, a nested repository, unmerged commits, stashes). Everything else inside the repository runs as normal, and so does anything in an agent's scratch worktree or a temp folder. Any answer but "Run it" refuses the command. |
 | `ticket-panes` | Makes tk tickets clickable. A reply that mentions tickets gets a dim `tickets:` row under it, a button per ticket. In a session running in herdr, a button opens a Claude agent for that ticket in a side pane to the right, with the ticket drawn in a band above its prompt and, while a `/run-tickets` run is working on the ticket, the run's live status for it in a pane below. Outside herdr, and inside a side pane, a button opens a read-only ticket pane in Claude Code instead. |
 
@@ -43,8 +43,8 @@ a session loads it from a folder you own.
 - The run section needs `run-tickets-status` on the session's `PATH`, and reads the run
   of the repo the session was started in. It refreshes every 30 seconds while something
   runs and every 5 minutes otherwise, and only while the band is being drawn.
-- It gives way to a survey, which uses the same band. It draws above what other mods
-  draw in the band, so both show.
+- It gives way to a survey, which uses the same band. It keeps what the hooks beneath
+  it draw in the band, under its own rows, so both show.
 - Hooks modules have no `Date`, so local times come from the UTC offset `date +%z`
   gives at session start.
 - With `ticket-panes` loaded, each unmerged ticket's id in the run section is a button
@@ -111,7 +111,8 @@ a session loads it from a folder you own.
   the rows still draw, but a click on them does nothing.
 - The button row. Each block of a reply on the terminal that mentions tk tickets gets
   one row under it: a dim `tickets:`, a button per ticket in order of first mention,
-  each once, at most 8, then a dim `+N more`. A word counts as a ticket when
+  each once, at most 8, then a dim `+N more`. A word shaped like a tk id (a prefix,
+  `-` and four lowercase letters or digits, not inside a path) counts as a ticket when
   `<tickets dir>/<word>.md` exists, the tickets dir being `TICKETS_DIR` when set, else
   the first `.tickets/` folder up from the session's root, as tk finds it. Ids only
   inside fenced code blocks don't count (those are mostly commands and logs); ids in
@@ -184,8 +185,10 @@ a session loads it from a folder you own.
     `dep cycle`), `add-note`, and `create` with `--parent` the backlog epic (the id
     `tk backlog` prints). The ticket is in a run when a run of the repo whose state is
     `running` (one whose workflow died without finishing included) holds it unmerged,
-    as `run-tickets-status --find-ticket` says. A merge-halted run finishes, so after
-    a halt tk is unlimited again. Outside a run tk is unlimited, and so it is when the
+    as `run-tickets-status --find-ticket` says. A run whose merges halted starts no
+    more tickets, but the ones already in flight run on until they reach their merge
+    step. Until the run ends, its unmerged tickets (the halted one included) still
+    count as in it. Once it ends, tk is unlimited again. Outside a run tk is unlimited, and so it is when the
     lookup fails.
   - Any call the guard itself fails on (`ticket side agent guard failed`).
 - How the guard reads Bash: it splits the text on newlines, `;`, `&&`, `||`, `|`, a
