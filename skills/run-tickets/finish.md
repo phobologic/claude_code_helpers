@@ -23,6 +23,8 @@ metrics to `~/.claude/run-history/` (before anything the archive reads is
 removed); closes merged tickets that are still open; reopens blocked and
 stalled tickets with a note giving the reason; files each `DISPUTED:` human
 check of a merged ticket as a `needs-human` ticket under the findings parent;
+stops any process still running whose command line names one of the run's
+worktrees (a test an agent gave up on), listing each in `leftover_processes`;
 removes the worktrees without `--force` (integration first); deletes slot
 placeholder branches and the `ticket/<id>` branches the integration branch
 contains; and deletes the run record unless a worktree was left in place. It
@@ -48,8 +50,9 @@ If it says there is no result yet, write the notification's `<result>` JSON to
   where the run stopped: tickets that already passed review go straight to
   merge. When the cause was a refused command, check that the project allows
   `git merge` first (the planner's setup warning).
-- **`worktrees_left`**, **`branches_kept`** with an unexpected reason, a
-  failed `archive`, or any `errors`: list them in the report. None of them
+- **`worktrees_left`**, **`branches_kept`** with an unexpected reason,
+  **`leftover_processes`**, a failed `archive`, or any `errors`: list them in
+  the report. None of them
   stops the report.
 
 ## 3. Find what blocks the wrap

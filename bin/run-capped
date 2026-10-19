@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+# Run a command under a hard wall-clock limit that takes down its whole process group.
+"""
+Usage: run-capped [--grace SECONDS] <limit-seconds> [--] <command> [args...]
+
+Runs <command> in a new process group and waits for it. When it exits, its
+exit status is passed through (128+N if a signal N killed it, 127 if it could
+not be started), and anything it left running in its group is stopped too.
+
+When <limit-seconds> passes first, the whole group gets SIGTERM, then SIGKILL
+for whatever is still running after --grace seconds (default 2), and
+run-capped prints one line starting "run-capped: TIMEOUT" to stderr and exits
+124. While a condition is deliberately broken, that means the tests hung on the
+mutant: the mutant was caught. On unbroken code it is a failure.
+
+If run-capped itself gets SIGTERM, SIGINT or SIGHUP (the caller gave up), it
+stops the group the same way before exiting, so nothing is orphaned. Only
+SIGKILL on run-capped, or a descendant that calls setsid() to leave the group,
+gets past it.
+
+Keep <limit-seconds> plus the grace under the caller's own timeout, so this
+limit fires first.
+
+macOS and Linux, Python 3 standard library only (no GNU timeout needed).
+"""
+
+from __future__ import annotations
+
+import os
+import signal
+import subprocess
+import sys
+import time
+
+TIMEOUT_EXIT = 124
+POLL = 0.05
+
+
+def usage(msg: str) -> None:
+    print(f"run-capped: {msg}\n{__doc__}", file=sys.stderr)
+    sys.exit(2)
+
+
+def parse(argv: list[str]) -> tuple[float, float, list[str]]:
+    grace = 2.0
+    if argv[:1] == ["--grace"]:
+        if len(argv) < 2:
+            usage("--grace needs a number of seconds")
+        grace = seconds(argv[1], "--grace")
+        argv = argv[2:]
+    if not argv:
+        usage("missing the limit")
+    limit = seconds(argv[0], "the limit")
+    cmd = argv[1:]
+    if cmd[:1] == ["--"]:
+        cmd = cmd[1:]
+    if not cmd:
+        usage("missing the command")
+    return limit, grace, cmd
+
+
+def seconds(text: str, what: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        usage(f"{what} must be a number of seconds, got {text!r}")
+    if not value > 0:
+        usage(f"{what} must be more than 0 seconds, got {text!r}")
+    return value
+
+
+def group_alive(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def signal_group(pgid: int, sig: int) -> None:
+    try:
+        os.killpg(pgid, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def stop_group(proc: subprocess.Popen, grace: float) -> bool:
+    """SIGTERM the group, then SIGKILL it after `grace` seconds. True when SIGKILL was needed."""
+    pgid = proc.pid
+    signal_group(pgid, signal.SIGTERM)
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline:
+        proc.poll()  # reap the leader, or its zombie keeps the group alive
+        if not group_alive(pgid):
+            return False
+        time.sleep(POLL)
+    signal_group(pgid, signal.SIGKILL)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        proc.poll()
+        if not group_alive(pgid):
+            break
+        time.sleep(POLL)
+    return True
+
+
+def exit_status(code: int) -> int:
+    return 128 - code if code < 0 else code
+
+
+def main(argv: list[str]) -> int:
+    limit, grace, cmd = parse(argv)
+    try:
+        proc = subprocess.Popen(cmd, start_new_session=True)
+    except OSError as e:
+        print(f"run-capped: cannot run {cmd[0]}: {e.strerror}", file=sys.stderr)
+        return 127
+
+    def on_signal(signum, _frame):
+        stop_group(proc, grace)
+        sys.exit(128 + signum)
+
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, on_signal)
+
+    try:
+        code = proc.wait(timeout=limit)
+    except subprocess.TimeoutExpired:
+        killed = stop_group(proc, grace)
+        how = "SIGTERM, then SIGKILL" if killed else "SIGTERM"
+        print(f"run-capped: TIMEOUT after {limit:g}s: stopped process group {proc.pid} with {how}. "
+              "The command hung: while a condition is broken, the tests caught it; "
+              "on unbroken code it is a failure.", file=sys.stderr)
+        return TIMEOUT_EXIT
+    # The leader is done; stop anything it left running in its group.
+    stop_group(proc, grace)
+    return exit_status(code)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
