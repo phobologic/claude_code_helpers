@@ -52,7 +52,7 @@ async function readTicket($: EngineInterface, id: string): Promise<TicketText | 
   let path: string | undefined
   try {
     path = await ticketFile($, id)
-    if (path === undefined) return { reason: 'no tickets folder was found, or the id is not a tk id' }
+    if (path === undefined) return { reason: (await ticketsDir($)) === undefined ? 'no tickets folder was found' : 'the id is not a tk id' }
     const { mtimeMs } = await $.fs.stat(path)
     const text = await $.fs.read(path)
     return { path, mtimeMs, text }

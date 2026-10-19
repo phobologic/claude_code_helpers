@@ -167,7 +167,7 @@ function oneLine(err: unknown): string {
   return (err instanceof Error ? err.message : String(err)).replace(/\s+/g, ' ').trim()
 }
 
-// Ticket `id` from `<tickets dir>/<id>.md` (R1), or the problem that kept it from being read:
+// Ticket `id` from the file R1 names (`ticketFile`), or the problem that kept it from being read:
 // `file not found` when R1 finds no such ticket or the file has gone since, else what failed. It
 // never rejects, so a draw that calls it always has something to draw.
 export async function readTicket($: EngineInterface, id: string): Promise<TicketRead> {
