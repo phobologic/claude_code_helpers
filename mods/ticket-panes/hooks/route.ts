@@ -1,6 +1,6 @@
-import type { EngineInterface, ProcessRunResult } from 'claude-code'
+import type { EngineInterface } from 'claude-code'
 
-import { SidePaneError, agentName, launch, readSide } from './herdr'
+import { SidePaneError, agentName, closePane, field, herdr, launch, readSide, text } from './herdr'
 import type { Launched, Side } from './herdr'
 import { role } from './role'
 import { decideSwitch } from './switch'
@@ -25,53 +25,8 @@ export type OpenResult = {
   waiting?: boolean
 }
 
-// How long a herdr call may run, as in herdr.ts.
-const HERDR_MS = 10_000
-
-// A herdr call's answer: its result, or why it failed.
-type Ran = { isOk: true; result: unknown } | { isOk: false; reason: string }
-
 // ---------- herdr ----------
-// herdr.ts keeps its runner to itself, and these calls are routing's alone, so this file reads
-// herdr's answers the same way: JSON on stdout (`{ result }`), and on failure
-// `{ error: { code, message } }` on stderr, or a usage line when herdr could not read the command.
-
-function field(value: unknown, key: string): unknown {
-  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>)[key] : undefined
-}
-
-function text(value: unknown, key: string): string | undefined {
-  const found = field(value, key)
-  return typeof found === 'string' ? found : undefined
-}
-
-function parsed(json: string): unknown {
-  try {
-    return JSON.parse(json)
-  } catch {
-    return undefined
-  }
-}
-
-function firstLine(output: string): string {
-  return output.trim().split('\n')[0] ?? ''
-}
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
-async function herdr($: EngineInterface, args: readonly string[]): Promise<Ran> {
-  let out: ProcessRunResult
-  try {
-    out = await $.process.run(['herdr', ...args], { timeoutMs: HERDR_MS })
-  } catch (error) {
-    return { isOk: false, reason: messageOf(error) } // herdr is missing, or ran past its time
-  }
-  if (out.exitCode === 0) return { isOk: true, result: field(parsed(out.stdout), 'result') }
-  const reason = text(field(parsed(out.stderr), 'error'), 'message') ?? (firstLine(out.stderr) || `exit status ${out.exitCode}`)
-  return { isOk: false, reason }
-}
+// Each call goes through herdr.ts's runner, with its default timeout of 10 s.
 
 // One `herdr agent list`, as a lookup: the pane of the live agent named `name`, or undefined when
 // the list shows none. A list herdr does not give stops the click: without it, a launch could start
@@ -88,11 +43,6 @@ async function listedPanes($: EngineInterface): Promise<(name: string) => string
 async function focusAgent($: EngineInterface, name: string): Promise<void> {
   const ran = await herdr($, ['agent', 'focus', name])
   if (!ran.isOk) throw new SidePaneError('agent focus', ran.reason)
-}
-
-// Closes a pane as best it can, as herdr.ts does: when the close fails there is nothing more to do.
-async function closePane($: EngineInterface, paneId: string): Promise<void> {
-  await herdr($, ['pane', 'close', paneId])
 }
 
 // ---------- routing ----------

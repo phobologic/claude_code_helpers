@@ -1,6 +1,6 @@
-import type { EngineInterface, On, ProcessRunResult } from 'claude-code'
+import type { EngineInterface, On } from 'claude-code'
 
-import { closePane, readSide, updateSide } from './herdr'
+import { closePane, field, herdr, readSide, text, updateSide } from './herdr'
 import type { Side, SideRecord } from './herdr'
 import { notify } from './notify'
 import type { Role } from './role'
@@ -12,8 +12,6 @@ import { unfinishedRunFor } from './runs'
 // the ticket is placed, inside its open lock (E10), so nothing else changes the side-pane record
 // meanwhile.
 
-// How long a herdr call may run, as herdr.ts gives its own.
-const HERDR_MS = 10_000
 // How often the activity pane's report is drawn again, in seconds (D14).
 const WATCH_SECONDS = 30
 // A word the shell reads as itself. A ticket id is one (the noun takes only these, E17); anything
@@ -23,39 +21,10 @@ const PLAIN_WORD = /^[A-Za-z0-9._-]+$/
 type Pane = { paneId: string; terminalId: string }
 
 // ---------- herdr ----------
-// herdr.ts keeps its runner to itself, so this file reads herdr's answers the same way: JSON on
-// stdout (`{ result }`) when the call went through. A failure is only that here: the toast names
-// the step that failed (D17), not what herdr said. Which panes are ours is herdr.ts's look alone
-// (E9), through readSide, and every pane this file closes goes through herdr.ts's closePane.
-
-function field(value: unknown, key: string): unknown {
-  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>)[key] : undefined
-}
-
-function text(value: unknown, key: string): string | undefined {
-  const found = field(value, key)
-  return typeof found === 'string' ? found : undefined
-}
-
-function parsed(json: string): unknown {
-  try {
-    return JSON.parse(json)
-  } catch {
-    return undefined
-  }
-}
-
-// `herdr <args>`'s result when it went through; undefined when herdr refused it, could not start,
-// or ran past its time.
-async function herdr($: EngineInterface, args: readonly string[]): Promise<{ result: unknown } | undefined> {
-  let out: ProcessRunResult
-  try {
-    out = await $.process.run(['herdr', ...args], { timeoutMs: HERDR_MS })
-  } catch {
-    return undefined
-  }
-  return out.exitCode === 0 ? { result: field(parsed(out.stdout), 'result') } : undefined
-}
+// Each call goes through herdr.ts's runner, with its default timeout of 10 s. A failure is only
+// that here: the toast names the step that failed (D17), not what herdr said. Which panes are ours
+// is herdr.ts's look alone (E9), through readSide, and every pane this file closes goes through
+// herdr.ts's closePane.
 
 // A new pane below the side pane, starting in the session root, focus left where it was. Throws
 // `pane split` when herdr split nothing or named no pane and terminal; a pane it named without its
@@ -63,7 +32,7 @@ async function herdr($: EngineInterface, args: readonly string[]): Promise<{ res
 async function splitBelow($: EngineInterface, sidePaneId: string): Promise<Pane> {
   const cwd = await $.session.root()
   const split = await herdr($, ['pane', 'split', sidePaneId, '--direction', 'down', '--no-focus', '--cwd', cwd])
-  const pane = field(split?.result, 'pane')
+  const pane = field(split.result, 'pane')
   const paneId = text(pane, 'pane_id')
   const terminalId = text(pane, 'terminal_id')
   if (paneId !== undefined && terminalId !== undefined) return { paneId, terminalId }
@@ -97,7 +66,7 @@ async function openBelow($: EngineInterface, side: Side, id: string, runId: stri
   const pane = await splitBelow($, side.paneId)
   try {
     const ran = await herdr($, ['pane', 'run', pane.paneId, watchCommand(id, runId)])
-    if (ran === undefined) throw new Error('pane run')
+    if (!ran.isOk) throw new Error('pane run')
     const activity = { activityPaneId: pane.paneId, activityTerminalId: pane.terminalId, activityTicketId: id }
     await updateSide($, () => ({ ...sidePart(side), ...activity }))
   } catch (error) {
