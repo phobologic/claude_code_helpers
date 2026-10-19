@@ -130,12 +130,37 @@ After committing, check each one:
    guard, branch, filter predicate, comparison and boundary (`<` versus `<=`),
    and each early return.
 2. For each, break it in the worktree (delete the guard, invert the condition,
-   or shift the boundary by one), run the tests that should cover it, and
-   note whether any fail.
-3. Restore with `git checkout -- <file>` after each one. Never commit a
-   mutant. When done, `git status --porcelain` must be empty.
+   or shift the boundary by one), run the tests that should cover it through
+   `run-capped` (below), and note whether any fail.
+3. Restore with `git checkout -- <file>` after each one, timed out or not.
+   Never commit a mutant. When done, `git status --porcelain` must be empty.
 4. When nothing fails, add a test that does, commit it, and break that
-   condition again to confirm the new test catches it.
+   condition again to confirm the new test catches it, again through
+   `run-capped`.
+
+**Every test command you run while a condition is broken goes through
+`run-capped`**: `run-capped 300 <test command>`, with the Bash call's
+`timeout` set to 600000. A broken condition can turn a test into an infinite
+loop, and a Bash call that gives up does not stop the processes it started:
+one such test was left looping for hours and grew until it filled swap.
+`run-capped` runs the command in its own process group and passes its exit
+status through. At the limit it stops the whole group (SIGTERM, then SIGKILL
+2 seconds later) and exits 124 with a line starting `run-capped: TIMEOUT`.
+That means the tests hung on the mutant: count it as caught, and write
+`caught (timeout)` with the test command in `test`. If the tests take more
+than 100 seconds on unbroken code, use three times their time instead of
+300, up to 540, so the limit always fires before the Bash call gives up.
+A script that runs several mutants puts each test command through
+`run-capped` on its own, and its own Bash call still has 600000 ms in all,
+so split the mutants across calls to fit.
+
+Before breaking anything, run the covering tests once through `run-capped` on
+the unbroken code; they must exit 0. Exit 127 (`run-capped` or the test
+command not found) or a line starting `run-capped:` followed by the usage text
+means the run proved nothing: fix the command, and never count such a run as
+caught. On a mutant, only a test failure or 124 with a `run-capped: TIMEOUT`
+line counts. A script that runs several mutants stops at the first 127 or
+usage error instead of marking the mutant caught.
 
 Report every condition in `conditions` with the test that failed. Only claim
 what you ran. If a condition genuinely cannot be tested (a type-narrowing

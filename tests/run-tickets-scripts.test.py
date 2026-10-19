@@ -1,5 +1,6 @@
 """Checks bin/run-tickets-setup, bin/run-tickets-finish and bin/run-tickets-status against
-throwaway git repos.
+throwaway git repos (run-tickets-status's checks include metadata an in-session resume has
+outdated), and bin/run-capped against real process groups.
 
     python3 tests/run-tickets-scripts.test.py
 
@@ -19,16 +20,18 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
+import types
 from datetime import datetime, timedelta, timezone
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 
 BIN = Path(__file__).resolve().parent.parent / "bin"
-SETUP, FINISH = str(BIN / "run-tickets-setup"), str(BIN / "run-tickets-finish")
+SETUP, FINISH, CAPPED = (str(BIN / name) for name in ("run-tickets-setup", "run-tickets-finish", "run-capped"))
 
 FAKE_TK = """#!/usr/bin/env bash
 echo "$*" >> "$TK_LOG"
@@ -92,6 +95,61 @@ def commit(root, path, text, msg):
 
 def ticket(env, tid, status):
     Path(env["TICKETS_DIR"], f"{tid}.md").write_text(f"---\nid: {tid}\nstatus: {status}\ntype: task\n---\n# {tid}\n")
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def group_alive(pgid):
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def gone_soon(probe, ident, seconds=2.0):
+    """True once probe(ident) is false; an orphan is reaped by init a moment after it dies."""
+    deadline = time.monotonic() + seconds
+    while probe(ident):
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(0.05)
+    return True
+
+
+def kill_quietly(pid, group=False):
+    try:
+        (os.killpg if group else os.kill)(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+SLEEPER = """import os, pathlib, signal, sys, time
+if "ignore-term" in sys.argv:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+pathlib.Path(os.path.dirname(__file__), f"ready-{os.getpid()}").touch()
+time.sleep(120)
+"""
+
+
+def orphan(tmp, *argv):
+    """Start a sleeper whose command line carries argv, detached so its parent is init, like a
+    test run its agent gave up on. Returns its pid once it is running."""
+    script = Path(tmp, "sleeper.py")
+    script.write_text(SLEEPER)
+    res = subprocess.run(["sh", "-c", '"$@" >/dev/null 2>&1 & echo $!', "sh", sys.executable, str(script), *argv],
+                         capture_output=True, text=True, timeout=10)
+    pid = int(res.stdout.strip())
+    deadline = time.monotonic() + 10
+    while not Path(tmp, f"ready-{pid}").exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return pid
 
 
 # ---------- setup ----------
@@ -185,14 +243,34 @@ def finished_run(tmp, merge_halted=None):
 
 with tempfile.TemporaryDirectory() as tmp:
     root, env, s, record, result_path = finished_run(tmp)
-    log_before = Path(env["TK_LOG"]).read_text()
-    code, out, err = run(FINISH, "--dry-run", "--result", result_path, "wf_test", cwd=root, env=env)
-    check("finish --dry-run: exits 0", code == 0, err)
-    check("finish --dry-run: changes nothing", Path(env["TK_LOG"]).read_text() == log_before and os.path.exists(record)
-          and all(os.path.isdir(p) for p in s["slots"]))
+    # Left running by agents: a test in a slot, and one in the integration worktree that ignores
+    # SIGTERM. Not this run's: a sibling path that shares the slot's prefix, and an unrelated path.
+    in_slot = orphan(tmp, f"{s['slots'][0]}/hooks/guard.test.ts")
+    in_integration = orphan(tmp, f"--file={s['integrationWorktree']}", "ignore-term")
+    sibling = orphan(tmp, f"{s['slots'][0]}0/hooks/guard.test.ts")
+    unrelated = orphan(tmp, os.path.join(tmp, "elsewhere"))
+    sleepers = (in_slot, in_integration, sibling, unrelated)
+    try:
+        log_before = Path(env["TK_LOG"]).read_text()
+        code, out, err = run(FINISH, "--dry-run", "--result", result_path, "wf_test", cwd=root, env=env)
+        check("finish --dry-run: exits 0", code == 0, err)
+        check("finish --dry-run: changes nothing", Path(env["TK_LOG"]).read_text() == log_before and os.path.exists(record)
+              and all(os.path.isdir(p) for p in s["slots"]) and all(alive(p) for p in sleepers))
+        found = {p["pid"]: p["action"] for p in (out or {}).get("leftover_processes", [])}
+        check("finish --dry-run: reports the processes running in the run's worktrees, and only those",
+              found == {in_slot: "would stop", in_integration: "would stop"}, found)
 
-    code, out, err = run(FINISH, "--result", result_path, "wf_test", cwd=root, env=env)
-    out = out or {}
+        code, out, err = run(FINISH, "--result", result_path, "wf_test", cwd=root, env=env)
+        out = out or {}
+        found = {p["pid"]: p["action"] for p in out.get("leftover_processes", [])}
+        check("finish: stops processes left in the run's worktrees, with SIGKILL for one that ignores SIGTERM",
+              found == {in_slot: "stopped", in_integration: "killed"}
+              and gone_soon(alive, in_slot) and gone_soon(alive, in_integration), found)
+        check("finish: leaves alone processes that name no worktree of this run, even one sharing a slot's prefix",
+              alive(sibling) and alive(unrelated))
+    finally:
+        for pid in sleepers:
+            kill_quietly(pid)
     log = Path(env["TK_LOG"]).read_text()[len(log_before):]
     check("finish: exits 0", code == 0, err)
     check("finish: closes a merged ticket that is still open", "close a\n" in log and "add-note a " in log, log)
@@ -747,6 +825,194 @@ for argv, problem in ((["--watch"], "--watch needs a value"),
                       (["--ticket", "x-1", "--list"], FOR_TEXT)):
     got = usage_error_of(argv)
     check(f"status args: {' '.join(argv)} is a usage error", got == (2, f"run-tickets-status: {problem}"), got)
+
+
+# ---------- finish: which processes the sweep may touch ----------
+
+loader = SourceFileLoader("run_tickets_finish", FINISH)
+finish = module_from_spec(spec_from_loader(loader.name, loader))
+loader.exec_module(finish)
+
+with tempfile.TemporaryDirectory() as tmp:
+    tmp = os.path.realpath(tmp)
+    slot = os.path.join(tmp, "repo", ".worktrees", "run-S-slot-1")
+    os.makedirs(slot)
+    link = os.path.join(tmp, "link")
+    os.symlink(os.path.join(tmp, "repo"), link)
+    procs = [
+        (101, 1, f"bun test {slot}/hooks/a.test.ts"),          # a path under the slot
+        (102, 1, f"node --file={slot}"),                        # the slot itself, after =
+        (103, 1, f"sh -c 'cd \"{slot}\" && npm test'"),         # quoted
+        (104, 1, f"bun test {slot}0/hooks/a.test.ts"),          # run-S-slot-10: shares the prefix
+        (105, 1, f"bun test /mnt{slot}/a.test.ts"),             # contains the path, does not start it
+        (106, 1, f"bun test {slot}-copy"),                      # a longer name
+        (107, 1, "sleep 60"),
+        (108, 1, f"vim {link}/.worktrees/run-S-slot-1/x"),      # the slot reached through a symlink
+    ]
+    found = [pid for pid, _ in finish.leftover_processes(procs, finish.worktree_patterns([slot]), set())]
+    check("finish sweep: matches a worktree only as a whole path", found == [101, 102, 103], found)
+    found = [pid for pid, _ in finish.leftover_processes(
+        procs, finish.worktree_patterns([os.path.join(link, ".worktrees", "run-S-slot-1")]), set())]
+    check("finish sweep: a worktree recorded through a symlink also matches its real path", found == [101, 102, 103, 108], found)
+    found = [pid for pid, _ in finish.leftover_processes(procs, finish.worktree_patterns([slot]), {101, 103})]
+    check("finish sweep: never touches the processes it is told to skip", found == [102], found)
+    check("finish sweep: no worktrees, no matches", finish.leftover_processes(procs, finish.worktree_patterns([None]), set()) == [])
+    tree = [(1, 0, "init"), (50, 1, "shell"), (60, 50, f"bash -c cd {slot}"), (70, 60, "run-tickets-finish"), (80, 50, "other")]
+    check("finish sweep: skips the script and every process above it",
+          finish.ancestors(tree, 70) == {70, 60, 50, 1}, finish.ancestors(tree, 70))
+    check("finish sweep: a parent loop in the process list ends the walk",
+          finish.ancestors([(5, 6, "a"), (6, 5, "b")], 5) == {5, 6})
+    found = [pid for pid, _ in finish.leftover_processes(
+        [(201, 1, f"env PYTHONPATH=/opt/lib:{slot}/src python3 -m pytest")], finish.worktree_patterns([slot]), set())]
+    check("finish sweep: a worktree after : in a path list matches", found == [201], found)
+
+    # A process that exits between ps and the signal is stopped, not a permission failure.
+    gone = subprocess.Popen(["true"])
+    gone.wait()
+    errs = types.SimpleNamespace(errors=[])
+    entries = [{"pid": gone.pid, "command": "x", "action": "would stop"}]
+    finish.stop_processes(errs, entries)
+    check("finish sweep: a process gone before the signal is reported stopped, not failed",
+          entries[0]["action"] == "stopped" and errs.errors == [], entries)
+
+
+class FakePs:
+    """A Runner whose ps prints canned output."""
+
+    def __init__(self, code, stdout, stderr=""):
+        self.res, self.errors = subprocess.CompletedProcess([], code, stdout, stderr), []
+
+    def read(self, *cmd, cwd=None):
+        return self.res
+
+
+fake = FakePs(0, "  PID  PPID COMMAND\n  12     1 bun test /w/a.test.ts\n  13     1\n  14   12 sleep 5\n")
+check("finish sweep: reads pid, ppid and the full command, skipping lines that are not a process",
+      finish.list_processes(fake) == [(12, 1, "bun test /w/a.test.ts"), (14, 12, "sleep 5")] and not fake.errors,
+      finish.list_processes(fake))
+fake = FakePs(1, "", "ps: illegal option")
+check("finish sweep: a failing ps finds nothing and reports why",
+      finish.list_processes(fake) == [] and fake.errors == ["ps: ps: illegal option"], fake.errors)
+
+with tempfile.TemporaryDirectory() as tmp:
+    root, env, s, record, result_path = finished_run(tmp)
+    # The lead's own shell names a slot (it cd'd there first): finish must not stop its parent.
+    res = subprocess.run(["sh", "-c", '"$0" --dry-run --result "$1" wf_test; status=$?; : "$2"; exit $status',
+                          FINISH, result_path, s["slots"][0]], cwd=root, env=env, capture_output=True, text=True, timeout=60)
+    found = json.loads(res.stdout or "{}").get("leftover_processes")
+    check("finish sweep: never lists its own parent shell, even when that names a worktree",
+          res.returncode == 0 and found == [], f"{res.returncode} {found} {res.stderr}")
+
+# ---------- run-capped ----------
+
+GROUP = """trap '' TERM
+echo $$ > "$1"
+sh -c 'while :; do sleep 0.1; done' &
+echo $! >> "$1"
+wait
+"""
+
+
+def capped(*args, timeout=30):
+    start = time.monotonic()
+    res = subprocess.run([CAPPED, *args], capture_output=True, text=True, timeout=timeout)
+    return res.returncode, res.stderr, time.monotonic() - start
+
+
+def pids(path):
+    return [int(x) for x in Path(path).read_text().split()]
+
+
+def kill_group_in(pidfile):
+    """Clean up after a failed check: SIGKILL the group whose leader the pidfile names."""
+    if os.path.exists(pidfile) and Path(pidfile).read_text().strip():
+        kill_quietly(pids(pidfile)[0], group=True)
+
+
+with tempfile.TemporaryDirectory() as tmp:
+    script, pidfile = os.path.join(tmp, "group.sh"), os.path.join(tmp, "pids")
+    Path(script).write_text(GROUP)
+    # The leader and its looping child both ignore SIGTERM, so only SIGKILL ends them.
+    try:
+        code, err, took = capped("1", "sh", script, pidfile)
+        leader, child = pids(pidfile)
+        check("run-capped: a command over its limit exits 124 with a TIMEOUT line naming SIGKILL",
+              code == 124 and "run-capped: TIMEOUT after 1s" in err and "SIGKILL" in err, f"{code} {err}")
+        check("run-capped: waits the default 2s grace after SIGTERM, then SIGKILLs, within a few seconds of the limit",
+              3 <= took < 8, took)
+        check("run-capped: the whole process group is gone after a timeout",
+              gone_soon(group_alive, leader) and gone_soon(alive, child), pids(pidfile))
+    finally:
+        kill_group_in(pidfile)
+
+    os.remove(pidfile)
+    try:
+        # Lower bounds only: a loaded machine makes things slower, never faster.
+        code, err, took = capped("--grace", "4", "1", "--", "sh", script, pidfile)
+        check("run-capped: --grace sets the wait between SIGTERM and SIGKILL", code == 124 and 5 <= took < 12, f"{code} {took}")
+        check("run-capped: the group is gone after a longer grace too", gone_soon(group_alive, pids(pidfile)[0]))
+    finally:
+        kill_group_in(pidfile)
+
+    # A grace of 5s leaves a wide gap between stopping on SIGTERM (about 1s) and waiting it out (6s).
+    code, err, took = capped("--grace", "5", "1", "sh", "-c", "while :; do sleep 0.1; done")
+    check("run-capped: a command that exits on SIGTERM is stopped without waiting out the grace",
+          code == 124 and "with SIGTERM." in err and took < 4, f"{code} {took} {err}")
+
+    code, err, _ = capped("5", "true")
+    check("run-capped: passes a clean exit through, with no TIMEOUT line", code == 0 and "TIMEOUT" not in err, f"{code} {err}")
+    code, err, _ = capped("5", "--", "sh", "-c", "exit 3")
+    check("run-capped: passes a failing exit status through", code == 3 and "TIMEOUT" not in err, f"{code} {err}")
+    code, _, _ = capped("5", "sh", "-c", "kill -9 $$")
+    check("run-capped: a command killed by signal N exits 128+N", code == 137, code)
+    code, err, _ = capped("5", os.path.join(tmp, "no-such-command"))
+    check("run-capped: a command that cannot start exits 127", code == 127 and "cannot run" in err, f"{code} {err}")
+    for bad in (["0", "true"], ["-1", "true"], ["soon", "true"], ["5"], ["5", "--"], [], ["--grace"], ["--grace", "x", "5", "true"]):
+        code, err, _ = capped(*bad)
+        check(f"run-capped: usage error for {bad}", code == 2 and "Usage:" in err, f"{code} {err}")
+
+    # The leader exits normally but leaves a looping child in its group: it is stopped too.
+    left = os.path.join(tmp, "left")
+    code, _, _ = capped("10", "sh", "-c", f"sh -c 'while :; do sleep 0.1; done' >/dev/null 2>&1 & echo $! > {left}; exit 0")
+    child = pids(left)[0]
+    check("run-capped: stops what the command left running in its group when it exits", code == 0 and gone_soon(alive, child), code)
+    kill_quietly(child)
+
+    # The caller gives up on run-capped itself: the group goes with it.
+    os.remove(pidfile)
+    wrapper = subprocess.Popen([CAPPED, "60", "sh", "-c", f"echo $$ > {pidfile}; while :; do sleep 0.1; done"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        deadline = time.monotonic() + 10
+        while not (os.path.exists(pidfile) and Path(pidfile).read_text().strip()) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        leader = pids(pidfile)[0]
+        wrapper.send_signal(signal.SIGTERM)
+        code = wrapper.wait(timeout=10)
+        check("run-capped: on SIGTERM it stops the command's group and exits 143",
+              code == 143 and gone_soon(group_alive, leader), code)
+    finally:
+        wrapper.kill()
+        kill_group_in(pidfile)
+
+    # Ctrl-C reaches only run-capped's own group, never the command's new session, and a
+    # closed terminal sends SIGHUP: both must take the command's group down too.
+    for sig in (signal.SIGINT, signal.SIGHUP):
+        os.remove(pidfile)
+        wrapper = subprocess.Popen([CAPPED, "60", "sh", "-c", f"echo $$ > {pidfile}; while :; do sleep 0.1; done"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            deadline = time.monotonic() + 10
+            while not (os.path.exists(pidfile) and Path(pidfile).read_text().strip()) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            leader = pids(pidfile)[0]
+            wrapper.send_signal(sig)
+            code = wrapper.wait(timeout=10)
+            check(f"run-capped: on {sig.name} it stops the command's group and exits {128 + sig}",
+                  code == 128 + sig and gone_soon(group_alive, leader), code)
+        finally:
+            wrapper.kill()
+            kill_group_in(pidfile)
 
 print(f"\n{failures} check(s) failed" if failures else "\nall checks passed")
 raise SystemExit(1 if failures else 0)

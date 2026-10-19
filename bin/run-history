@@ -15,6 +15,12 @@ count, so thin samples are visible. Groups:
   review effort effort of the ticket's first review round
   src lines     non-test lines changed (unknown for runs before it was reported)
   dependents    tickets that transitively depend on this one
+  high-fanout   tickets with 3+ dependents, by policy: the readout for the
+                implementer-effort A/B (the policy's implEffort and implFanout)
+
+Every table also shows "impl min", the first implementation round's own
+minutes, since whole-ticket time hides the implementer behind review and
+queue time.
 
 Escapes are the check on the rest. Lighter review means fewer findings and
 fewer rework rounds, which looks like improvement even when bugs are slipping
@@ -112,6 +118,10 @@ def attempts(runs):
                 "tokens": sum(s.get("tokens") or 0 for s in steps),
                 "has_tokens": any(s.get("tokens") for s in steps),
                 "seconds": sum(s.get("seconds") or 0 for s in steps),
+                # First implementation round alone: the whole-ticket seconds hide an
+                # implementer's cost behind review and queue time.
+                "impl_seconds": first("impl").get("seconds"),
+                "impl_tokens": first("impl").get("tokens"),
                 "prior_fixed": (t.get("prior_findings") or {}).get("fixed", 0),
                 "prior_total": (t.get("prior_findings") or {}).get("total", 0),
             })
@@ -213,7 +223,7 @@ def escapes(root, merged_ids):
 
 def group(rows, key, esc_by_ticket):
     out = defaultdict(lambda: {"attempts": 0, "merged": 0, "blocked": 0, "reworks": 0, "tokens": 0,
-                               "token_rows": 0, "escapes": 0})
+                               "token_rows": 0, "escapes": 0, "impl_seconds": 0, "impl_rows": 0})
     for r in rows:
         g = out[key(r)]
         g["attempts"] += 1
@@ -223,12 +233,16 @@ def group(rows, key, esc_by_ticket):
         if r["has_tokens"]:
             g["tokens"] += r["tokens"]
             g["token_rows"] += 1
+        if r["impl_seconds"]:
+            g["impl_seconds"] += r["impl_seconds"]
+            g["impl_rows"] += 1
         if r["outcome"] == "merged":
             g["escapes"] += esc_by_ticket.get((r["repo"], r["id"]), 0)
     for g in out.values():
         g["reworks_per_attempt"] = round(g["reworks"] / g["attempts"], 2)
         g["escapes_per_merged"] = round(g["escapes"] / g["merged"], 2) if g["merged"] else None
         g["tokens_per_attempt"] = round(g["tokens"] / g["token_rows"]) if g["token_rows"] else None
+        g["impl_minutes"] = round(g["impl_seconds"] / g["impl_rows"] / 60, 1) if g["impl_rows"] else None
     return dict(sorted(out.items()))
 
 
@@ -238,11 +252,12 @@ def fmt_k(n):
 
 def print_group(title, groups):
     print(f"\n{title}")
-    print(f"  {'':<28} {'n':>4} {'merged':>7} {'blocked':>8} {'rework/n':>9} {'escapes/merged':>15} {'tokens/n':>9}")
+    print(f"  {'':<28} {'n':>4} {'merged':>7} {'blocked':>8} {'rework/n':>9} {'escapes/merged':>15} {'tokens/n':>9} {'impl min':>9}")
     for k, g in groups.items():
         esc = "-" if g["escapes_per_merged"] is None else f"{g['escapes_per_merged']:.2f}"
+        impl = "-" if g["impl_minutes"] is None else f"{g['impl_minutes']:.0f}"
         print(f"  {k:<28} {g['attempts']:>4} {g['merged']:>7} {g['blocked']:>8} {g['reworks_per_attempt']:>9.2f}"
-              f" {esc:>15} {fmt_k(g['tokens_per_attempt']):>9}")
+              f" {esc:>15} {fmt_k(g['tokens_per_attempt']):>9} {impl:>9}")
 
 
 def main(argv):
@@ -278,6 +293,9 @@ def main(argv):
         "review_effort": group(rows, lambda r: r["review_effort"], esc_by_ticket),
         "src_lines": group(rows, lambda r: lines_bucket(r["src_lines"]), esc_by_ticket),
         "dependents": group(rows, lambda r: dependents_bucket(r["dependents"]), esc_by_ticket),
+        # The effort A/B readout: the tickets the fan-out rule applies to, one row per policy.
+        "high_fanout_by_policy": group([r for r in rows if (r["dependents"] or 0) >= 3],
+                                       lambda r: r["policy"], esc_by_ticket),
     }
     prior_total = sum(r["prior_total"] for r in rows)
     report = {
@@ -302,7 +320,7 @@ def main(argv):
     print("(n = ticket attempts; tokens are runtime totals with input, finished runs only)")
     for key, title in (("policy", "by policy"), ("impl_effort", "by first implementation effort"),
                        ("review_effort", "by first review effort"), ("src_lines", "by non-test lines changed"),
-                       ("dependents", "by dependents")):
+                       ("dependents", "by dependents"), ("high_fanout_by_policy", "high-fanout tickets (3+ dependents) by policy")):
         print_group(title, groups[key])
     rr = report["re_review"]
     print(f"\nre-reviews: {rr['fixed']}/{rr['previous_findings']} previous findings fixed"
