@@ -40,8 +40,10 @@ type World = {
   lookup?: { code: number; stdout?: string; stderr?: string }
   // herdr commands that fail, by `<group> <verb>` (`pane split`, `pane run`).
   fails?: Record<string, Failure>
-  // What `pane split` answers in place of its new pane.
+  // What `pane split` answers as its result in place of its new pane (null included), or the text
+  // it prints in place of its JSON.
   splitResult?: unknown
+  splitStdout?: string
   // What `$.store.set` rejects with, when it does.
   storeRejection?: unknown
 }
@@ -91,7 +93,8 @@ function fake(world: World = {}) {
         const added = { terminalId: `term-${made}` }
         used.add(id)
         panes.set(id, added)
-        return answer(world.splitResult ?? { pane: info(id, added), type: 'pane_info' })
+        if (world.splitStdout !== undefined) return exit(0, world.splitStdout)
+        return answer('splitResult' in world ? world.splitResult : { pane: info(id, added), type: 'pane_info' })
       }
       case 'pane run':
         if (!pane) return refusal('pane_not_found')
@@ -293,16 +296,26 @@ test('AC: a split that fails leaves the side pane, records no activity pane and 
 })
 
 test('a split that names no terminal closes the pane it names; one that names no pane closes nothing; both toast pane split', async () => {
-  const half = fake({ store: { [KEY]: SIDE }, panes: SIDE_PANE, runs: { 'x-ab12': 'wf_1' }, splitResult: { pane: { pane_id: 'w1:p9' }, type: 'pane_info' } })
-  await syncActivity(half.$, 'x-ab12')
-  expect(steps(half).slice(-2)).toEqual(['pane split w1:p2', 'pane close w1:p9'])
-  expect(half.seen.toasts).toEqual([SPLIT_FAILED])
-  expect(half.store.get(KEY)).toStrictEqual(SIDE)
-  for (const splitResult of [{ type: 'pane_info' }, { pane: { terminal_id: 'term-9' }, type: 'pane_info' }]) {
-    const f = fake({ store: { [KEY]: SIDE }, panes: SIDE_PANE, runs: { 'x-ab12': 'wf_1' }, splitResult })
+  for (const pane of [{ pane_id: 'w1:p9' }, { pane_id: 'w1:p9', terminal_id: 9 }]) {
+    const half = fake({ store: { [KEY]: SIDE }, panes: SIDE_PANE, runs: { 'x-ab12': 'wf_1' }, splitResult: { pane, type: 'pane_info' } })
+    await syncActivity(half.$, 'x-ab12')
+    expect(steps(half).slice(-2), JSON.stringify(pane)).toEqual(['pane split w1:p2', 'pane close w1:p9'])
+    expect(half.seen.toasts).toEqual([SPLIT_FAILED])
+    expect(half.store.get(KEY)).toStrictEqual(SIDE)
+  }
+  const unnamed: World[] = [
+    { splitResult: { type: 'pane_info' } },
+    { splitResult: { pane: { terminal_id: 'term-9' }, type: 'pane_info' } },
+    { splitResult: { pane: { pane_id: 9, terminal_id: 'term-9' }, type: 'pane_info' } },
+    { splitResult: { pane: null, type: 'pane_info' } },
+    { splitResult: null },
+    { splitStdout: 'split w1:p9' },
+  ]
+  for (const odd of unnamed) {
+    const f = fake({ store: { [KEY]: SIDE }, panes: SIDE_PANE, runs: { 'x-ab12': 'wf_1' }, ...odd })
     await syncActivity(f.$, 'x-ab12')
-    expect(steps(f).at(-1), JSON.stringify(splitResult)).toBe('pane split w1:p2')
-    expect(f.seen.toasts).toEqual([SPLIT_FAILED])
+    expect(steps(f).at(-1), JSON.stringify(odd)).toBe('pane split w1:p2')
+    expect(f.seen.toasts, JSON.stringify(odd)).toEqual([SPLIT_FAILED])
     expect(f.store.get(KEY)).toStrictEqual(SIDE)
   }
 })
@@ -369,6 +382,7 @@ test('a ticket id the shell would not read as itself goes into the watch quoted;
   const cases: [string, string][] = [
     ['a.b_C-12', 'a.b_C-12'],
     ["x'ab", `'x'\\''ab'`],
+    ["a'b'c", `'a'\\''b'\\''c'`],
     ['x ab;rm -rf ~', `'x ab;rm -rf ~'`],
     ['$(id)', `'$(id)'`],
     ['x-ab12/..', `'x-ab12/..'`],
