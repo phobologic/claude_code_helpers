@@ -238,6 +238,13 @@ test('AC: an activity pane of ours still running the watch of the run the lookup
   await syncActivity(several.$, 'x-ab12')
   expect(steps(several)).toEqual(LOOKED)
   expect(several.seen.writes).toEqual([])
+  // And when nothing but the script's path comes before the watch's words (started without the
+  // interpreter in argv), so the words are not looked for only at one place.
+  const direct = [{ argv: [SCRIPT, '--ticket', 'x-ab12', '--watch', '30', 'wf_1'] }]
+  const bare = fake({ store: { [KEY]: WITH_ACTIVITY }, panes: { ...SIDE_PANE, 'w1:p3': { terminalId: 'term-3', foreground: direct } }, runs: { 'x-ab12': 'wf_1' } })
+  await syncActivity(bare.$, 'x-ab12')
+  expect(steps(bare)).toEqual(LOOKED)
+  expect(bare.seen.writes).toEqual([])
 })
 
 // A replaced activity pane: the old one closed, a new one below the side pane running the watch of
