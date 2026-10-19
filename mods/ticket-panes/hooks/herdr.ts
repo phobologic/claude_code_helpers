@@ -23,6 +23,11 @@ const EXIT_CHECKS = 10
 const EXIT_CHECK_GAP_MS = 500
 // What `agent start` fails with when Claude starts on a question (folder trust, say).
 const NOT_READY = 'agent_not_ready'
+// The side pane's share of the main pane's width when it splits off. herdr's `pane split
+// --ratio` is the share the pane being split keeps (checked live, herdr 0.9.4), so the split
+// passes the rest.
+const SIDE_PANE_SHARE = 0.3
+const SPLIT_RATIO = String(1 - SIDE_PANE_SHARE)
 
 // The side-pane record (E9), kept in `$.store` under `side:<the main session's pane>`: the side
 // pane with the terminal it had when recorded, its agent's name and, while there is one, the
@@ -277,9 +282,10 @@ async function paneEnv($: EngineInterface, id: string, dir: string): Promise<str
   return env
 }
 
-// A new pane right of the main one, focus left where it was.
+// A new pane right of the main one, SIDE_PANE_SHARE of its width, focus left where it was.
 async function splitPane($: EngineInterface, split: Split): Promise<Pane> {
-  const ran = await herdr($, ['pane', 'split', split.from, '--direction', 'right', '--no-focus', '--cwd', split.cwd, ...split.env])
+  const args = ['pane', 'split', split.from, '--direction', 'right', '--ratio', SPLIT_RATIO, '--no-focus', '--cwd', split.cwd]
+  const ran = await herdr($, [...args, ...split.env])
   if (!ran.isOk) throw new SidePaneError('pane split', ran.reason)
   const pane = field(ran.result, 'pane')
   const paneId = text(pane, 'pane_id')
