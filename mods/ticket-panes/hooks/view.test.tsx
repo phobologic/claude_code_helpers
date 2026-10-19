@@ -233,6 +233,14 @@ test('a line led by triple-backtick inline code opens no fence', () => {
   expect([within.criteria, within.description]).toEqual([`## Acceptance Criteria\n- a\n${line}`, '## Design\nPlain.'])
 })
 
+test('a bare backtick fence, with no info string, opens a fence', () => {
+  for (const fence of ['```', '````']) {
+    const criteria = ['## Acceptance Criteria', '- It shows:', `  ${fence}`, '  # not a heading', `  ${fence}`, '- Done.']
+    const ticket = parseTicket('x-ab12', ['# T', ...criteria, '## Design', 'Plain.'].join('\n'))
+    expect([ticket.criteria, ticket.description]).toEqual([criteria.join('\n'), '## Design\nPlain.'])
+  }
+})
+
 test('a tilde fence opens even when its info string holds a backtick', () => {
   // A tilde fence's info string may hold anything (CommonMark), so the # line stays in the block.
   const criteria = ['## Acceptance Criteria', '- It shows:', '  ~~~sh `x`', '  # not a heading', '  ~~~', '- Done.']
