@@ -25,6 +25,7 @@ function engine(on: On, env: Record<string, string> | null, stored?: Role) {
   if (env === null) on('env.get', () => ({ deny: 'the environment cannot be read here' }))
   else mock.env(on, env)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('session.surfaces', () => ({ value: ['terminal'] }))
   if (stored !== undefined) on('state.get', roleRef, () => ({ value: { value: stored, version: 3 } }))
   const seen = { stored: [] as unknown[], logs: [] as string[] }
   on('state.set', roleRef, ($, e, next) => {
@@ -95,6 +96,9 @@ type World = {
   isEnvRefused?: boolean
   root?: string
   isRootRefused?: boolean
+  // What `$.session.surfaces()` answers: `['terminal']` unless given (a REPL).
+  surfaces?: string[]
+  isSurfacesRefused?: boolean
   files?: Record<string, Entry>
   stored?: Role | null
   isStateGetRefused?: boolean
@@ -119,6 +123,10 @@ function fake(world: World = {}) {
       root: async () => {
         if (world.isRootRefused) throw new Error('session.root: refused')
         return world.root ?? '/'
+      },
+      surfaces: async () => {
+        if (world.isSurfacesRefused) throw new Error('session.surfaces: refused')
+        return world.surfaces ?? ['terminal']
       },
     },
     fs: {
@@ -217,34 +225,68 @@ test('resolveRole answers the role when $.state refuses the write, as it does in
   expect(await resolveRole(draw.$)).toStrictEqual(SIDE)
 })
 
-// The launch folder the side pane was started in (herdr.ts), and the temp folder Claude Code's
-// session-title run (a `claude -p` the pane's Claude starts) runs in with the pane's variables.
+// The launch folder the side pane was started in (herdr.ts), and the temp folder a child `claude`
+// may run in: any `claude` a hook or tool starts from the pane inherits the pane's variables.
 const LAUNCHED = { ...SIDE_ENV, TICKET_PANES_CWD: '/repo' }
 const TEMP = '/private/var/folders/xy/T'
+const MAIN_IN_HERDR: Role = { kind: 'main', herdrPaneId: 'w1:p1' }
 
-test('R4: the pane is its own Claude unless the launcher named a folder and the root is known to be another', () => {
-  expect(isPaneClaude('/repo', '/repo')).toBe(true)
-  expect(isPaneClaude('/repo', TEMP)).toBe(false)
-  expect(isPaneClaude('/repo', '/repo/sub')).toBe(false)
-  // No launch folder named, or an empty one: R4 as before, whatever the root.
-  expect(isPaneClaude(undefined, TEMP)).toBe(true)
-  expect(isPaneClaude('', TEMP)).toBe(true)
+test('R4: the pane is its own Claude unless it draws nowhere, or the launcher named a folder and the root is known to be another', () => {
+  expect(isPaneClaude('/repo', '/repo', 1)).toBe(true)
+  expect(isPaneClaude('/repo', TEMP, 1)).toBe(false)
+  expect(isPaneClaude('/repo', '/repo/sub', 1)).toBe(false)
+  // No launch folder named, or an empty one: the root counts for nothing.
+  expect(isPaneClaude(undefined, TEMP, 1)).toBe(true)
+  expect(isPaneClaude('', TEMP, 1)).toBe(true)
   // A root that cannot be read leaves the session the pane's own, so the guard still holds.
-  expect(isPaneClaude('/repo', undefined)).toBe(true)
+  expect(isPaneClaude('/repo', undefined, 1)).toBe(true)
+  // A session that draws nowhere (a `claude -p`) is not the pane's own, wherever it runs.
+  expect(isPaneClaude('/repo', '/repo', 0)).toBe(false)
+  expect(isPaneClaude(undefined, '/repo', 0)).toBe(false)
+  // Surfaces that cannot be read leave it to the rest, as an unread root does.
+  expect(isPaneClaude('/repo', '/repo', undefined)).toBe(true)
 })
 
 test("AC R4: a session with the pane's ticket but a root other than the launch folder is a main session", async () => {
-  const titleRun = fake({ env: LAUNCHED, root: TEMP })
-  expect(await resolveRole(titleRun.$)).toStrictEqual({ kind: 'main', herdrPaneId: 'w1:p1' })
-  expect(titleRun.seen.sets).toEqual([{ kind: 'main', herdrPaneId: 'w1:p1' }])
+  const child = fake({ env: LAUNCHED, root: TEMP })
+  expect(await resolveRole(child.$)).toStrictEqual(MAIN_IN_HERDR)
+  expect(child.seen.sets).toEqual([MAIN_IN_HERDR])
   // The pane's own Claude, with its root the launch folder, is the side session.
   expect(await resolveRole(fake({ env: LAUNCHED, root: '/repo' }).$)).toStrictEqual(SIDE)
 })
 
-test('R4: a side pane whose root cannot be read, or whose launch folder is unset or empty, stays a side session', async () => {
+test("AC R4: a session with the pane's ticket in the launch folder that draws nowhere (a child `claude -p`) is a main session", async () => {
+  const child = fake({ env: LAUNCHED, root: '/repo', surfaces: [] })
+  expect(await resolveRole(child.$)).toStrictEqual(MAIN_IN_HERDR)
+  expect(child.seen.sets).toEqual([MAIN_IN_HERDR])
+  // With no launch folder named too.
+  expect(await resolveRole(fake({ env: SIDE_ENV, root: '/repo', surfaces: [] }).$)).toStrictEqual(MAIN_IN_HERDR)
+})
+
+test('R4: a side pane whose root or surfaces cannot be read, or whose launch folder is unset or empty, stays a side session', async () => {
   expect(await resolveRole(fake({ env: LAUNCHED, isRootRefused: true }).$)).toStrictEqual(SIDE)
+  expect(await resolveRole(fake({ env: LAUNCHED, root: '/repo', isSurfacesRefused: true }).$)).toStrictEqual(SIDE)
   expect(await resolveRole(fake({ env: SIDE_ENV, root: TEMP }).$)).toStrictEqual(SIDE)
   expect(await resolveRole(fake({ env: { ...SIDE_ENV, TICKET_PANES_CWD: '' }, root: TEMP }).$)).toStrictEqual(SIDE)
+})
+
+test('R4: a side agent whose root moved stays side after a reload, by the side role it stored for the same ticket', async () => {
+  const moved = fake({ env: LAUNCHED, root: '/elsewhere', stored: { ...SIDE } })
+  expect(await resolveRole(moved.$)).toStrictEqual(SIDE)
+  expect(moved.seen.sets).toEqual([])
+  // Nothing stored, as in any new process the pane's Claude starts: main.
+  expect(await resolveRole(fake({ env: LAUNCHED, root: '/elsewhere' }).$)).toStrictEqual(MAIN_IN_HERDR)
+  // A stored side role for another ticket does not stay.
+  const other = fake({ env: LAUNCHED, root: '/elsewhere', stored: { kind: 'side', sideTicket: 'x-cd34', herdrPaneId: 'w1:p1' } })
+  expect(await resolveRole(other.$)).toStrictEqual(MAIN_IN_HERDR)
+  expect(other.seen.sets).toEqual([MAIN_IN_HERDR])
+  // Only a side role stays: a stored main one naming the ticket is replaced.
+  const main = fake({ env: LAUNCHED, root: '/elsewhere', stored: { kind: 'main', sideTicket: 'x-ab12' } as Role })
+  expect(await resolveRole(main.$)).toStrictEqual(MAIN_IN_HERDR)
+  // Nor does one in a session that draws nowhere, wherever it runs.
+  const quiet = fake({ env: LAUNCHED, root: '/repo', surfaces: [], stored: { ...SIDE } })
+  expect(await resolveRole(quiet.$)).toStrictEqual(MAIN_IN_HERDR)
+  expect(quiet.seen.sets).toEqual([MAIN_IN_HERDR])
 })
 
 test('AC R4: after a reload, the first draw resolves the side role without throwing and runs the ready steps once', async () => {

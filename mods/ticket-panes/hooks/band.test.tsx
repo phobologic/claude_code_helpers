@@ -85,6 +85,7 @@ function world(on: On, env: Record<string, string>, kept?: Role): World {
     return { value: env[e.name] }
   })
   if (kept !== undefined) on('state.get', roleRef, () => ({ value: { value: kept, version: 1 } }))
+  on('session.surfaces', () => ({ value: SURFACES }))
   on('fs.stat', ($, e) => {
     w.stats.push(e.path)
     if (e.path !== FILE || w.ticket === undefined) return { deny: `ENOENT: no such file or directory, stat '${e.path}'` }
@@ -221,14 +222,26 @@ test('AC: a main session draws exactly what the hooks beneath draw, and starts n
   expect(w.stats).not.toContain(FILE)
 })
 
-// R4: Claude Code's session-title run, a `claude -p` the side pane's Claude starts in the temp
-// folder, inherits the ticket and the launch folder the pane was started in.
-test("AC: a title run (the pane's ticket, a root other than the launch folder) draws no ticket and polls nothing", async ($, on) => {
+// R4: any `claude` a hook or tool starts from the side pane (one that labels the pane from the temp
+// folder, say) inherits the ticket and the launch folder the pane was started in.
+test("AC: a child `claude` in another folder (the pane's ticket, a root other than the launch folder) draws no ticket and polls nothing", async ($, on) => {
   // Ahead of world()'s own hook, so it answers first; world registers the bare event.
   on('session.root', {}, () => ({ value: '/private/var/folders/xy/T' }))
   const w = world(on, { ...SIDE_ENV, TICKET_PANES_CWD: '/repo' })
   const ui = await mount($)
   expect(await ui.drawn()).toMatchObject({ type: 'Text', children: [BENEATH] })
+  await say($)
+  await w.time.advance(10_000)
+  expect(w.modes).toEqual([])
+  expect(w.periods).toBe(0)
+  expect(w.stats).not.toContain(FILE)
+})
+
+test("AC: a child `claude -p` in the launch folder (the pane's ticket and root, drawing nowhere) polls nothing and sets no mode", async ($, on) => {
+  // Ahead of world()'s own hook, with a matcher, so it answers first.
+  on('session.surfaces', {}, () => ({ value: [] }))
+  const w = world(on, { ...SIDE_ENV, TICKET_PANES_CWD: '/repo' })
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: false })
   await say($)
   await w.time.advance(10_000)
   expect(w.modes).toEqual([])
