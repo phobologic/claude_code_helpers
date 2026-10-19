@@ -384,13 +384,18 @@ test('a split that fails throws a SidePaneError naming pane split, with nothing 
   expect((await failure(launch(blank.$, 'x-ab12'))).step).toBe('pane split')
   expect(steps(blank)).toEqual(['uuidgen', 'pane split'])
   expect([...blank.store.keys()]).toEqual([])
+  // A terminal with no pane id is no pane to start in.
+  const nameless = fake({ splitResult: { pane: { terminal_id: 'term-9' }, type: 'pane_info' } })
+  expect((await failure(launch(nameless.$, 'x-ab12'))).step).toBe('pane split')
+  expect(steps(nameless)).toEqual(['uuidgen', 'pane split'])
+  expect([...nameless.store.keys()]).toEqual([])
 })
 
 test('herdr output that is not its JSON reads as the failure it is, by the first line of what it wrote', async () => {
   const f = fake()
   const run = f.$.process.run
   f.$.process.run = async (argv, init) => {
-    if (argv[2] === 'split') return { exitCode: 2, stdout: '', stderr: 'usage: herdr pane split [<pane_id>]\n  more\n', isStdoutTruncated: false, isStderrTruncated: false }
+    if (argv[2] === 'split') return { exitCode: 2, stdout: '', stderr: '\nusage: herdr pane split [<pane_id>]\n  more\n', isStdoutTruncated: false, isStderrTruncated: false }
     return run(argv, init)
   }
   expect((await failure(launch(f.$, 'x-ab12'))).message).toBe('pane split: usage: herdr pane split [<pane_id>]')
@@ -409,6 +414,14 @@ test('E7: the new session id is uuidgen\'s, lowercased; when uuidgen fails nothi
     expect(error.message).toBe(failed === 'rejects' ? 'uuidgen: process.run: uuidgen ran past its timeout' : 'uuidgen: uuidgen: cannot read the clock')
     expect(steps(f)).toEqual(['uuidgen'])
   }
+  // A rejection that is no Error is named as it is.
+  const odd = fake()
+  const oddRun = odd.$.process.run
+  odd.$.process.run = async (argv, init) => {
+    if (argv[0] === '/usr/bin/uuidgen') throw 'uuidgen is not installed'
+    return oddRun(argv, init)
+  }
+  expect((await failure(launch(odd.$, 'x-ab12'))).message).toBe('uuidgen: uuidgen is not installed')
 })
 
 test('launch needs the main session\'s herdr pane and a tickets dir', async () => {

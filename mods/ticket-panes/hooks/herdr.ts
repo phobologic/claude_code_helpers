@@ -63,7 +63,8 @@ type Activity = Required<Pick<SideRecord, 'activityPaneId' | 'activityTerminalId
 // Where a side pane splits from, the folder it starts in, and its `--env` arguments.
 type Split = { from: string; cwd: string; env: string[] }
 // A herdr call's answer: its result, or the code herdr gave (when it gave one) and why it failed.
-type Ran = { isOk: true; result: unknown } | { isOk: false; code?: string; reason: string }
+// A failed call has no result, so a reader of one finds nothing there.
+type Ran = { isOk: true; result: unknown } | { isOk: false; result?: undefined; code?: string; reason: string }
 
 const SIDE_FIELDS = ['ticketId', 'paneId', 'paneTerminalId', 'agentName'] as const
 const ACTIVITY_FIELDS = ['activityPaneId', 'activityTerminalId', 'activityTicketId'] as const
@@ -118,12 +119,12 @@ async function closePane($: EngineInterface, paneId: string): Promise<void> {
 // fails counts as not ours, so nothing we can't see is closed or focused.
 async function isOurs($: EngineInterface, paneId: string, terminalId: string): Promise<boolean> {
   const ran = await herdr($, ['pane', 'get', paneId])
-  return ran.isOk && text(field(ran.result, 'pane'), 'terminal_id') === terminalId
+  return text(field(ran.result, 'pane'), 'terminal_id') === terminalId
 }
 
 async function isAgentIn($: EngineInterface, name: string, paneId: string): Promise<boolean> {
   const ran = await herdr($, ['agent', 'get', name])
-  return ran.isOk && text(field(ran.result, 'agent'), 'pane_id') === paneId
+  return text(field(ran.result, 'agent'), 'pane_id') === paneId
 }
 
 // ---------- the record ----------
@@ -349,7 +350,7 @@ export async function launch($: EngineInterface, id: string, options: LaunchOpti
 // herdr finds no agent of that name.
 export async function agentStatus($: EngineInterface, name: string): Promise<string | undefined> {
   const ran = await herdr($, ['agent', 'get', name])
-  return ran.isOk ? text(field(ran.result, 'agent'), 'agent_status') : undefined
+  return text(field(ran.result, 'agent'), 'agent_status')
 }
 
 // E6: `idle` and `done` are idle; anything else, a status that could not be read included, is
@@ -372,7 +373,7 @@ function isClaude(entry: unknown): boolean {
 
 async function isClaudeIn($: EngineInterface, paneId: string): Promise<boolean> {
   const ran = await herdr($, ['pane', 'process-info', '--pane', paneId])
-  const processes = field(field(ran.isOk ? ran.result : undefined, 'process_info'), 'foreground_processes')
+  const processes = field(field(ran.result, 'process_info'), 'foreground_processes')
   return Array.isArray(processes) && processes.some(isClaude)
 }
 
