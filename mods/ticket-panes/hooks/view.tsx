@@ -2,6 +2,7 @@ import type { ElementTable, EngineInterface, RenderElement } from 'claude-code'
 
 import type { TicketPanesBandMode } from '../types'
 import { isTicket, ticketsDir } from './tickets'
+import type { TicketLook } from './tickets'
 
 // A ticket drawn from its file, as the side session's band (band.tsx) and the read-only ticket
 // pane (noun.tsx) show it. `readTicket` reads the file tk keeps and parses it; `TicketView` draws
@@ -40,7 +41,7 @@ export type TicketViewProps = {
   mode: TicketPanesBandMode
   // Draws `Show all` in compact and `Show less` in expanded.
   showToggles?: boolean
-  // Run by `Show less` and by the collapsed row's `+`.
+  // Run by `Show less` and by a press on the collapsed row.
   onCompact?: () => void
   // Run by `Show all`.
   onExpand?: () => void
@@ -70,8 +71,10 @@ const CRITERIA_START = /^\s*(#+\s*acceptance criteria|\*\*acceptance criteria\*\
 // `**-` (a bold flag such as `**--watch**` opens no section).
 const NEXT_HEADING = /^\s*(#|\*\*(?!-))/
 // A line that opens a fenced code block: three or more backticks or tildes, after any indent. The
-// run is the fence a close must match.
-const FENCE = /^\s*(`{3,}|~{3,})/
+// run is the fence a close must match. A backtick fence's info string holds no backtick
+// (CommonMark), so a line led by inline code in triple backticks (```tk show``` ...) is text, not
+// a fence; a tilde fence's info string may hold anything.
+const FENCE = /^\s*(`{3,}(?=[^`]*$)|~{3,})/
 // A line that may close one: a run of backticks or tildes and nothing else (a close takes no info
 // string).
 const BARE_FENCE = /^\s*(`+|~+)\s*$/
@@ -169,10 +172,11 @@ function oneLine(err: unknown): string {
 
 // Ticket `id` from `<tickets dir>/<id>.md` (R1), or the problem that kept it from being read:
 // `file not found` when R1 finds no such ticket or the file has gone since, else what failed. It
-// never rejects, so a draw that calls it always has something to draw.
-export async function readTicket($: EngineInterface, id: string): Promise<TicketRead> {
+// never rejects, so a draw that calls it always has something to draw. `look` goes to R1 as given
+// (a `fresh` look skips its cached misses).
+export async function readTicket($: EngineInterface, id: string, look: TicketLook = {}): Promise<TicketRead> {
   try {
-    if (!(await isTicket($, id))) return { id, problem: NOT_FOUND }
+    if (!(await isTicket($, id, look))) return { id, problem: NOT_FOUND }
     const path = `${await ticketsDir($)}/${id}.md`
     try {
       return parseTicket(id, await $.fs.read(path))
@@ -213,19 +217,19 @@ function noop(): void {}
 // A ticket in one of the three forms (D7), or the one row its problem is. Compact is a bordered
 // box: the id (the box's first row, bold), its status, type and priority, title and parent; the
 // description and criteria; how many notes; `Show all` with toggles. Expanded adds each note,
-// and `Show less` takes the place of `Show all`. Collapsed is one row: a `+` button, then
-// `<id> · <status> · <title>`. Every text is passed through `drawable`, and an empty one is not
-// drawn: a Box draws a string child, '' too, as a row.
+// and `Show less` takes the place of `Show all`. Collapsed is one row, `[+] <id> · <status> ·
+// <title>`, all of it one plain Button (no `[ ]` chrome), so a press anywhere on the line runs
+// `onCompact`. Every text is passed through `drawable`, and an empty one is not drawn: a Box draws
+// a string child, '' too, as a row.
 export function TicketView(props: TicketViewProps): RenderElement {
   const { elements, ticket, mode, showToggles, onCompact = noop, onExpand = noop } = props
   const { Box, Button, Markdown, Text } = elements
   if ('problem' in ticket) return <Text wrap="truncate">{drawable(`ticket ${ticket.id}: ${ticket.problem}`)}</Text>
   if (mode === 'collapsed') {
     return (
-      <Box flexDirection="row" gap={1}>
-        <Button key={VIEW_KEYS.restore} label="+" onPress={onCompact} />
-        <Text wrap="truncate">{drawable(joined([ticket.id, ticket.status, ticket.title]))}</Text>
-      </Box>
+      <Button key={VIEW_KEYS.restore} plain onPress={onCompact}>
+        [+] <Text wrap="truncate">{drawable(joined([ticket.id, ticket.status, ticket.title]))}</Text>
+      </Button>
     )
   }
   const isExpanded = mode === 'expanded'

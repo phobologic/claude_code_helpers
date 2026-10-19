@@ -224,6 +224,39 @@ test('a line led by two backticks or two tildes opens no fence', () => {
   }
 })
 
+test('a line led by triple-backtick inline code opens no fence', () => {
+  // A backtick fence's info string holds no backtick (CommonMark), so this line is text.
+  const line = '```tk show``` prints the id.'
+  const above = parseTicket('x-ab12', ['# T', line, '', '## Acceptance Criteria', '- a', '', '## Design', 'Plain.'].join('\n'))
+  expect([above.criteria, above.description]).toEqual(['## Acceptance Criteria\n- a', `${line}\n\n## Design\nPlain.`])
+  const within = parseTicket('x-ab12', ['# T', '## Acceptance Criteria', '- a', line, '## Design', 'Plain.'].join('\n'))
+  expect([within.criteria, within.description]).toEqual([`## Acceptance Criteria\n- a\n${line}`, '## Design\nPlain.'])
+})
+
+test('a bare backtick fence, with no info string, opens a fence', () => {
+  for (const fence of ['```', '````']) {
+    const criteria = ['## Acceptance Criteria', '- It shows:', `  ${fence}`, '  # not a heading', `  ${fence}`, '- Done.']
+    const ticket = parseTicket('x-ab12', ['# T', ...criteria, '## Design', 'Plain.'].join('\n'))
+    expect([ticket.criteria, ticket.description]).toEqual([criteria.join('\n'), '## Design\nPlain.'])
+  }
+})
+
+test('a tilde fence opens even when its info string holds a backtick', () => {
+  // A tilde fence's info string may hold anything (CommonMark), so the # line stays in the block.
+  const criteria = ['## Acceptance Criteria', '- It shows:', '  ~~~sh `x`', '  # not a heading', '  ~~~', '- Done.']
+  const ticket = parseTicket('x-ab12', ['# T', ...criteria, '## Design', 'Plain.'].join('\n'))
+  expect([ticket.criteria, ticket.description]).toEqual([criteria.join('\n'), '## Design\nPlain.'])
+})
+
+test('a backtick fence whose info string holds a space still opens', () => {
+  // A backtick fence's info string may hold anything but a backtick, spaces included.
+  for (const open of ['```sh title="a"', '```js {1,3}']) {
+    const criteria = ['## Acceptance Criteria', '- It shows:', `  ${open}`, '  # not a heading', '  ```', '- Done.']
+    const ticket = parseTicket('x-ab12', ['# T', ...criteria, '## Design', 'Plain.'].join('\n'))
+    expect([ticket.criteria, ticket.description]).toEqual([criteria.join('\n'), '## Design\nPlain.'])
+  }
+})
+
 test('a fence closes only on a bare fence of its own kind, at least as long', () => {
   const blocks = [
     ['```md', '~~~', '```'],
@@ -240,6 +273,17 @@ test('a fence closes only on a bare fence of its own kind, at least as long', ()
   // ticket cc-7ted is to stop that.)
   const ticket = parseTicket('x-ab12', ['# T', '```md', '## Acceptance Criteria', '- a', '```', '## Design', 'Plain.'].join('\n'))
   expect([ticket.criteria, ticket.description]).toEqual(['## Acceptance Criteria\n- a\n```', '```md\n## Design\nPlain.'])
+})
+
+test('a close followed by spaces still closes the fence', () => {
+  const criteria = ['## Acceptance Criteria', '- It shows:', '  ```sh', '  # not a heading', '  ```  ', '- Done.']
+  const ticket = parseTicket('x-ab12', ['# T', ...criteria, '## Design', 'Plain.'].join('\n'))
+  expect([ticket.criteria, ticket.description]).toEqual([criteria.join('\n'), '## Design\nPlain.'])
+})
+
+test('a heading on the line after the criteria start ends them', () => {
+  const ticket = parseTicket('x-ab12', ['# T', '**Acceptance criteria**', '**Confidence**: 80', 'Plain.'].join('\n'))
+  expect([ticket.criteria, ticket.description]).toEqual(['**Acceptance criteria**', '**Confidence**: 80\nPlain.'])
 })
 
 // ---------- readTicket ----------
@@ -450,16 +494,21 @@ test('AC: without showToggles neither Show all nor Show less is drawn', async ($
   }
 })
 
-test('AC: collapsed is one row, a + button then <id> · <status> · <title>, the button calling onCompact', async ($, on) => {
+test('AC: collapsed is one plain Button holding [+] <id> · <status> · <title>, the whole line calling onCompact', async ($, on) => {
   const pressed = drawView(on, { ticket: parseTicket('x-ab12', TASK), mode: 'collapsed', showToggles: true })
   for (const surface of SURFACES) {
     pressed.length = 0
     const ui = await mountView($, surface)
     const drawn = (await ui.drawn()) as Drawn
-    expect(drawn).toMatchObject({ type: 'Box', props: { flexDirection: 'row' } })
+    // D7: the line itself is the Button, drawn without `[ ]` chrome, so a press anywhere on it
+    // lands on the Button. Not a Box holding a Button beside a Text.
+    expect(drawn).toMatchObject({ type: 'Button', props: { key: VIEW_KEYS.restore, plain: true } })
+    // With no label of its own, the engine names the control by its children's text.
+    expect(drawn.props?.label).toBe('[+] x-ab12 · open · Draw the widget')
     expect(drawn.children).toHaveLength(2)
-    expect(drawn.children[0]).toMatchObject({ type: 'Button', props: { key: VIEW_KEYS.restore, label: '+' } })
+    expect(drawn.children[0]).toBe('[+] ')
     expect(drawn.children[1]).toMatchObject({ type: 'Text', props: { wrap: 'truncate' }, children: ['x-ab12 · open · Draw the widget'] })
+    expect(await ui.findAll({ type: 'Button' })).toHaveLength(1)
     await ui.press({ key: VIEW_KEYS.restore })
     expect(pressed).toEqual(['compact'])
     await ui.unmount()

@@ -1,6 +1,6 @@
 import type { EngineInterface, On } from 'claude-code'
 
-import { agentStatus, closePane, exitAgent, field, herdr, isIdle, launch, text, updateSide } from './herdr'
+import { agentStatus, closePane, exitAgent, isIdle, isOurs, isYes, launch, updateSide } from './herdr'
 import type { Side } from './herdr'
 import { notify } from './notify'
 import type { Role } from './role'
@@ -31,22 +31,14 @@ function isConfirmed(side: Side, id: string, now: number): boolean {
   return elapsed >= 0 && elapsed < CONFIRM_MS
 }
 
-// What herdr shows as pane `paneId`'s terminal id, or undefined when the look fails (herdr refused
-// it, is missing, ran past its time, or wrote no JSON). Through herdr.ts's runner, with its
-// default timeout of 10 s.
-async function terminalOf($: EngineInterface, paneId: string): Promise<string | undefined> {
-  const ran = await herdr($, ['pane', 'get', paneId])
-  return text(field(ran.result, 'pane'), 'terminal_id')
-}
-
-// Closes the recorded activity pane while it is ours: herdr shows it with the terminal it had
-// (E9). A look that fails counts as not ours, and a pane not ours is never closed. A close that
-// fails is passed over: the switch goes on.
+// Closes the recorded activity pane while it is ours, by herdr.ts's look (E9): a pane not ours is
+// never closed. A look herdr does not answer throws its SidePaneError (`pane get`) before anything
+// is closed or the record changed, so the click goes the way of any other herdr failure (D13). A
+// close that fails is passed over: the switch goes on.
 async function closeActivity($: EngineInterface, side: Side): Promise<void> {
   const { activityPaneId, activityTerminalId } = side
   if (activityPaneId === undefined || activityTerminalId === undefined) return
-  if ((await terminalOf($, activityPaneId)) !== activityTerminalId) return
-  await closePane($, activityPaneId)
+  if (isYes(await isOurs($, activityPaneId, activityTerminalId))) await closePane($, activityPaneId)
 }
 
 // E4: closes the activity pane, ends the side agent and closes its pane, then opens `id` in a fresh

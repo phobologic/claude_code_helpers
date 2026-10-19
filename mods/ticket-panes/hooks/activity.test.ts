@@ -334,6 +334,25 @@ test('AC: a lookup that fails opens no activity pane, asks herdr nothing and toa
   expect(odd.seen.toasts).toEqual(['no run activity for x-ab12: run-tickets-status --find-ticket: unexpected output'])
 })
 
+test('AC: a side pane look herdr does not answer keeps the record, opens and closes nothing, and toasts pane get', async () => {
+  for (const failed of ['rejects', BOOM] as const) {
+    const f = fake({ store: { [KEY]: WITH_ACTIVITY }, panes: BOTH_PANES, runs: { 'x-ab12': 'wf_1' }, fails: { 'pane get': failed } })
+    await syncActivity(f.$, 'x-ab12')
+    const reason = failed === 'rejects' ? 'process.run: herdr pane get ran past its timeout' : 'herdr failed (faked)'
+    expect(f.seen.toasts, JSON.stringify(failed)).toEqual([`no run activity for x-ab12: pane get: ${reason}`])
+    expect(steps(f)).toEqual(['find-ticket x-ab12', 'pane get w1:p2'])
+    expect(f.store.get(KEY)).toStrictEqual(WITH_ACTIVITY)
+    expect(f.seen.writes).toEqual([])
+    expect([...f.panes.keys()]).toEqual([MAIN, 'w1:p2', 'w1:p3'])
+  }
+  // The agent's look the same way, in no run too.
+  const f = fake({ store: { [KEY]: SIDE }, panes: SIDE_PANE, fails: { 'agent get': 'rejects' } })
+  await syncActivity(f.$, 'x-ab12')
+  expect(f.seen.toasts).toEqual(['no run activity for x-ab12: agent get: process.run: herdr agent get ran past its timeout'])
+  expect(f.store.get(KEY)).toStrictEqual(SIDE)
+  expect(f.seen.writes).toEqual([])
+})
+
 test('a watch herdr does not take closes the pane split for it, records none and toasts pane run', async () => {
   for (const failed of [{ code: 'input_too_long', message: 'the command is longer than the line limit' }, 'rejects'] as const) {
     const f = fake({ store: { [KEY]: SIDE }, panes: SIDE_PANE, runs: { 'x-ab12': 'wf_1' }, fails: { 'pane run': failed } })

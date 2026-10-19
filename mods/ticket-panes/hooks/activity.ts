@@ -22,7 +22,9 @@ type Pane = { paneId: string; terminalId: string }
 
 // ---------- herdr ----------
 // Each call goes through herdr.ts's runner, with its default timeout of 10 s. A failure is only
-// that here: the toast names the step that failed (D17), not what herdr said.
+// that here: the toast names the step that failed (D17), not what herdr said. Which panes are ours
+// is herdr.ts's look alone (E9), through readSide, and every pane this file closes goes through
+// herdr.ts's closePane.
 
 // A new pane below the side pane, starting in the session root, focus left where it was. Throws
 // `pane split` when herdr split nothing or named no pane and terminal; a pane it named without its
@@ -80,7 +82,9 @@ async function sync($: EngineInterface, id: string): Promise<void> {
   const run = await unfinishedRunFor($, id)
   if ('error' in run) throw new Error(run.error)
   // readSide gives the activity part only whole, and only while that pane is ours (E9): one whose
-  // terminal no longer matches is dropped from the record there and never closed.
+  // terminal no longer matches is dropped from the record there and never closed. A look herdr
+  // does not answer throws (`pane get: <reason>`, `agent get: <reason>`) with the record kept, and
+  // goes on to the toast.
   const side = await readSide($)
   if (side === undefined) return
   if ('runId' in run && side.activityTicketId === id) return
