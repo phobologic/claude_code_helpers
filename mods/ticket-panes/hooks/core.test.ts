@@ -125,7 +125,9 @@ function fake(world: World = {}) {
         return stat
       },
     },
-    clock: { now: async () => clock.now },
+    // `every` for the band's ready step (band.tsx), which starts its poll when the role first
+    // resolves to a side session; the stand-in's timers never fire.
+    clock: { now: async () => clock.now, every: () => ({ cancel: () => {} }) },
     store: {
       get: async (key: string) => store.get(key),
       set: async (key: string, value: unknown) => {
@@ -238,7 +240,8 @@ test('calls made while the role resolves wait for that one resolution', async ()
   forgetRole()
   const both = fake({ env: SIDE_ENV })
   expect(await Promise.all([role(both.$), role(both.$)])).toStrictEqual([SIDE, SIDE])
-  expect(both.seen.env).toEqual(['TICKET_PANES_TICKET', 'HERDR_ENV', 'HERDR_PANE_ID'])
+  // Each of the role's variables read once; the band's ready step then reads TICKETS_DIR (R1).
+  expect(both.seen.env.filter(name => name !== 'TICKETS_DIR')).toEqual(['TICKET_PANES_TICKET', 'HERDR_ENV', 'HERDR_PANE_ID'])
   expect(both.seen.logs).toHaveLength(1)
 })
 
