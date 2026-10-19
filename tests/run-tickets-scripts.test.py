@@ -1,6 +1,6 @@
 """Checks bin/run-tickets-setup and bin/run-tickets-finish against throwaway git repos,
-run-tickets-status's test for metadata an in-session resume has outdated, and bin/run-capped
-against real process groups.
+run-tickets-status's test for metadata an in-session resume has outdated, bin/run-tickets-gates's
+path matching (and its read of a merge in progress), and bin/run-capped against real process groups.
 
     python3 tests/run-tickets-scripts.test.py
 
@@ -23,7 +23,8 @@ from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 
 BIN = Path(__file__).resolve().parent.parent / "bin"
-SETUP, FINISH, CAPPED = (str(BIN / name) for name in ("run-tickets-setup", "run-tickets-finish", "run-capped"))
+SETUP, FINISH, CAPPED, GATES = (str(BIN / name) for name in
+                                ("run-tickets-setup", "run-tickets-finish", "run-capped", "run-tickets-gates"))
 
 FAKE_TK = """#!/usr/bin/env bash
 echo "$*" >> "$TK_LOG"
@@ -420,6 +421,94 @@ with tempfile.TemporaryDirectory() as tmp:
     found = json.loads(res.stdout or "{}").get("leftover_processes")
     check("finish sweep: never lists its own parent shell, even when that names a worktree",
           res.returncode == 0 and found == [], f"{res.returncode} {found} {res.stderr}")
+
+# ---------- gates ----------
+
+loader = SourceFileLoader("run_tickets_gates", GATES)
+gates_mod = module_from_spec(spec_from_loader(loader.name, loader))
+loader.exec_module(gates_mod)
+
+SAMPLE_GATES = [
+    "make lint",
+    {"command": "mods-check", "paths": ["mods/**"]},
+    {"command": "judge-test", "paths": ["mods/blast-radius/**"]},
+    {"command": "suite", "paths": ["bin/**", "workflows/", "tests/*.py"]},
+]
+
+
+def chosen(files, gates=SAMPLE_GATES):
+    return gates_mod.select(gates, files)
+
+
+check("gates: a file matching two scoped gates runs both, in gate order, after the unscoped one",
+      chosen(["mods/blast-radius/bin/judge.py"]) == ["make lint", "mods-check", "judge-test"],
+      chosen(["mods/blast-radius/bin/judge.py"]))
+check("gates: a file matching no scoped gate runs only the unscoped one", chosen(["README.md"]) == ["make lint"],
+      chosen(["README.md"]))
+check("gates: no changed files still runs the unscoped one", chosen([]) == ["make lint"])
+check("gates: a gate matched by several files is listed once",
+      chosen(["bin/a", "bin/b", "workflows/w.js"]) == ["make lint", "suite"], chosen(["bin/a", "bin/b", "workflows/w.js"]))
+check("gates: a trailing slash covers everything under the folder", chosen(["workflows/x/y.js"]) == ["make lint", "suite"])
+check("gates: * stays within one folder", chosen(["tests/t.py"]) == ["make lint", "suite"]
+      and chosen(["tests/sub/t.py"]) == ["make lint"], chosen(["tests/sub/t.py"]))
+check("gates: a folder prefix is not a match for a sibling with a longer name",
+      chosen(["mods/blast-radius-two/x"]) == ["make lint", "mods-check"], chosen(["mods/blast-radius-two/x"]))
+check("gates: mods/** does not match a top-level file named mods", chosen(["modsfile"]) == ["make lint"])
+
+
+def matches(glob, path):
+    return bool(gates_mod.pattern(glob).fullmatch(path))
+
+
+check("gates: **/ matches at the top level and in any folder",
+      matches("**/*.py", "a.py") and matches("**/*.py", "x/y/a.py") and not matches("**/*.py", "a.pyc"))
+check("gates: ? is one character within a folder", matches("a?.txt", "ab.txt") and not matches("a?.txt", "a/.txt")
+      and not matches("a?.txt", "abc.txt"))
+check("gates: a path with no wildcard is that file or the folder's contents",
+      matches("src/app", "src/app") and matches("src/app", "src/app/main.go") and not matches("src/app", "src/application"))
+check("gates: other characters are literal", matches("a.b/[x]", "a.b/[x]") and not matches("a.b/[x]", "aXb/[x]")
+      and not matches("a.b/[x]", "a.b/x"))
+
+with tempfile.TemporaryDirectory() as tmp:
+    root, env = new_repo(tmp)
+    os.makedirs(os.path.join(root, "bin"))
+    commit(root, "bin/tool.sh", "echo\n", "tool")
+    sh("git", "checkout", "-qb", "ticket/g", cwd=root)
+    os.makedirs(os.path.join(root, "mods", "m"))
+    commit(root, "mods/m/hook.ts", "x\n", "hook")
+    sh("git", "checkout", "-q", "main", cwd=root)
+    sh("git", "merge", "--no-ff", "--no-commit", "ticket/g", cwd=root)
+    res = subprocess.run([GATES, json.dumps(SAMPLE_GATES)], cwd=root, capture_output=True, text=True)
+    check("gates: during a merge it reads the files the merge changes",
+          res.returncode == 0 and res.stdout.splitlines() == ["make lint", "mods-check"], res.stdout + res.stderr)
+    check("gates: stderr names the skipped gates", "judge-test" in res.stderr and "suite" in res.stderr, res.stderr)
+    sh("git", "merge", "--abort", cwd=root)
+
+    # A file moved out of bin/ still runs bin's gate: the old path counts as changed.
+    sh("git", "checkout", "-qb", "ticket/mv", cwd=root)
+    os.makedirs(os.path.join(root, "docs"))
+    sh("git", "mv", "bin/tool.sh", "docs/tool.sh", cwd=root)
+    sh("git", "commit", "-qm", "move", cwd=root)
+    sh("git", "checkout", "-q", "main", cwd=root)
+    sh("git", "merge", "--no-ff", "--no-commit", "ticket/mv", cwd=root)
+    res = subprocess.run([GATES, json.dumps(SAMPLE_GATES)], cwd=root, capture_output=True, text=True)
+    check("gates: a file moved out of a gate's paths still runs that gate",
+          res.stdout.splitlines() == ["make lint", "suite"], res.stdout + res.stderr)
+    sh("git", "merge", "--abort", cwd=root)
+
+    res = subprocess.run([GATES, json.dumps(SAMPLE_GATES)], cwd=tmp, capture_output=True, text=True)
+    check("gates: outside a git repo it fails instead of choosing from nothing", res.returncode == 1 and not res.stdout,
+          res.stdout + res.stderr)
+
+for bad in ('{"command": "x"}', "[3]", '[{"command": "x", "paths": []}]', '[{"command": "x"}]', '[{"command": "x", "path": ["a"]}]',
+            '[{"command": "", "paths": ["a"]}]', '[{"command": "x", "paths": [""]}]', '[{"command": "x", "paths": "a"}]',
+            '["a\\nb"]', '[""]', "not json"):
+    res = subprocess.run([GATES, bad, "--files", "a"], capture_output=True, text=True)
+    check(f"gates: malformed gates exit 2 without choosing: {bad}", res.returncode == 2 and not res.stdout, res.stdout + res.stderr)
+res = subprocess.run([GATES, "[]", "--bogus"], capture_output=True, text=True)
+check("gates: an unknown argument exits 2", res.returncode == 2 and not res.stdout)
+res = subprocess.run([GATES], capture_output=True, text=True)
+check("gates: no arguments exits 2 with the usage", res.returncode == 2 and "Usage" in res.stderr)
 
 # ---------- run-capped ----------
 
