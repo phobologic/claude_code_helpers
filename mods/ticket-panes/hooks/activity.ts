@@ -100,8 +100,10 @@ function sidePart(side: SideRecord): SideRecord {
 async function openBelow($: EngineInterface, side: Side, id: string, runId: string): Promise<void> {
   const pane = await splitBelow($, side.paneId)
   try {
-    if ((await herdr($, ['pane', 'run', pane.paneId, watchCommand(id, runId)])) === undefined) throw new Error('pane run')
-    await updateSide($, () => ({ ...sidePart(side), activityPaneId: pane.paneId, activityTerminalId: pane.terminalId, activityTicketId: id }))
+    const ran = await herdr($, ['pane', 'run', pane.paneId, watchCommand(id, runId)])
+    if (ran === undefined) throw new Error('pane run')
+    const activity = { activityPaneId: pane.paneId, activityTerminalId: pane.terminalId, activityTicketId: id }
+    await updateSide($, () => ({ ...sidePart(side), ...activity }))
   } catch (error) {
     await closePane($, pane.paneId)
     throw error
@@ -110,7 +112,8 @@ async function openBelow($: EngineInterface, side: Side, id: string, runId: stri
 
 // The steps of `syncActivity`; what fails throws, its message naming what failed.
 async function sync($: EngineInterface, id: string): Promise<void> {
-  // The lookup comes first, before herdr is asked anything: the noun's tests watch it to see this run.
+  // The lookup comes first, before herdr is asked anything: the noun's tests watch it to see this
+  // run, and hold it open to test their lock.
   const run = await unfinishedRunFor($, id)
   if ('error' in run) throw new Error(run.error)
   // readSide gives the activity part only whole, and only while that pane is ours (E9): one whose
@@ -131,15 +134,17 @@ function whatFailed(error: unknown): string {
 }
 
 // Opens, keeps or closes the activity pane for ticket `id`, once its side pane is placed (D8):
-// - In a running run (R2): an activity pane of ours for `id` is kept. Otherwise any activity pane
-//   of ours closes, the side pane is split down, the pane runs
-//   `run-tickets-status --ticket <id> --watch 30 <run id>`, and the record takes its pane,
-//   terminal and ticket.
+// - In a running run (R2): an activity pane of ours for `id` is kept (the record names no run, so
+//   by its ticket alone). Otherwise any activity pane of ours closes, the side pane is split down,
+//   the new pane runs `run-tickets-status --ticket <id> --watch 30 <run id>`, and the record takes
+//   its pane, terminal and ticket.
 // - In none: any activity pane of ours closes and the record's activity fields are cleared.
-// - When the lookup fails, or the new pane can't be split or given its command, no activity pane
-//   is opened and `no run activity for <id>: <what failed>` is toasted (D17).
-// It never throws, since the noun's open takes a throw as its side pane failing (D13): anything else
-// that fails is toasted the same way, by its first line. The side pane is left as it is.
+// - When the lookup fails, nothing else is asked or changed. When the new pane can't be split or
+//   given its command, no activity pane is recorded. Either way `no run activity for <id>: <what
+//   failed>` is toasted (D17): the lookup's error, `pane split` or `pane run`.
+// - With no side pane on record, or one no longer ours, there is nothing to open one below.
+// It never throws, since the noun's open takes a throw as its side pane failing (D13): anything
+// else that fails is toasted the same way, by its first line. The side pane is left as it is.
 export async function syncActivity($: EngineInterface, id: string): Promise<void> {
   try {
     await sync($, id)
