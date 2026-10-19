@@ -28,23 +28,67 @@ let resolving: Promise<Role | undefined> | undefined
 
 // R4, from the variables the session was started with. An empty value counts as unset, as tk
 // treats its own; `herdrPaneId` is set only in herdr (`HERDR_ENV` is `1` and a pane id is set).
+// `ticket` is TICKET_PANES_TICKET once `isPaneClaude` has said the session is the pane's own.
 export function roleFrom(ticket: string | undefined, herdrEnv: string | undefined, herdrPaneId: string | undefined): Role {
   const found: Role = ticket ? { kind: 'side', sideTicket: ticket } : { kind: 'main' }
   if (herdrEnv === '1' && herdrPaneId) found.herdrPaneId = herdrPaneId
   return found
 }
 
+// R4: whether a session with TICKET_PANES_TICKET set is the side pane's own Claude. Every process
+// the pane's Claude starts inherits the variables, so any `claude` a hook or tool starts from the
+// pane (one that labels the pane from the temp folder, say) loads this mod with them, and none of
+// those may act as the side session: above all, none may record itself as the ticket's
+// conversation (R3). The pane's own Claude is a REPL, so it draws on the terminal; a `claude -p`
+// or SDK run draws nowhere (`surfaces` is the count of `$.session.surfaces()`, empty in a plain -p
+// run). And the launcher (herdr.ts) names the folder it starts the pane in as TICKET_PANES_CWD,
+// which the pane's Claude has as its root, after `/clear` and an in-pane `/resume` too. So a
+// session is not the pane's own when it draws nowhere, or when the launcher named a folder and the
+// session's root is known to be another. A launch folder unset or empty (a pane started before the
+// launcher named one) leaves the root out of it. A root or surfaces that cannot be read leave the
+// session side, so the guard still holds; R3 cannot be written without the root.
+export function isPaneClaude(launchFolder: string | undefined, root: string | undefined, surfaces: number | undefined): boolean {
+  if (surfaces === 0) return false
+  return !launchFolder || root === undefined || root === launchFolder
+}
+
 function sameRole(a: Role, b: Role | undefined): boolean {
   return b !== undefined && a.kind === b.kind && a.sideTicket === b.sideTicket && a.herdrPaneId === b.herdrPaneId
 }
 
-// The role the environment gives, or undefined when it cannot be read here.
-async function envRole($: EngineInterface): Promise<Role | undefined> {
+// The session's root, or undefined when it cannot be read here.
+async function rootOf($: EngineInterface): Promise<string | undefined> {
+  try {
+    return await $.session.root()
+  } catch {
+    return undefined
+  }
+}
+
+// How many surfaces the session draws on, or undefined when that cannot be read here.
+async function surfacesOf($: EngineInterface): Promise<number | undefined> {
+  try {
+    return (await $.session.surfaces()).length
+  } catch {
+    return undefined
+  }
+}
+
+// What the environment says of the session: the role it gives; the TICKET_PANES_TICKET it was
+// given, before R4 decided whether the session is the pane's own; and whether the session draws
+// anywhere, or might (its surfaces cannot be read).
+type EnvReading = { role: Role; ticket: string | undefined; draws: boolean }
+
+// The environment's reading, or undefined when it cannot be read here.
+async function envRole($: EngineInterface): Promise<EnvReading | undefined> {
   try {
     const ticket = await $.env.get('TICKET_PANES_TICKET')
     const herdrEnv = await $.env.get('HERDR_ENV')
     const herdrPaneId = await $.env.get('HERDR_PANE_ID')
-    return roleFrom(ticket, herdrEnv, herdrPaneId)
+    const launchFolder = await $.env.get('TICKET_PANES_CWD')
+    const surfaces = await surfacesOf($)
+    const isOwn = isPaneClaude(launchFolder, await rootOf($), surfaces)
+    return { role: roleFrom(isOwn ? ticket : undefined, herdrEnv, herdrPaneId), ticket, draws: surfaces !== 0 }
   } catch {
     return undefined
   }
@@ -60,14 +104,26 @@ async function storedRole($: EngineInterface): Promise<Role | undefined> {
   }
 }
 
+// R4: whether a side role stored earlier in this session outlasts an environment that now says
+// main. `$.state` is the session's own, so only the pane's own Claude stored it; a side agent whose
+// root moved since (`/cd`, a worktree) stays side after a reload, for the ticket the environment
+// still names. A session that draws nowhere is never the pane's own, whatever it stored.
+function keepsStoredSide(env: EnvReading, stored: Role | undefined): boolean {
+  return env.role.kind === 'main' && env.draws && stored?.kind === 'side' && stored.sideTicket === env.ticket
+}
+
 // R4 without the cache: the role the environment gives, stored in `$.state` when it differs from
-// the stored one; the stored one when the environment cannot be read; undefined when neither can
-// say. The engine refuses `$.state.set` while a `ui.render` hook draws, which leaves the stored
-// role as it was: harmless, since it is only a fallback.
+// the stored one; the stored one when the environment cannot be read, or when it is a side role
+// the session keeps (`keepsStoredSide`); undefined when neither can say. A process the pane's
+// Claude starts is a session of its own with nothing stored. The engine refuses `$.state.set`
+// while a `ui.render` hook draws, which leaves the stored role as it was: harmless, since it is
+// only a fallback.
 export async function resolveRole($: EngineInterface): Promise<Role | undefined> {
-  const fromEnv = await envRole($)
+  const env = await envRole($)
   const stored = await storedRole($)
-  if (fromEnv === undefined) return stored
+  if (env === undefined) return stored
+  if (keepsStoredSide(env, stored)) return stored
+  const fromEnv = env.role
   if (!sameRole(fromEnv, stored)) {
     try {
       await $.state.set(ROLE, fromEnv)

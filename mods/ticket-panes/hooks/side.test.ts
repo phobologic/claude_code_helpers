@@ -73,6 +73,7 @@ function world(on: On, env: Record<string, string>, kept?: Role): World {
   })
   on('session.id', () => ({ value: w.sessionId }))
   on('session.root', () => ({ value: '/repo' }))
+  on('session.surfaces', () => ({ value: ['terminal'] }))
   on('store.set', ($, e) => {
     if (w.storeRefusals > 0) {
       w.storeRefusals -= 1
@@ -582,4 +583,132 @@ test('a main session records nothing', async ($, on) => {
   const w = world(on, { TICKETS_DIR: DIR, HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p1' })
   await say($)
   expect(w.records).toEqual([])
+})
+
+// ---------- processes the pane's Claude starts (R4) ----------
+// The launcher names the folder it starts the side pane in (TICKET_PANES_CWD), and every process
+// the pane's Claude starts inherits it with the ticket. So any `claude` a hook or tool starts from
+// the pane loads the user's plugins with both: a child `claude -p`, say, that labels the pane from
+// the temp folder. Only the pane's own Claude, a REPL drawing on the terminal in the launch folder,
+// is the side session.
+
+const LAUNCHED = { ...SIDE_ENV, HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p2', TICKET_PANES_CWD: '/repo' }
+const TEMP = '/private/var/folders/xy/T'
+
+// The session's root is `root`. Registered ahead of world(), so it answers first; world registers
+// the bare event, so this one has a matcher.
+function rootedAt(on: On, root: string): void {
+  on('session.root', {}, () => ({ value: root }))
+}
+
+// The session draws nowhere, as a `claude -p` run: `$.session.surfaces()` is empty. Ahead of
+// world(), with a matcher, as `rootedAt`.
+function drawsNowhere(on: On): void {
+  on('session.surfaces', {}, () => ({ value: [] }))
+}
+
+// A child `claude` as its own session: a fresh load whose session starts in `cwd`, drawing on the
+// terminal or (a `claude -p`) nowhere.
+async function startChild($: Engine, cwd: string, isInteractive: boolean): Promise<void> {
+  await $.session.start({ cwd, surface: isInteractive ? 'terminal' : null, isInteractive })
+}
+
+// Each prompt, a ticket change, a /clear and a prompt after it, as a side session would note and
+// record them.
+async function promptsAndClear($: Engine, w: World, sessionId: string): Promise<void> {
+  await say($)
+  change(w, 200, V2)
+  await say($)
+  await end($, 'clear', sessionId)
+  await say($)
+}
+
+test("AC: a child `claude` in another folder (the pane's ticket, a root other than the launch folder) adds no section, sends no note and records nothing", async ($, on) => {
+  rootedAt(on, TEMP)
+  const w = world(on, LAUNCHED)
+  w.sessionId = 'T1'
+  await startChild($, TEMP, true)
+  expect(await compose($)).toEqual([BASE])
+  await promptsAndClear($, w, 'T1')
+  expect(w.contexts).toEqual([undefined, undefined, undefined])
+  expect(w.records).toEqual([])
+})
+
+test("AC: a child `claude -p` in the launch folder (the pane's ticket and root, drawing nowhere) adds no section, sends no note and records nothing", async ($, on) => {
+  drawsNowhere(on)
+  const w = world(on, LAUNCHED)
+  w.sessionId = 'T1'
+  await startChild($, '/repo', false)
+  expect(await compose($)).toEqual([BASE])
+  await promptsAndClear($, w, 'T1')
+  expect(w.contexts).toEqual([undefined, undefined, undefined])
+  expect(w.records).toEqual([])
+})
+
+test("the pane's own Claude, its root the launch folder, is the side session", async ($, on) => {
+  const w = world(on, LAUNCHED)
+  await start($)
+  expect((await compose($))[1]?.id).toBe('ticket-panes:side')
+  await say($)
+  expect(w.records).toEqual([{ key: KEY, value: { sessionId: 'S1', cwd: '/repo' } }])
+})
+
+// AC: sessions in order, sharing the user's store as separate processes do. The test kit loads
+// the plugin once per test, so each session is a test of its own: the first is the pane's own
+// Claude, the others children it starts right after, one in another folder and one a `claude -p`
+// in the launch folder. The store's writes are kept here, across them, and each later one checks
+// that the ones before it ran.
+const SHARED_WRITES: { key: string; value: unknown }[] = []
+const PANE_RECORD = { key: KEY, value: { sessionId: 'S3', cwd: '/repo' } }
+
+// Keeps every store write in SHARED_WRITES; ahead of world()'s own hook, so it sees each one.
+function sharedStore(on: On): void {
+  on('store.set', {}, ($, e, next) => {
+    SHARED_WRITES.push({ key: e.key, value: e.value })
+    return next(e)
+  })
+}
+
+test("AC (session 1 of 3): the pane's own Claude records its id and folder on its first counted prompt, after /clear and after /resume", async ($, on) => {
+  sharedStore(on)
+  const w = world(on, LAUNCHED)
+  await start($)
+  await say($)
+  await end($, 'clear', 'S1')
+  w.sessionId = 'S2'
+  await say($)
+  await end($, 'resume', 'S2')
+  w.sessionId = 'S3'
+  await say($)
+  expect(SHARED_WRITES.map(r => r.value)).toEqual([
+    { sessionId: 'S1', cwd: '/repo' },
+    { sessionId: 'S2', cwd: '/repo' },
+    { sessionId: 'S3', cwd: '/repo' },
+  ])
+})
+
+test('AC (session 2 of 3): a child `claude` in another folder right after leaves the record the pane wrote', async ($, on) => {
+  expect(SHARED_WRITES).toHaveLength(3)
+  expect(SHARED_WRITES.at(-1)).toEqual(PANE_RECORD)
+  sharedStore(on)
+  rootedAt(on, TEMP)
+  const w = world(on, LAUNCHED)
+  w.sessionId = 'T1'
+  await startChild($, TEMP, true)
+  await promptsAndClear($, w, 'T1')
+  expect(SHARED_WRITES).toHaveLength(3)
+  expect(SHARED_WRITES.at(-1)).toEqual(PANE_RECORD)
+})
+
+test('AC (session 3 of 3): a child `claude -p` in the launch folder right after leaves the record the pane wrote', async ($, on) => {
+  expect(SHARED_WRITES).toHaveLength(3)
+  expect(SHARED_WRITES.at(-1)).toEqual(PANE_RECORD)
+  sharedStore(on)
+  drawsNowhere(on)
+  const w = world(on, LAUNCHED)
+  w.sessionId = 'T2'
+  await startChild($, '/repo', false)
+  await promptsAndClear($, w, 'T2')
+  expect(SHARED_WRITES).toHaveLength(3)
+  expect(SHARED_WRITES.at(-1)).toEqual(PANE_RECORD)
 })

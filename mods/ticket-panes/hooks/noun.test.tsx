@@ -163,6 +163,7 @@ function world(on: On, env: Record<string, string>, store: Record<string, unknow
   mock.env(on, env)
   mock.store(on, store)
   on('session.root', () => ({ value: '/repo' }))
+  on('session.surfaces', () => ({ value: ['terminal'] }))
   on('fs.stat', ($, e) => {
     w.stats.push(e.path)
     const text = FILES[e.path]

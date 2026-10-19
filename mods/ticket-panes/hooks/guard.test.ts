@@ -58,6 +58,7 @@ function world(on: On, env: Record<string, string>, init: Partial<World> = {}): 
   mock.env(on, env)
   mock.clock(on, { now: 1_000_000 })
   on('session.root', () => (w.isRootRefused ? { deny: 'no session root here' } : { value: w.root }))
+  on('session.surfaces', () => ({ value: ['terminal'] }))
   on('fs.stat', ($, e) => {
     const real = w.paths[e.path]
     if (real === undefined) return { deny: `ENOENT: no such file or directory, stat '${e.path}'` }
@@ -281,6 +282,7 @@ function roleWorld(env: Record<string, string> | null, stored?: Role) {
         return env[name]
       },
     },
+    session: { surfaces: async () => ['terminal'] },
     state: {
       get: async () => ({ value: stored ?? null, version: 0 }),
       set: async () => ({ isSet: true, version: 1 }),
@@ -434,6 +436,44 @@ test('.tmp itself, and a folder whose name starts with .tmp, are outside', async
   expect(denial(await write($, '/repo/.tmp/'))).toContain('side agent for ticket x-ab12')
   expect(denial(await write($, '/repo/.tmpx/a.md'))).toContain('side agent for ticket x-ab12')
   expect(denial(await write($, '/repo/sub/.tmp/a.md'))).toContain('side agent for ticket x-ab12')
+  expect(w.ran).toStrictEqual([])
+})
+
+// R4: the launcher names the folder it starts the side pane in (TICKET_PANES_CWD). Any `claude` a
+// hook or tool starts from the pane (one that labels the pane from the temp folder, say) inherits
+// it with the ticket.
+const LAUNCHED = { ...SIDE_ENV, TICKET_PANES_CWD: ROOT }
+
+test("AC: a child `claude` in another folder (the pane's ticket, a root other than the launch folder) guards nothing and looks nothing up", async ($, on) => {
+  const temp = '/private/var/folders/xy/T'
+  const w = world(on, LAUNCHED, { root: temp, paths: { '/': '/', [temp]: temp } })
+  expect(denial(await write($, '/repo/src/a.ts'))).toBeUndefined()
+  expect(denial(await edit($, `${temp}/a.ts`))).toBeUndefined()
+  expect(await denials($, ['git commit -m x', 'tk close x-ab12'])).toStrictEqual([
+    ['git commit -m x', undefined],
+    ['tk close x-ab12', undefined],
+  ])
+  expect(w.ran).toStrictEqual(['Write /repo/src/a.ts', `Edit ${temp}/a.ts`, 'Bash git commit -m x', 'Bash tk close x-ab12'])
+  expect(w.runs).toStrictEqual([])
+})
+
+test("AC: a child `claude -p` in the launch folder (the pane's ticket and root, drawing nowhere) guards nothing and looks nothing up", async ($, on) => {
+  // Ahead of world()'s own hook, with a matcher, so it answers first.
+  on('session.surfaces', {}, () => ({ value: [] }))
+  const w = world(on, LAUNCHED)
+  expect(denial(await write($, '/repo/src/a.ts'))).toBeUndefined()
+  expect(await denials($, ['git commit -m x', 'tk close x-ab12'])).toStrictEqual([
+    ['git commit -m x', undefined],
+    ['tk close x-ab12', undefined],
+  ])
+  expect(w.ran).toStrictEqual(['Write /repo/src/a.ts', 'Bash git commit -m x', 'Bash tk close x-ab12'])
+  expect(w.runs).toStrictEqual([])
+})
+
+test("the pane's own Claude, its root the launch folder, is guarded", async ($, on) => {
+  const w = world(on, LAUNCHED)
+  expect(denial(await write($, '/repo/src/a.ts'))).toContain('side agent for ticket x-ab12')
+  expect(denial(await bash($, 'git commit -m x'))).toBeDefined()
   expect(w.ran).toStrictEqual([])
 })
 
@@ -667,6 +707,12 @@ test('a failure beneath a call the guard let through is passed on, not made a re
     result = { threw: String(err) }
   }
   expect(result).toStrictEqual({ threw: expect.stringContaining('no implementation for tool.call') })
+  expect(w.ran).toStrictEqual([])
+})
+
+test('a side pane that names its launch folder is still refused when the guard fails on its root', async ($, on) => {
+  const w = world(on, { ...SIDE_ENV, TICKET_PANES_CWD: ROOT }, { isRootRefused: true })
+  expect(await write($, '/repo/.tmp/a.md')).toStrictEqual(FAILED)
   expect(w.ran).toStrictEqual([])
 })
 

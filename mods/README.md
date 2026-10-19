@@ -220,8 +220,16 @@ a session loads it from a folder you own.
 - Needs on the session's `PATH`: `herdr` for side panes, `run-tickets-status` for the
   activity pane and the guard's run lookup, and `tk` for the guard's backlog lookup;
   and `/usr/bin/uuidgen` for new conversations. A side pane starts with
-  `TICKET_PANES_TICKET` and `TICKETS_DIR` set, and `CLAUDE_CODE_PLUGIN_DIRS` passed on
-  when the session has it.
+  `TICKET_PANES_TICKET`, `TICKETS_DIR` and `TICKET_PANES_CWD` (the folder it starts
+  in) set, and `CLAUDE_CODE_PLUGIN_DIRS` passed on when the session has it.
+- Only the side pane's own Claude is a side session: one with `TICKET_PANES_TICKET`
+  set that draws somewhere (a REPL, not a `claude -p` or SDK run) and whose root is the
+  folder `TICKET_PANES_CWD` names (or that has none). Processes it starts inherit both
+  variables, so any `claude` a hook or tool starts from the pane (one that labels the
+  pane from the temp folder, say) loads the mod with them; drawing nowhere, or with a
+  root elsewhere, they get no band, rules or guard, and never record themselves as
+  the ticket's conversation. A side agent moved to another root (`/cd`, a worktree)
+  stays a side session, across a reload of the mod too.
 - For other plugins: `$.ticketPanes.open({ id })` opens a ticket the same way, and
   `$.ticketPanes.available({})` answers true while the mod is loaded. Call both in a
   try/catch with no `dependencies` entry, which would stop the caller loading without

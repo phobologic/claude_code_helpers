@@ -275,8 +275,11 @@ async function isFolder($: EngineInterface, path: string): Promise<boolean> {
 }
 
 // E8: what the side pane's shell, and so its Claude, starts with. An empty value counts as unset.
-async function paneEnv($: EngineInterface, id: string, dir: string): Promise<string[]> {
-  const env = ['--env', `TICKET_PANES_TICKET=${id}`, '--env', `TICKETS_DIR=${dir}`]
+// TICKET_PANES_CWD is the folder the pane starts in: the root of the pane's own Claude. role.ts
+// (R4) uses it, with whether a session draws anywhere, to tell that Claude apart from any `claude`
+// a hook or tool starts from the pane, which inherits these variables.
+async function paneEnv($: EngineInterface, id: string, dir: string, cwd: string): Promise<string[]> {
+  const env = ['--env', `TICKET_PANES_TICKET=${id}`, '--env', `TICKETS_DIR=${dir}`, '--env', `TICKET_PANES_CWD=${cwd}`]
   const pluginDirs = await $.env.get('CLAUDE_CODE_PLUGIN_DIRS')
   if (pluginDirs) env.push('--env', `CLAUDE_CODE_PLUGIN_DIRS=${pluginDirs}`)
   return env
@@ -364,7 +367,7 @@ export async function launch($: EngineInterface, id: string, options: LaunchOpti
   if (dir === undefined) throw new SidePaneError('tickets dir', 'no tickets dir for this session')
   const recorded = await recordedSession($, dir, id)
   const cwd = recorded !== undefined && (await isFolder($, recorded.cwd)) ? recorded.cwd : await $.session.root()
-  const split: Split = { from, cwd, env: await paneEnv($, id, dir) }
+  const split: Split = { from, cwd, env: await paneEnv($, id, dir, cwd) }
   const name = agentName(id)
   // A new session id comes before any split, so a uuidgen failure leaves nothing to close.
   const session = recorded === undefined ? ['--session-id', await newSessionId($)] : ['--resume', recorded.sessionId]

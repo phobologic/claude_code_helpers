@@ -159,7 +159,7 @@ function fake(world: World = {}) {
 
   const $ = {
     env: { get: async (name: string) => (world.env ?? ENV)[name] },
-    session: { root: async () => '/repo' },
+    session: { root: async () => '/repo', surfaces: async () => ['terminal'] },
     fs: {
       stat: async (path: string): Promise<FsStat> => {
         throw new Error(`ENOENT: no such file or directory, stat '${path}'`)

@@ -216,8 +216,11 @@ function steps(f: ReturnType<typeof fake>): string[] {
   })
 }
 
+// A split right of the main pane, starting in `cwd`, which the pane is also told as its launch
+// folder (R4: role.ts tells the pane's own Claude by it).
 function splitArgv(cwd: string): string[] {
-  return ['herdr', 'pane', 'split', MAIN, '--direction', 'right', '--ratio', '0.7', '--no-focus', '--cwd', cwd, '--env', 'TICKET_PANES_TICKET=x-ab12', '--env', `TICKETS_DIR=${DIR}`]
+  const env = ['--env', 'TICKET_PANES_TICKET=x-ab12', '--env', `TICKETS_DIR=${DIR}`, '--env', `TICKET_PANES_CWD=${cwd}`]
+  return ['herdr', 'pane', 'split', MAIN, '--direction', 'right', '--ratio', '0.7', '--no-focus', '--cwd', cwd, ...env]
 }
 
 // The `--ratio` of each side-pane split a stand-in saw.
