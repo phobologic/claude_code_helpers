@@ -69,6 +69,11 @@ test('AC R2: a running run that holds the ticket gives its run id; the lookup ru
   expect(found.calls).toStrictEqual([{ argv: LOOKUP, init: { cwd: ROOT, timeoutMs: 20_000 } }])
 })
 
+test('a run id of the workflow\'s shape, with letters, digits, `_` and `-`, is the answer', async () => {
+  for (const runId of ['wf_82c81840-05c', 'A9-_z', '_1'])
+    expect(await lookUp({ exit: { code: 0, stdout: `{"run_id": "${runId}", "state": "running"}` } })).toStrictEqual({ runId })
+})
+
 test('fields beside the run id and its state are passed over', async () => {
   expect(await lookUp({ exit: { code: 0, stdout: '{"run_id": "wf_2", "state": "running", "epic": "x-cd34"}' } })).toStrictEqual({ runId: 'wf_2' })
 })
@@ -109,6 +114,14 @@ test('AC: exit 0 with output other than the run\'s JSON is an error', async () =
     '{"run_id": "wf_1", "state": "finished"}',
     '{"run_id": "", "state": "running"}',
     '{"run_id": 7, "state": "running"}',
+    '{"run_id": "wf_*[c;echo x]", "state": "running"}',
+    '{"run_id": "wf_1`id`", "state": "running"}',
+    '{"run_id": "wf_1 $(id)", "state": "running"}',
+    '{"run_id": "--list", "state": "running"}',
+    '{"run_id": "-wf_1", "state": "running"}',
+    '{"run_id": "wf_1\\n", "state": "running"}',
+    '{"run_id": "\\nwf_1", "state": "running"}',
+    '{"run_id": "wf.1", "state": "running"}',
     '{"state": "running"}',
     `${FOUND}${FOUND}`,
   ]

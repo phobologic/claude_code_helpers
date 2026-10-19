@@ -15,6 +15,12 @@ const LOOKUP_TIMEOUT_MS = 20_000
 
 const FIND = 'run-tickets-status --find-ticket'
 
+// A run id as the workflow gives one (`wf_<hex>-<hex>`): letters, digits, `_` and `-`, not
+// starting with `-`. The id comes from repo files through the lookup, and callers put it in
+// commands (2.5's `herdr pane run`), so an id with anything else in it, which could read as a
+// flag or as shell, is not an answer.
+const RUN_ID = /^[A-Za-z0-9_][A-Za-z0-9_-]*$/
+
 // The lookup for ticket `id`, run in the session's root (from a worktree, run-tickets-status
 // finds the repo above it). It never throws: a command that is missing or still running at the
 // timeout, an exit other than 0 or 1, or output other than the run's JSON is an `error` that
@@ -48,8 +54,8 @@ function exitError(code: number, stderr: string): string {
 }
 
 // The run id in the lookup's answer, or undefined when stdout is not that answer: the JSON of an
-// object whose `run_id` is a non-empty string and whose `state` is `running`. Other fields are
-// passed over.
+// object whose `run_id` is a string of RUN_ID's shape and whose `state` is `running`. Other
+// fields are passed over.
 function runIdIn(stdout: string): string | undefined {
   let answer: unknown
   try {
@@ -59,7 +65,7 @@ function runIdIn(stdout: string): string | undefined {
   }
   if (typeof answer !== 'object' || answer === null) return undefined
   const { run_id: runId, state } = answer as Record<string, unknown>
-  return typeof runId === 'string' && runId !== '' && state === 'running' ? runId : undefined
+  return typeof runId === 'string' && RUN_ID.test(runId) && state === 'running' ? runId : undefined
 }
 
 // The first line of `text` with anything on it, trimmed; undefined when there is none.
