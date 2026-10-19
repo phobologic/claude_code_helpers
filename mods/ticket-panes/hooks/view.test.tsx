@@ -210,6 +210,9 @@ test('a # line inside a fenced block does not end the criteria', () => {
     // After the fence closes, a heading ends them again.
     expect(ticket.description).toBe('Intro.\n\n## Design\nPlain.')
   }
+  // Only a line that starts with a fence opens one, after any indent.
+  const inline = parseTicket('x-ab12', ['# T', '## Acceptance Criteria', '- Quote it as ```a``` here.', '## Design'].join('\n'))
+  expect([inline.criteria, inline.description]).toEqual(['## Acceptance Criteria\n- Quote it as ```a``` here.', '## Design'])
 })
 
 // ---------- readTicket ----------
@@ -544,7 +547,8 @@ test('CSI sequences of any final or intermediate byte go whole', async ($, on) =
 
 test('OSC strings to BEL or ST, an unterminated one to the end of its line, and short escapes go whole', async ($, on) => {
   const title = 'see \x1b]8;;file:///a.ts\x1b\\a.ts\x1b]8;;\x1b\\ and\x1b(B \x1b]0;tab\x07done'
-  const description = 'Output:\x1b]0;no end\nnext line\x1b=.'
+  // A DCS, SOS, PM and APC string each go whole too, then an unterminated OSC stops at its line.
+  const description = 'Output:\x1bPq#0\x1b\\\x1bXsos\x1b\\\x1b^pm\x1b\\\x1b_Ga=q\x1b\\\x1b]0;no end\nnext line\x1b=.'
   const shown: Shown = { ticket: { ...parseTicket('x-ab12', TASK), title, description, notes: [] }, mode: 'compact' }
   drawView(on, shown)
   for (const surface of SURFACES) {
