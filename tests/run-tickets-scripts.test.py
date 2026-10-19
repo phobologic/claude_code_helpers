@@ -380,6 +380,25 @@ with tempfile.TemporaryDirectory() as tmp:
     check("finish sweep: a parent loop in the process list ends the walk",
           finish.ancestors([(5, 6, "a"), (6, 5, "b")], 5) == {5, 6})
 
+
+class FakePs:
+    """A Runner whose ps prints canned output."""
+
+    def __init__(self, code, stdout, stderr=""):
+        self.res, self.errors = subprocess.CompletedProcess([], code, stdout, stderr), []
+
+    def read(self, *cmd, cwd=None):
+        return self.res
+
+
+fake = FakePs(0, "  PID  PPID COMMAND\n  12     1 bun test /w/a.test.ts\n  13     1\n  14   12 sleep 5\n")
+check("finish sweep: reads pid, ppid and the full command, skipping lines that are not a process",
+      finish.list_processes(fake) == [(12, 1, "bun test /w/a.test.ts"), (14, 12, "sleep 5")] and not fake.errors,
+      finish.list_processes(fake))
+fake = FakePs(1, "", "ps: illegal option")
+check("finish sweep: a failing ps finds nothing and reports why",
+      finish.list_processes(fake) == [] and fake.errors == ["ps: ps: illegal option"], fake.errors)
+
 with tempfile.TemporaryDirectory() as tmp:
     root, env, s, record, result_path = finished_run(tmp)
     # The lead's own shell names a slot (it cd'd there first): finish must not stop its parent.
