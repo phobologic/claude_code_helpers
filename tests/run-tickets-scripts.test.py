@@ -509,6 +509,8 @@ with tempfile.TemporaryDirectory() as tmp:
     res = subprocess.run([GATES, json.dumps(SAMPLE_GATES)], cwd=root, capture_output=True, text=True)
     check("gates: a changed file whose name git would quote still runs its gate",
           res.stdout.splitlines() == ["make lint", "mods-check"], res.stdout + res.stderr)
+    check("gates: the NUL-separated list's trailing empty entry is not a changed file",
+          "1 changed file(s)" in res.stderr, res.stderr)
     sh("git", "merge", "--abort", cwd=root)
 
     res = subprocess.run([GATES, json.dumps(SAMPLE_GATES)], cwd=tmp, capture_output=True, text=True)
