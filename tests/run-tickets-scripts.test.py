@@ -452,15 +452,17 @@ with tempfile.TemporaryDirectory() as tmp:
 
     os.remove(pidfile)
     try:
-        code, err, took = capped("--grace", "0.5", "1", "--", "sh", script, pidfile)
-        check("run-capped: --grace sets the wait between SIGTERM and SIGKILL", code == 124 and 1.5 <= took < 2.8, f"{code} {took}")
-        check("run-capped: the group is gone after a short grace too", gone_soon(group_alive, pids(pidfile)[0]))
+        # Lower bounds only: a loaded machine makes things slower, never faster.
+        code, err, took = capped("--grace", "4", "1", "--", "sh", script, pidfile)
+        check("run-capped: --grace sets the wait between SIGTERM and SIGKILL", code == 124 and 5 <= took < 12, f"{code} {took}")
+        check("run-capped: the group is gone after a longer grace too", gone_soon(group_alive, pids(pidfile)[0]))
     finally:
         kill_group_in(pidfile)
 
-    code, err, took = capped("1", "sh", "-c", "while :; do sleep 0.1; done")
+    # A grace of 5s leaves a wide gap between stopping on SIGTERM (about 1s) and waiting it out (6s).
+    code, err, took = capped("--grace", "5", "1", "sh", "-c", "while :; do sleep 0.1; done")
     check("run-capped: a command that exits on SIGTERM is stopped without waiting out the grace",
-          code == 124 and "with SIGTERM." in err and took < 1.9, f"{code} {took} {err}")
+          code == 124 and "with SIGTERM." in err and took < 4, f"{code} {took} {err}")
 
     code, err, _ = capped("5", "true")
     check("run-capped: passes a clean exit through, with no TIMEOUT line", code == 0 and "TIMEOUT" not in err, f"{code} {err}")

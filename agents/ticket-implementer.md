@@ -150,6 +150,9 @@ That means the tests hung on the mutant: count it as caught, and write
 `caught (timeout)` with the test command in `test`. If the tests take more
 than 100 seconds on unbroken code, use three times their time instead of
 300, up to 540, so the limit always fires before the Bash call gives up.
+A script that runs several mutants puts each test command through
+`run-capped` on its own, and its own Bash call still has 600000 ms in all,
+so split the mutants across calls to fit.
 
 Report every condition in `conditions` with the test that failed. Only claim
 what you ran. If a condition genuinely cannot be tested (a type-narrowing
