@@ -377,6 +377,17 @@ with tempfile.TemporaryDirectory() as tmp:
     tree = [(1, 0, "init"), (50, 1, "shell"), (60, 50, f"bash -c cd {slot}"), (70, 60, "run-tickets-finish"), (80, 50, "other")]
     check("finish sweep: skips the script and every process above it",
           finish.ancestors(tree, 70) == {70, 60, 50, 1}, finish.ancestors(tree, 70))
+    check("finish sweep: a parent loop in the process list ends the walk",
+          finish.ancestors([(5, 6, "a"), (6, 5, "b")], 5) == {5, 6})
+
+with tempfile.TemporaryDirectory() as tmp:
+    root, env, s, record, result_path = finished_run(tmp)
+    # The lead's own shell names a slot (it cd'd there first): finish must not stop its parent.
+    res = subprocess.run(["sh", "-c", '"$0" --dry-run --result "$1" wf_test; status=$?; : "$2"; exit $status',
+                          FINISH, result_path, s["slots"][0]], cwd=root, env=env, capture_output=True, text=True, timeout=60)
+    found = json.loads(res.stdout or "{}").get("leftover_processes")
+    check("finish sweep: never lists its own parent shell, even when that names a worktree",
+          res.returncode == 0 and found == [], f"{res.returncode} {found} {res.stderr}")
 
 # ---------- run-capped ----------
 
@@ -427,6 +438,10 @@ with tempfile.TemporaryDirectory() as tmp:
         check("run-capped: the group is gone after a short grace too", gone_soon(group_alive, pids(pidfile)[0]))
     finally:
         kill_group_in(pidfile)
+
+    code, err, took = capped("1", "sh", "-c", "while :; do sleep 0.1; done")
+    check("run-capped: a command that exits on SIGTERM is stopped without waiting out the grace",
+          code == 124 and "with SIGTERM." in err and took < 1.9, f"{code} {took} {err}")
 
     code, err, _ = capped("5", "true")
     check("run-capped: passes a clean exit through, with no TIMEOUT line", code == 0 and "TIMEOUT" not in err, f"{code} {err}")
