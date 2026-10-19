@@ -47,18 +47,45 @@ function closesFence(line: string, fence: string): boolean {
   return run !== undefined && run[0] === fence[0] && run.length >= fence.length
 }
 
-// The lines of `text` outside fenced code blocks, fence lines left out. A fence not closed runs to
-// the end of the text, as CommonMark has it (a reply still streaming shows the ids after it once
-// it closes).
+// One blockquote marker leading a line: `>` after any indent. The space after it may stay, as the
+// fence checks take any indent.
+const QUOTE_MARKER = /^\s*>/
+
+// How many blockquote markers lead `line`, at most `most`, and the line after them.
+function unquote(line: string, most = Number.POSITIVE_INFINITY): [number, string] {
+  let depth = 0
+  let rest = line
+  while (depth < most) {
+    const marker = QUOTE_MARKER.exec(rest)
+    if (marker === null) break
+    rest = rest.slice(marker[0].length)
+    depth += 1
+  }
+  return [depth, rest]
+}
+
+// The lines of `text` outside fenced code blocks, fence lines left out, with their blockquote
+// markers taken off. A fence inside a blockquote (`> ```) is one too, at that quote's depth: a
+// line with fewer markers ends the quote, and the block with it (CommonMark). Inside a block
+// opened outside a quote, a `> ``` line is the block's text. A fence not closed runs to the end
+// of the text, as CommonMark has it (a reply still streaming shows the ids after it once it
+// closes). Lines end in LF or CRLF.
 function linesOutsideFences(text: string): string[] {
   const kept: string[] = []
   let fence = ''
-  for (const line of text.split('\n')) {
+  let fenceDepth = 0
+  for (const raw of text.split(/\r?\n/)) {
     if (fence !== '') {
-      if (closesFence(line, fence)) fence = ''
-      continue
+      const [depth, rest] = unquote(raw, fenceDepth)
+      if (depth === fenceDepth) {
+        if (closesFence(rest, fence)) fence = ''
+        continue
+      }
+      // The quote holding the block ended, and the block with it: the line is read afresh.
     }
+    const [depth, line] = unquote(raw)
     fence = fenceOpenedBy(line)
+    fenceDepth = depth
     if (fence === '') kept.push(line)
   }
   return kept

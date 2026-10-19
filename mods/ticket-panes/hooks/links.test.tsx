@@ -111,6 +111,8 @@ test('a candidate is not followed by a word character or a dash; a dot, comma or
 
 test('a candidate is a prefix of letters, digits, dots and underscores, a dash, then four lowercase letters or digits', () => {
   expect(ticketsIn('my_app.v2-ab12 and 42-0a9z')).toEqual(['my_app.v2-ab12', '42-0a9z'])
+  // tk keeps a folder name's case in its prefix, so uppercase letters lead it or follow.
+  expect(ticketsIn('see ABC-ab12 and My.App-cd34')).toEqual(['ABC-ab12', 'My.App-cd34'])
   // Uppercase or too short a suffix, or a prefix that starts with an underscore, is none.
   expect(ticketsIn('x-AB12 x-ab1 _-ab12')).toEqual([])
 })
@@ -149,6 +151,29 @@ test('a fence never closed runs to the end of the text', () => {
 
 test('an indented fence, as in a list item, is a fence', () => {
   expect(ticketsIn('1. Run:\n   ```\n   tk show x-ab12\n   ```\n2. Then x-cd34')).toEqual(['x-cd34'])
+})
+
+test('a tab-indented fence is a fence', () => {
+  expect(ticketsIn('\t```\nx-ab12\n\t```\nx-cd34')).toEqual(['x-cd34'])
+})
+
+test('a fence inside a blockquote, or with CRLF line ends, is a fence', () => {
+  expect(ticketsIn('> ```\n> tk show x-ab12\n> ```\nthen x-cd34')).toEqual(['x-cd34'])
+  expect(ticketsIn('> see x-ab12')).toEqual(['x-ab12'])
+  // The quoted close ends the block, so a quoted id after it counts.
+  expect(ticketsIn('> ```\n> x-ab12\n> ```\n> x-cd34')).toEqual(['x-cd34'])
+  expect(ticketsIn('> > ```\n> > x-ab12\n> > ```\n> x-cd34')).toEqual(['x-cd34'])
+  // Markers may be indented, and come without a space between them.
+  expect(ticketsIn('  >>```\n  >> x-ab12\n  >>```\nx-cd34')).toEqual(['x-cd34'])
+  expect(ticketsIn('run\r\n```sh\r\ntk show x-ab12\r\n```\r\nthen x-cd34')).toEqual(['x-cd34'])
+})
+
+test('a fence in a blockquote ends with the quote; one outside a quote holds quoted lines', () => {
+  // The quote ends at a line without its marker, and the block in it with it.
+  expect(ticketsIn('> ```\n> x-ab12\nx-cd34')).toEqual(['x-cd34'])
+  expect(ticketsIn('> > ```\n> x-ab12\nx-cd34')).toEqual(['x-ab12', 'x-cd34'])
+  // A quoted fence line inside an unquoted block is its text: it closes nothing.
+  expect(ticketsIn('```\n> ```\nx-ab12\n```\nx-cd34')).toEqual(['x-cd34'])
 })
 
 test('a line led by inline code in triple backticks opens no fence', () => {
