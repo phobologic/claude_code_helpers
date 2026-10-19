@@ -393,7 +393,16 @@ for (const gates of [[], ['npm test']]) {
 {
   const { out } = await run({ ...base, slots: ['s1'], gates: ['npm test'], tickets: [T('P', [], ['p'])] })
   check('the result records the policy the run used', out.policy.fileLocks === 'soft' && out.policy.mergeGates === true)
+  check('the policy records the implementer effort arm', out.policy.implEffort === 'high' && out.policy.implFanout === 'xhigh')
   check('the result points the lead at the finish steps', /skills\/run-tickets\/finish\.md/.test(out.next || ''))
+}
+{
+  // R has three transitive dependents (A, B via A, C via A), so it is high-fanout; L has none.
+  const { calls } = await run({ ...base, slots: ['s1', 's2'],
+    tickets: [T('R'), T('A', ['R']), T('B', ['A']), T('C', ['A']), T('L')] })
+  const impl = id => calls.find(c => c.kind === 'impl' && c.id === id)
+  check('a high-fanout ticket\'s first round runs at the fan-out effort', impl('R').effort === 'xhigh', impl('R').effort)
+  check('an ordinary ticket\'s first round runs at the default effort', impl('L').effort === 'high', impl('L').effort)
 }
 
 console.log(failures ? `\n${failures} check(s) failed` : '\nall checks passed')

@@ -52,11 +52,21 @@ A.tickets.forEach((t, i) => {
 // ---------- effort ----------
 // Effort follows objective signals, never a guess at how hard a ticket looks.
 // A ticket that many others wait on (transitively, as run-tickets-plan counts
-// them) stalls the most work if it blocks, so it gets the most thinking. Review
+// them) stalls the most work if it blocks, so it gets more thinking. Review
 // effort follows the size of the whole ticket diff, so a small fix to a big
 // ticket is still reviewed at full effort.
+//
+// Effort levels are an A/B arm, recorded in the run's policy so run-history
+// separates runs by them. Until 2026-10-18 first rounds ran at xhigh, and max
+// when high-fanout: across 27 max attempts that cost 1.5-3x the implementer
+// time and about 2x the tokens of xhigh for the same diff size, with no fewer
+// escapes than the pre-policy high-effort runs on the same kind of ticket.
+// The current arm drops a level each: skills/analyze-runs/SKILL.md has the
+// readout that decides whether it stays.
 const HIGH_FANOUT = 3        // transitive dependents at or above which a ticket is high-fanout
 const SMALL_DIFF = 50        // src lines changed below which review drops to high
+const IMPL_EFFORT = 'high'   // first implementation round
+const IMPL_EFFORT_FANOUT = 'xhigh'  // first round of a high-fanout ticket
 
 const ancestors = {}
 for (const t of A.tickets) {
@@ -66,13 +76,13 @@ const dependents = {}
 for (const t of A.tickets) dependents[t.id] = A.tickets.filter(o => ancestors[o.id].has(t.id)).length
 const highFanout = t => dependents[t.id] >= HIGH_FANOUT
 const fanned = A.tickets.filter(highFanout)
-if (fanned.length) log(`high-fanout (max effort): ${fanned.map(t => `${t.id} (${dependents[t.id]} dependents)`).join(', ')}`)
+if (fanned.length) log(`high-fanout (${IMPL_EFFORT_FANOUT} effort): ${fanned.map(t => `${t.id} (${dependents[t.id]} dependents)`).join(', ')}`)
 
 // First round is where the design judgment happens; rework and conflict rounds
 // follow a precise finding, so they keep the agent file's default (high).
 function implEffort(t, work) {
   if (work.kind !== 'new') return {}
-  return { effort: highFanout(t) ? 'max' : 'xhigh' }
+  return { effort: highFanout(t) ? IMPL_EFFORT_FANOUT : IMPL_EFFORT }
 }
 
 // The reviewer's agent file defaults to xhigh; only small, low-fanout diffs drop.
@@ -820,6 +830,7 @@ return {
   mergeHalted,
   integration,
   // Recorded so run-tickets-status archives which thresholds and rules each run used.
-  policy: { highFanout: HIGH_FANOUT, smallDiff: SMALL_DIFF, fileLocks: 'soft', mergeGates: GATES.length > 0 },
+  policy: { highFanout: HIGH_FANOUT, smallDiff: SMALL_DIFF, fileLocks: 'soft', mergeGates: GATES.length > 0,
+            implEffort: IMPL_EFFORT, implFanout: IMPL_EFFORT_FANOUT },
   tickets: results,
 }
