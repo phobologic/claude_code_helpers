@@ -595,6 +595,22 @@ test('an id that is not a string is not a ticket, even when a file has its text 
   expect(w.opens).toStrictEqual([PANE_OPEN('42')])
 })
 
+test('a ui.panes that rejects toasts could not open, opens nothing and lets go of the lock', WITH_CALLER, async ($, on) => {
+  // Ahead of the world's ui.panes, which answers the bare event, so this one has a matcher.
+  on('ui.panes', {}, () => ({ deny: 'panes refused (faked)' }))
+  const w = world(on, { TICKETS_DIR: DIR })
+  await open($, 'x-ab12')
+  expect(w.toasts).toEqual(['could not open x-ab12: ticket-panes: $.ui.panes: panes refused (faked)'])
+  expect(w.opens).toEqual([])
+  expect(w.paneTickets).toEqual([])
+  // A leaked lock would toast 'still opening x-ab12' here.
+  await open($, 'x-cd34')
+  expect(w.toasts).toEqual([
+    'could not open x-ab12: ticket-panes: $.ui.panes: panes refused (faked)',
+    'could not open x-cd34: ticket-panes: $.ui.panes: panes refused (faked)',
+  ])
+})
+
 test('an id whose text cannot be read is not a ticket, and the call resolves', WITH_CALLER, async ($, on) => {
   const w = world(on, { TICKETS_DIR: DIR })
   await open($, { toString: 1 })
