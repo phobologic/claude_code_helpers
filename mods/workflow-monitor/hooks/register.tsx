@@ -7,7 +7,8 @@ import type { AgentRow, RunSummary, TicketRow, Visibility } from '../types'
 // - the newest /run-tickets run of the session's repo, from `run-tickets-status --json`:
 //   its progress and every ticket not merged yet, with when its current step started;
 // - the agents a workflow script started in this session: how many ran, and each one
-//   still running with its start time and how long it has run.
+//   still running with its start time and how long it has run, unless a ticket row above
+//   already shows that agent.
 // It takes rows from the transcript, so finished agents are a count, not a list; a tree
 // taller than the band's room scrolls. It draws above whatever the hooks beneath it draw
 // there (another mod's band), never in place of it.
@@ -198,16 +199,22 @@ export function runLines(summary: RunSummary, now: number): Line[] {
 }
 
 // A count of the session's workflow agents, then each one still running, newest first.
-export function agentLines(list: readonly AgentRow[], now: number, offsetMinutes: number): Line[] {
+// An agent labelled for a ticket in `covered` (a ticket row already shows it) is only
+// counted, so the list is left with agents no ticket row shows, like the final
+// integration check.
+export function agentLines(
+  list: readonly AgentRow[], now: number, offsetMinutes: number, covered: ReadonlySet<string> = new Set(),
+): Line[] {
   const running = list.filter(a => a.endedAt === undefined).reverse()
+  const listed = running.filter(a => !a.label.split(' ').some(word => covered.has(word)))
   const finished = list.length - running.length
   const stopped = list.filter(a => a.isAborted).length
   const lines: Line[] = [{
     text: `agents  ${running.length} running, ${finished} finished${stopped ? ` (${stopped} stopped)` : ''}`,
     isDim: running.length === 0,
   }]
-  const width = Math.min(40, Math.max(0, ...running.map(a => a.label.length)))
-  for (const a of running) {
+  const width = Math.min(40, Math.max(0, ...listed.map(a => a.label.length)))
+  for (const a of listed) {
     lines.push({
       text: `  ${clock(a.startedAt, offsetMinutes)}  ${a.label.slice(0, 40).padEnd(width)}  running ${duration((now - a.startedAt) / 1000)}`,
     })
@@ -323,7 +330,7 @@ export const register: Register = on => {
 
     const rows: RenderElement[] = []
     if (summary) rows.push(...runRows(summary))
-    if (list.length) rows.push(...agentLines(list, now, offsetMinutes).map(textRow))
+    if (list.length) rows.push(...agentLines(list, now, offsetMinutes, new Set(summary?.open.map(t => t.id))).map(textRow))
     if (!rows.length) rows.push(textRow({ text: 'No workflow agents in this session yet.', isDim: true }))
 
     return (

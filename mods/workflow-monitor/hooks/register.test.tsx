@@ -75,6 +75,17 @@ test('agent lines count every agent and list the running ones, newest first', ()
   expect(done).toEqual([{ text: 'agents  0 running, 1 finished', isDim: true }])
 })
 
+test('agent lines leave out running agents a ticket row already shows', () => {
+  const lines = agentLines([
+    { key: 'a', runId: 'wf_1', label: 'impl x-2', startedAt: T0 },
+    { key: 'b', runId: 'wf_1', label: 'integration check', startedAt: T0 + MIN },
+  ], T0 + 5 * MIN, 0, new Set(['x-2']))
+  expect(lines.map(l => l.text)).toEqual([
+    'agents  2 running, 0 finished',
+    '  23:51  integration check  running 4m00s',
+  ])
+})
+
 const BAND = {
   plugin: 'workflow-monitor', component: 'AbovePrompt',
   props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 120, scroll: { offset: 0, bodyRows: 19 }, view: {} },
@@ -396,7 +407,7 @@ test('with ticket-panes loaded the band still shows the session\'s running agent
   on('agent.spawn', () => ({ model: 'm', agentId: 'a1' }))
   // The session's first workflow agent shows the band and reads the run.
   await $.agent.spawn({
-    tool_use_id: 't1', prompt: 'go', description: 'impl x-10', subagentType: 'general-purpose',
+    tool_use_id: 't1', prompt: 'go', description: 'integration check', subagentType: 'general-purpose',
     provider: { plugin: 'engine', tier: 'core' }, parentModel: 'm', background: true, fork: false,
     workflow: { runId: 'wf_test-1', agentIndex: 1 },
   })
@@ -407,7 +418,7 @@ test('with ticket-panes loaded the band still shows the session\'s running agent
     '   reviewing (round 2)  started 16:47  running 3m00s',
     '  queued for a worktree slot',
     'agents  1 running, 0 finished',
-    '  23:52  impl x-10  running 0s',
+    '  23:52  integration check  running 0s',
     'engine band',
   ])
   expect(await ui.findAll({ type: 'Button' })).toHaveLength(2)

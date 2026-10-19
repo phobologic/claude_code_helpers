@@ -142,7 +142,8 @@ permission rule allowing `git merge`: in auto mode the classifier judges each
 merge step's commands, has refused one that it allowed for earlier merges, and
 two refusals for one ticket halt merging for the whole run. Offer to add
 `"Bash(git merge:*)"` to `permissions.allow` in the project's
-`.claude/settings.local.json` (create the file if needed). Do not proceed past
+`.claude/settings.local.json` (create the file if needed), and with scoped
+gates `"Bash(run-tickets-gates:*)"` too, for the same reason. Do not proceed past
 an unfixed setup warning without the user's explicit choice.
 
 **Reviewed on an earlier run.** A ticket with a non-null `reviewed` passed AC
@@ -164,13 +165,35 @@ what they overlap with.
 
 **Gates.** Find the project's lint, type check, and test commands (CLAUDE.md,
 `package.json` scripts, Makefile or justfile, `pyproject.toml`, CI config).
-The merge step runs them on every merged result before it commits, so a bad
+The merge step runs them on the merged result before it commits, so a bad
 interaction between two tickets is caught at the merge that caused it. Use
 check-only forms: a command that rewrites files (`--fix`, `--write`, `format`
 without `--check`, snapshot updates) would leave the integration worktree
 dirty. If CLAUDE.md or CI config says the full suite is slow, say so: the
 user may drop it from the gates, and the final integration check still runs
 everything.
+
+Merges run one at a time, so every second of gates is paid once per ticket,
+in series. Scope a gate that only some files can affect:
+`{ "command": "<command>", "paths": ["<glob>", ...] }`. A merge runs it only
+when the merge changes a file matching one of its paths;
+`bin/run-tickets-gates` decides from the merged result, not the merge agent.
+A plain string runs on every merge. Paths are globs relative to the repo root (no leading / or ./): `**`
+crosses folders, `*` and `?` stay within one folder name, a trailing `/`
+means everything under that folder, and a path with no wildcard is that file
+or everything under it. Take the scope from something that states it:
+- CLAUDE.md's Tests section, when it says which changes need which suites
+  ("after changing `bin/x` or `workflows/`, run ...");
+- where a test lives and what it tests: a mod's or package's own test runs on
+  `<that folder>/**`;
+- a per-folder check (`claude plugin validate mods/<mod>`) on that folder.
+Lint, type checks, and a whole-project suite stay plain strings, and so does
+any gate you cannot scope confidently: a gate skipped by a scope that was too
+narrow lets a failure through to the integration check, which only finds it
+after every ticket has merged on top of it. Scoped gates need
+`run-tickets-gates` on the PATH: if `command -v run-tickets-gates` finds
+nothing, the toolkit's `install.sh` has not been run since the script was
+added. Say so, and leave every gate unscoped until it has.
 
 **Large tickets.** Each entry in `large` has more than 6 acceptance criteria.
 Big tickets take the most review rounds to settle, and one that hits the
@@ -228,7 +251,7 @@ Left open for you: <decision tickets and what each holds back, or "none">
 Warnings: <setup warnings, files shared by 4+ tickets, unannotated tickets, large tickets, stale worktrees, or "none">
 
 Integration branch: <branch> (<integration.reason>; <N> ahead of main, <M> behind)   Slots: <SLOTS>
-Gates on every merge: <commands, or "none: integration check only">
+Gates: <each command, with "every merge" or "merges touching <paths>"; or "none: integration check only">
 Findings parent: <id | new session epic>   Backlog: <id | new, created at setup>
 ```
 
@@ -270,9 +293,9 @@ setup prints (the branch has moved since, and the integration check compares
 against where it started). If `git status` in the integration worktree shows
 a merge in progress, show it to the user before going on.
 
-**Gate baseline.** Run each gate once in the integration worktree, timing it,
-with a Bash timeout of 600000 ms. Use a subshell,
-`(cd <integrationWorktree> && <gate>)`, so your own working directory stays at
+**Gate baseline.** Run each gate's command once in the integration worktree,
+scoped or not, timing it, with a Bash timeout of 600000 ms. Use a subshell,
+`(cd <integrationWorktree> && <command>)`, so your own working directory stays at
 the repo root. Drop a gate, and tell the user which and why, when:
 - it already fails there, since it would fail every merge;
 - it takes more than about 8 minutes, since the merge step's 10-minute
@@ -301,7 +324,7 @@ Workflow({
     repoRoot, integrationBranch, integrationWorktree, slots,   // from run-tickets-setup
     baseBranch, backlogParent,                                 // from run-tickets-setup
     findingsParent: "<id>",                       // epic, shared parent, or sessionEpic
-    gates: ["<command>", ...],                    // passed the baseline; [] for none
+    gates: ["<command>", { command: "<command>", paths: ["<glob>", ...] }, ...],   // passed the baseline; [] for none
     tickets: [{ id, title, deps, has_ac, files, decision, reviewed }, ...]   // from the plan, same order
   }
 })

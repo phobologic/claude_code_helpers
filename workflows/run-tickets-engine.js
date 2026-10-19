@@ -22,8 +22,11 @@ export const meta = {
 //                        pre-existing findings; without it, everything goes to findingsParent
 //   baseBranch           optional, default "main": commit or branch the integration check compares failures
 //                        against; the skill passes the integration branch's starting commit
-//   gates                optional: commands that must pass on every merged result before the merge commits
-//                        (lint, type check, tests), already known to pass on the integration branch
+//   gates                optional: commands that must pass on a merged result before the merge commits (lint, type
+//                        check, tests), already known to pass on the integration branch. A plain string runs on
+//                        every merge; {command, paths: [glob, ...]} runs only on a merge that changes a file
+//                        matching one of its paths, as bin/run-tickets-gates decides. The final integration check
+//                        runs every gate either way.
 //   tickets              [{id, title, deps, has_ac, files, decision?, reviewed?}] in topological order. files
 //                        are the ticket's **Files** paths (they break ties when choosing what starts next); decision
 //                        is the owner's answer to the ticket's open question, when it had one; reviewed is
@@ -39,8 +42,22 @@ const GATES = A.gates || []
 
 // Dispatch below relies on these: a dependency missing from the run or listed after
 // its dependent, or no slots, would leave tickets waiting forever, and a malformed
-// files list would throw inside the scheduler.
+// files list would throw inside the scheduler. A malformed gate would fail every
+// merge, so it is refused before anything starts (run-tickets-gates checks the same).
 if (!A.slots || !A.slots.length) throw new Error('no worktree slots given')
+const oneLine = s => typeof s === 'string' && s.trim() !== '' && !s.includes('\n')
+for (const g of GATES) {
+  const ok = typeof g === 'string' ? oneLine(g)
+    : Boolean(g) && typeof g === 'object' && Object.keys(g).sort().join() === 'command,paths' && oneLine(g.command)
+      && Array.isArray(g.paths) && g.paths.length > 0 && g.paths.every(p => oneLine(p) && !/^\.?\//.test(p))
+  if (!ok) throw new Error(`gate ${JSON.stringify(g)} must be a command string or {command, paths: [glob, ...]} with at least one path, each relative to the repo root (no leading / or ./)`)
+}
+const gateCommand = g => typeof g === 'string' ? g : g.command
+// With any gate scoped, the merge step asks run-tickets-gates which gates apply.
+// A run of plain strings keeps listing them, so it never needs that script.
+const SCOPED_GATES = GATES.some(g => typeof g !== 'string')
+// One single-quoted shell word: a ' inside becomes '\''.
+const shellWord = s => `'${s.replace(/'/g, `'\\''`)}'`
 A.tickets.forEach((t, i) => {
   const late = t.deps.filter(d => !A.tickets.slice(0, i).some(o => o.id === d))
   if (late.length) throw new Error(`${t.id} depends on ${late.join(', ')}, which is not earlier in the run's ticket list`)
@@ -505,18 +522,29 @@ with the failing command and its output in detail, and tree_clean true only if b
 
 ${failure}`
   }
+  // Scoped gates are chosen on every attempt from that attempt's own merged tree, so a
+  // conflict or gate-fix round that changes what the merge touches changes the gates too.
+  const gateList = SCOPED_GATES
+    ? `Choose the gates for this merge: run this command exactly as written, in its own Bash call:
+     run-tickets-gates ${shellWord(JSON.stringify(GATES))}
+   It reads the files this merge changes and prints the gate commands that apply, one per line (stderr says which it
+   skipped). If it exits non-zero or is not found, the gates cannot run: see the second case below. If it prints no
+   command, no gate applies: go to step 6. Otherwise run each command it printed on the merged tree, exactly as
+   printed and in that order, and no other command as a gate. Stop at the first one that fails. Give every gate's
+   Bash call a timeout of 600000 ms.`
+    : `Run each gate on the merged tree, in this order, and stop at the first one that fails. Give every gate's Bash call
+   a timeout of 600000 ms:
+${GATES.map(g => `     ${g}`).join('\n')}`
   return `${opening}
 3. \`git merge --no-ff --no-commit ${branchOf(t)}\`. ${already}: skip to step 8.
 4. ${conflict}
-5. Run each gate on the merged tree, in this order, and stop at the first one that fails. Give every gate's Bash call
-   a timeout of 600000 ms:
-${GATES.map(g => `     ${g}`).join('\n')}
+5. ${gateList}
    - A gate fails: do not try to fix anything. Keep the failing test names or error lines and the last 40 lines of its
      output, put the tree back (step 7), and return result "gate_fail" with failed_gate set to the command and that
      output in detail.
    - A gate times out or cannot run at all (command not found, missing dependencies): put the tree back (step 7) and
      return result "error" as the end of these steps describes. That is a problem with the gate, not with this ticket.
-6. Every gate passed. \`git diff --name-only\` must print nothing. If it lists files, a gate rewrote them (a formatter,
+6. No gate failed. \`git diff --name-only\` must print nothing. If it lists files, a gate rewrote them (a formatter,
    a lockfile, snapshots), so the merged result needs changes the ticket did not make: put the tree back (step 7) and
    return "gate_fail" with failed_gate set to the gate that wrote them and the file list in detail.
    Otherwise commit the merge the same way merges are always committed here, by repeating it in two Bash calls:
@@ -535,10 +563,15 @@ ${failure}`
 
 function checkPrompt() {
   const base = A.baseBranch || 'main'
+  // Merges ran only the gates their changes called for; here every gate runs.
+  const gates = GATES.length ? `
+Run every one of these merge gates, whatever files they cover, along with anything else you find:
+${GATES.map(g => `  ${gateCommand(g)}`).join('\n')}
+` : ''
   return `${header(A.integrationWorktree)}
 Run the project's full lint, type check, and test suite on ${A.integrationBranch} (checked out here). Find the
 commands from CLAUDE.md, the Makefile/justfile, package.json, pyproject.toml, or CI config. Do not edit files or commit.
-
+${gates}
 If anything fails, find out whether the base commit (${base}, where ${A.integrationBranch} stood before this run)
 has the same failure, so the report separates what this run
 broke from what was already broken:
@@ -830,7 +863,10 @@ return {
   mergeHalted,
   integration,
   // Recorded so run-tickets-status archives which thresholds and rules each run used.
-  policy: { highFanout: HIGH_FANOUT, smallDiff: SMALL_DIFF, fileLocks: 'soft', mergeGates: GATES.length > 0,
+  // mergeGates: false (none), true (every gate on every merge), or 'scoped' (some gates ran only on
+  // merges touching their paths). Unscoped runs keep the value earlier runs recorded, so run-history
+  // groups them with those runs.
+  policy: { highFanout: HIGH_FANOUT, smallDiff: SMALL_DIFF, fileLocks: 'soft', mergeGates: SCOPED_GATES ? 'scoped' : GATES.length > 0,
             implEffort: IMPL_EFFORT, implFanout: IMPL_EFFORT_FANOUT },
   tickets: results,
 }
