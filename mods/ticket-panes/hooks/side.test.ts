@@ -1,6 +1,6 @@
 import type { On, PromptComposeInput, PromptComposeSection } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
-import type { Engine } from 'claude-code/testing'
+import type { Engine, Plugin } from 'claude-code/testing'
 
 import { roleRef } from './role'
 import type { Role } from './role'
@@ -39,13 +39,18 @@ type World = {
   records: { key: string; value: unknown }[]
   // How many store writes to refuse before taking them.
   storeRefusals: number
+  // The file as it becomes just after the next read answers: a change landing between a stat and
+  // its read.
+  afterRead?: Ticket
+  // Every line the plugin logged.
+  logs: string[]
 }
 
 // Answers what the plugin asks of the world beneath it. Only the ticket's file exists: any other
 // path, the tickets folders a walk looks for included, is missing. With `kept`, the environment
 // refuses TICKET_PANES_TICKET, so the role is the one `$.state` kept (role.ts's fallback).
 function world(on: On, env: Record<string, string>, kept?: Role): World {
-  const w: World = { ticket: { mtimeMs: 100, text: V1 }, sessionId: 'S1', contexts: [], records: [], storeRefusals: 0 }
+  const w: World = { ticket: { mtimeMs: 100, text: V1 }, sessionId: 'S1', contexts: [], records: [], storeRefusals: 0, logs: [] }
   if (kept === undefined) {
     mock.env(on, env)
   } else {
@@ -59,7 +64,12 @@ function world(on: On, env: Record<string, string>, kept?: Role): World {
   })
   on('fs.read', ($, e) => {
     if (e.path !== FILE || w.ticket === undefined) return { deny: `ENOENT: no such file or directory, open '${e.path}'` }
-    return { value: w.ticket.text }
+    const text = w.ticket.text
+    if (w.afterRead !== undefined) {
+      w.ticket = w.afterRead
+      w.afterRead = undefined
+    }
+    return { value: text }
   })
   on('session.id', () => ({ value: w.sessionId }))
   on('session.root', () => ({ value: '/repo' }))
@@ -78,11 +88,15 @@ function world(on: On, env: Record<string, string>, kept?: Role): World {
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
-  on('ui.log', () => ({ value: undefined }))
+  on('ui.log', ($, e) => {
+    w.logs.push(e.text)
+    return { value: undefined }
+  })
   return w
 }
 
-// A new session starting, which a reload never raises.
+// A new session starting; an enable or a worker respawn raises it too, after this conversation's
+// compose may already have run.
 async function start($: Engine): Promise<void> {
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
 }
@@ -237,6 +251,25 @@ test('in a new session, /context ahead of the first compose leaves that compose 
   expect(w.contexts).toEqual([undefined])
 })
 
+test('a session.start that no compose follows (an enable, a respawn) still lets later notes through', async ($, on) => {
+  const w = world(on, SIDE_ENV)
+  await start($)
+  await say($)
+  change(w, 200, V2)
+  await say($)
+  expect(w.contexts[1]).toEqual([note(V2)])
+})
+
+test('a compose ahead of session.start skips at most one note', async ($, on) => {
+  const w = world(on, SIDE_ENV)
+  await compose($)
+  await start($)
+  await say($)
+  change(w, 200, V2)
+  await say($)
+  expect(w.contexts[1]).toEqual([note(V2)])
+})
+
 test('a new session still records its first counted prompt, ahead of its first compose', async ($, on) => {
   const w = world(on, SIDE_ENV)
   await start($)
@@ -287,6 +320,55 @@ test('a render that only measures the prompt (/context) shows the new text but s
   await compose($)
   change(w, 200, V2)
   expect((await compose($, ['analysis']))[1]?.text).toContain(V2)
+  await say($)
+  expect(w.contexts).toEqual([[note(V2)]])
+})
+
+test('a teammate render leaves the note for the main agent', async ($, on) => {
+  const w = world(on, SIDE_ENV)
+  await compose($)
+  change(w, 200, V2)
+  await compose($, ['teammate'])
+  await say($)
+  expect(w.contexts).toEqual([[note(V2)]])
+})
+
+// Another plugin measuring the prompt with `$.prompt.compose()`: composed for nobody to send. It
+// passes every compose fact, as the engine's own would, so ticket-panes' hook runs on it. The
+// fixture runs on its own, so it cannot use this file's COMPOSE.
+const MEASURER: Plugin = {
+  name: 'measurer',
+  register(on) {
+    on('prompt.suggest', async $ => {
+      await $.prompt.compose({ model: 'claude-test', promptModel: 'claude-test', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
+      return { isShown: false }
+    })
+  },
+}
+
+test('a compose another plugin asks for leaves the note to come', { plugins: [MEASURER] }, async ($, on) => {
+  const w = world(on, SIDE_ENV)
+  await compose($)
+  change(w, 200, V2)
+  await $.prompt.suggest({ text: 'run the tests' })
+  await say($)
+  expect(w.contexts).toEqual([[note(V2)]])
+})
+
+test('a change landing between the stat and the read is sent again', async ($, on) => {
+  const w = world(on, SIDE_ENV)
+  await compose($)
+  change(w, 150, V2)
+  w.afterRead = { mtimeMs: 200, text: V1 }
+  await say($)
+  await say($)
+  expect(w.contexts).toEqual([[note(V2)], [note(V1)]])
+})
+
+test('a file put back to an older mtime is still a change', async ($, on) => {
+  const w = world(on, SIDE_ENV)
+  await compose($)
+  change(w, 50, V2)
   await say($)
   expect(w.contexts).toEqual([[note(V2)]])
 })
@@ -343,6 +425,32 @@ test('a session that ends for another reason leaves the baseline where it was', 
   await end($, 'other', 'S1')
   await say($)
   expect(w.contexts).toEqual([[note(V2)], undefined])
+})
+
+test('after a compaction, the next counted prompt carries the current text again', async ($, on) => {
+  const w = world(on, SIDE_ENV)
+  on('session.compact', () => ({ messages: [{ role: 'user', text: 'a summary', toolUses: [] }] }))
+  await compose($)
+  change(w, 200, V2)
+  await say($)
+  await $.session.compact({ trigger: 'manual', messages: [{ role: 'user', text: 'what next?', toolUses: [] }] })
+  await say($)
+  expect(w.contexts).toEqual([[note(V2)], [note(V2)]])
+})
+
+test("a subagent's compaction or a skipped one leaves the main conversation's baseline", async ($, on) => {
+  const w = world(on, SIDE_ENV)
+  let isSkip = false
+  on('session.compact', () => (isSkip ? { skip: 'off' } : { messages: [{ role: 'user', text: 'a summary', toolUses: [] }] }))
+  await compose($)
+  change(w, 200, V2)
+  await say($)
+  await $.session.compact({ trigger: 'auto', agentId: 'a1', messages: [{ role: 'user', text: 'what next?', toolUses: [] }] })
+  await say($)
+  isSkip = true
+  await $.session.compact({ trigger: 'manual', messages: [{ role: 'user', text: 'what next?', toolUses: [] }] })
+  await say($)
+  expect(w.contexts).toEqual([[note(V2)], undefined, undefined])
 })
 
 test('a main session gets no notes', async ($, on) => {
@@ -403,6 +511,7 @@ test('a record the store refuses is tried again on the next counted prompt, and 
   w.storeRefusals = 1
   await say($)
   expect(w.records).toEqual([])
+  expect(w.logs.some(l => l.includes('could not be recorded') && l.includes('the store refused the write'))).toBe(true)
   expect(w.contexts).toEqual([[note(V1)]])
   await say($)
   expect(w.records).toEqual([{ key: KEY, value: { sessionId: 'S1', cwd: '/repo' } }])

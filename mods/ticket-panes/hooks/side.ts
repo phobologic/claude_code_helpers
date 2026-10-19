@@ -21,10 +21,12 @@ let baseline: number | undefined
 // The mtime of the text the last compose of this load put in the system prompt: what a new
 // conversation after `/clear` or `/resume` starts from, unless compose runs again for it.
 let composedMtime: number | undefined
-// Whether a new session's first compose is still to come: from `session.start` (which a reload
-// does not raise) until a compose that is sent. The system prompt may be composed only when the
-// first request is built, after that prompt's `prompt.submit`; meanwhile no note is sent, as the
-// compose will carry the text itself. `/clear` does not set it: compose may not run again then.
+// Whether a new session's first compose may still be to come: set by `session.start`, cleared by a
+// compose that is sent or by the next counted prompt. The system prompt may be composed only when
+// the first request is built, after that prompt's `prompt.submit`, so that one prompt sends no
+// note: the compose will carry the text itself. An enable or a worker respawn may raise
+// `session.start` after this conversation's compose has run, so the flag skips only that one
+// prompt, never more. `/clear` does not set it: compose may not run again then.
 let isComposeDue = false
 // Whether the next counted prompt records this session as the ticket's (R3): so at start, after a
 // reload (recording the same id again is harmless), and after `/clear` or `/resume`.
@@ -103,10 +105,13 @@ async function recordIfDue($: EngineInterface, id: string): Promise<void> {
 
 // The note for a counted prompt (D16): the ticket's current text when its file changed since the
 // agent was last given it, or when that is not known (after a reload); else undefined. Sending it
-// moves the baseline. A file that cannot be read sends nothing, and neither does a prompt that a
-// new session's first compose is still to follow.
+// moves the baseline. A file that cannot be read sends nothing, and neither does the one prompt
+// that a new session's first compose may still follow.
 async function changeNote($: EngineInterface, id: string): Promise<string | undefined> {
-  if (isComposeDue) return undefined
+  if (isComposeDue) {
+    isComposeDue = false
+    return undefined
+  }
   const ticket = await readTicket($, id)
   if (!('text' in ticket) || ticket.mtimeMs === baseline) return undefined
   baseline = ticket.mtimeMs
@@ -115,8 +120,9 @@ async function changeNote($: EngineInterface, id: string): Promise<string | unde
 
 // This module's hooks, registered by register.tsx.
 export function registerSide(on: On): void {
-  // A new session: its first compose is to come (see `isComposeDue`). register.tsx registers the
-  // bare `session.start`, so this one has a matcher too.
+  // A new session, or this one after an enable or a worker respawn: its first compose may be to
+  // come, so the next counted prompt sends no note (see `isComposeDue`). register.tsx registers
+  // the bare `session.start`, so this one has a matcher too.
   on('session.start', {}, ($, e, next) => {
     isComposeDue = true
     return next(e)
@@ -124,14 +130,17 @@ export function registerSide(on: On): void {
 
   // The side agent's rules and its ticket. Compose runs once per conversation, so it resolves the
   // role itself: a miss here would leave the agent without its rules for the whole conversation.
-  // A render that measures the prompt and sends nothing (`analysis`, as `/context` does) leaves
-  // the baseline alone, since the agent never reads what it embedded.
+  // A render this conversation's agent never reads leaves the baseline alone: one that measures
+  // the prompt and sends nothing (`analysis`, as `/context` does), an in-process teammate's render
+  // of its lead's prompt (`teammate`), and a plugin's `$.prompt.compose()`, which is composed for
+  // nobody to send.
   on('prompt.compose', {}, async ($, e, next) => {
     const known = await role($)
     const composed = await next(e)
     if (known.kind !== 'side' || !known.sideTicket) return composed
     const ticket = await readTicket($, known.sideTicket)
-    if (!e.traits.includes('analysis')) {
+    const isSent = !e.traits.includes('analysis') && !e.traits.includes('teammate') && next.origin.plugin === 'engine'
+    if (isSent) {
       composedMtime = 'text' in ticket ? ticket.mtimeMs : undefined
       baseline = composedMtime
       isComposeDue = false
@@ -158,6 +167,16 @@ export function registerSide(on: On): void {
       isRecordDue = true
     }
     return next(e)
+  })
+
+  // A compaction of the main conversation summarizes the notes away, and the system prompt still
+  // holds the text the last compose embedded: so the next counted prompt sends the text again when
+  // it changed since. A compose that runs again moves the baseline itself; without one, the worst
+  // case is one extra note. A subagent's compaction (`agentId` set) and a skip change nothing.
+  on('session.compact', {}, async ($, e, next) => {
+    const result = await next(e)
+    if (e.agentId === undefined && result.skip === undefined) baseline = composedMtime
+    return result
   })
 }
 
