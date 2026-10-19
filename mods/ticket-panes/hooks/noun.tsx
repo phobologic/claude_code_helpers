@@ -39,11 +39,10 @@ function whatFailed(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).trim().split('\n')[0] ?? ''
 }
 
-// What a toast calls an id: itself when a string, else its text, or its type when it has none.
+// What a toast calls an id: its text (a string's is itself), or its type when it has none.
 // whatFailed keeps String: a hook that throws a value that is no Error is skipped, and the call
 // rejects with an Error (seen in the test kit).
 function label(id: unknown): string {
-  if (typeof id === 'string') return id
   try {
     return String(id)
   } catch {
