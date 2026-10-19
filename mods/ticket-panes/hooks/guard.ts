@@ -314,9 +314,10 @@ async function statOf($: EngineInterface, path: string): Promise<FsStat | undefi
 // Where an absolute path lands: the real path of its nearest existing ancestor (the path itself
 // included) followed by the rest of the path. Undefined when it can't be placed: a path that is
 // not absolute (a `~` included), one with a `..` in it, or an ancestor that exists but leads
-// nowhere (a dangling link), which the tool would follow. This build's `$.fs.stat` folds `.` and
-// `..` by spelling before it looks; the folding and the `..` refusal here keep the answer the same
-// for a stat that does not.
+// nowhere (a dangling link), which the tool would follow. Under `claude plugin test` an `fs.stat`
+// hook beneath the plugin got these paths with `.` and `..` already folded by spelling (the tests
+// could only pass that way); the folding and the `..` refusal here keep the answer the same for a
+// stat that folds nothing.
 export async function placeOf($: EngineInterface, path: string): Promise<string | undefined> {
   if (!path.startsWith('/')) return undefined
   const parts = path.split('/').filter(part => part !== '' && part !== '.')
