@@ -245,8 +245,14 @@ test('an unnamed agent, or one named for another ticket, is not the clicked tick
   expect(changes(f)).toEqual(['uuidgen', 'pane split x-ab12', `agent start w1:p2 tp-x-ab12 --session-id ${NEW_ID}`])
 })
 
-test('an agent list that herdr answers without a list of agents shows none', async () => {
-  const answers = [answer({ type: 'agent_list' }), answer({ agents: 'tp-x-ab12', type: 'agent_list' }), written(0, 'not json', '')]
+test('an agent list that herdr answers without a list of agents, or without the agent\'s pane, shows none', async () => {
+  const answers = [
+    answer({ type: 'agent_list' }),
+    answer({ agents: 'tp-x-ab12', type: 'agent_list' }),
+    answer(null),
+    written(0, 'not json', ''),
+    answer({ agents: [{ name: 'tp-x-ab12', pane_id: 7 }], type: 'agent_list' }),
+  ]
   for (const listing of answers) {
     const f = fake({ instead: { 'agent list': listing } })
     expect(await openSidePane(f.$, 'x-ab12'), listing.stdout).toStrictEqual({ kind: 'opened', paneId: 'w1:p2' })
