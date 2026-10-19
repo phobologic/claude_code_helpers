@@ -390,6 +390,17 @@ test('AC: a live agent named for the ticket outside the record is focused, nothi
     ],
     // An agent of the ticket's name in our side pane, while the record names another agent there.
     ['another name recorded', { store: { [KEY]: CD34 }, panes: { 'w1:p2': { terminalId: 'term-2', agent: { name: 'tp-x-ab12', status: 'idle' } } } }, 'w1:p2'],
+    // Our pane shows x-cd34, live, but agent get missed it: focusing the clicked ticket's agent
+    // touches nothing of ours, so step 1 still comes first.
+    [
+      'agent get missed our live agent',
+      {
+        store: { [KEY]: CD34 },
+        panes: { 'w1:p2': { terminalId: 'term-2', agent: { name: 'tp-x-cd34', status: 'working' } }, 'w3:p5': THEIRS },
+        instead: { 'agent get': { rejects: new Error('process.run: herdr agent get ran past its timeout') } },
+      },
+      'w3:p5',
+    ],
   ]
   for (const [label, world, paneId] of cases) {
     const f = fake(world)
