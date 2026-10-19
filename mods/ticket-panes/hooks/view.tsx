@@ -69,8 +69,12 @@ const CRITERIA_START = /^\s*(#+\s*acceptance criteria|\*\*acceptance criteria\*\
 // What ends them, as the planner's count of them stops: a line led by `#` or `**`, though not by
 // `**-` (a bold flag such as `**--watch**` opens no section).
 const NEXT_HEADING = /^\s*(#|\*\*(?!-))/
-// A line that opens or closes a fenced code block.
-const FENCE = /^\s*(```|~~~)/
+// A line that opens a fenced code block: three or more backticks or tildes, after any indent. The
+// run is the fence a close must match.
+const FENCE = /^\s*(`{3,}|~{3,})/
+// A line that may close one: a run of backticks or tildes and nothing else (a close takes no info
+// string).
+const BARE_FENCE = /^\s*(`+|~+)\s*$/
 const FIELD = /^(status|type|priority|parent):(.*)$/
 
 type Fields = Pick<Ticket, 'status' | 'type' | 'priority' | 'parent'>
@@ -88,14 +92,27 @@ function splitFrontmatter(lines: string[]): { fields: Fields; body: string[] } {
   return { fields, body: lines.slice(end + 1) }
 }
 
+// Whether `line` closes the block `fence` opened: a bare run of the same character, at least as
+// long (CommonMark), so a `~~~` inside a ``` block or a ```sh inside an open one closes nothing.
+function closesFence(line: string, fence: string): boolean {
+  const run = BARE_FENCE.exec(line)?.[1]
+  return run !== undefined && run[0] === fence[0] && run.length >= fence.length
+}
+
 // Where the criteria starting at `start` end: the next heading line outside a fenced block (a
-// shell `# comment` in an example is not a heading), else the end of the lines.
+// shell `# comment` in an example is not a heading), else the end of the lines. The fence is
+// tracked from the top of the lines, so one opened above the criteria is still open at `start`.
 function criteriaEnd(lines: string[], start: number): number {
-  let isFenced = false
-  for (let i = start + 1; i < lines.length; i++) {
+  let fence = ''
+  for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!
-    if (FENCE.test(line)) isFenced = !isFenced
-    else if (!isFenced && NEXT_HEADING.test(line)) return i
+    if (fence !== '') {
+      if (closesFence(line, fence)) fence = ''
+    } else if (i > start && NEXT_HEADING.test(line)) {
+      return i
+    } else {
+      fence = FENCE.exec(line)?.[1] ?? ''
+    }
   }
   return lines.length
 }

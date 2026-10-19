@@ -215,6 +215,33 @@ test('a # line inside a fenced block does not end the criteria', () => {
   expect([inline.criteria, inline.description]).toEqual(['## Acceptance Criteria\n- Quote it as ```a``` here.', '## Design'])
 })
 
+test('a line led by two backticks or two tildes opens no fence', () => {
+  // Each line in a parse of its own: together they would close each other's fence.
+  for (const line of ['~~Two, dropped.~~', '``tk show`` prints it.']) {
+    const criteria = ['## Acceptance Criteria', '- One.', line]
+    const ticket = parseTicket('x-ab12', ['# T', ...criteria, '## Design', 'Plain.'].join('\n'))
+    expect([ticket.criteria, ticket.description]).toEqual([criteria.join('\n'), '## Design\nPlain.'])
+  }
+})
+
+test('a fence closes only on a bare fence of its own kind, at least as long', () => {
+  const blocks = [
+    ['```md', '~~~', '```'],
+    ['```md', '```sh', '```'],
+    ['````md', '```', '````'],
+  ]
+  for (const [open, inner, close] of blocks) {
+    const criteria = ['## Acceptance Criteria', '- It shows:', `  ${open}`, `  ${inner}`, '  # not a heading', `  ${close}`, '- Done.']
+    const ticket = parseTicket('x-ab12', ['# T', ...criteria, '## Design', 'Plain.'].join('\n'))
+    expect([ticket.criteria, ticket.description]).toEqual([criteria.join('\n'), '## Design\nPlain.'])
+  }
+  // A fence opened above the criteria is still open where they start: its close stays in them,
+  // and the next heading after it ends them. (The criteria start inside the fence today; backlog
+  // ticket cc-7ted is to stop that.)
+  const ticket = parseTicket('x-ab12', ['# T', '```md', '## Acceptance Criteria', '- a', '```', '## Design', 'Plain.'].join('\n'))
+  expect([ticket.criteria, ticket.description]).toEqual(['## Acceptance Criteria\n- a\n```', '```md\n## Design\nPlain.'])
+})
+
 // ---------- readTicket ----------
 // readTicket is called by no hook of this task, and a test's own hooks cannot call `$`, so it
 // runs against this stand-in. R1's caches (tickets.ts) carry over from test to test in this
@@ -555,6 +582,18 @@ test('OSC strings to BEL or ST, an unterminated one to the end of its line, and 
     const ui = await mountView($, surface)
     expect((await texts(ui))[2]).toBe('see a.ts and done')
     expect((await markdowns(ui))[0]).toEqual([VIEW_KEYS.description, 'Output:\nnext line.'])
+    await ui.unmount()
+  }
+})
+
+test('escapes at the ends of their final-byte ranges go whole', async ($, on) => {
+  // `ESC ( 0` (line drawing) and `ESC ~` end a short escape; `ESC [200~` (bracketed paste) and
+  // `ESC [@` end a CSI.
+  const shown: Shown = { ticket: { ...parseTicket('x-ab12', TASK), title: 'a\x1b(0b\x1b~c\x1b[200~d\x1b[@e', notes: [] }, mode: 'compact' }
+  drawView(on, shown)
+  for (const surface of SURFACES) {
+    const ui = await mountView($, surface)
+    expect((await texts(ui))[2]).toBe('abcde')
     await ui.unmount()
   }
 })
