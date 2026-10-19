@@ -73,15 +73,14 @@ async function herdr($: EngineInterface, args: readonly string[]): Promise<Ran> 
   return { isOk: false, reason }
 }
 
-// The pane of the live agent named `name` that `herdr agent list` shows, or undefined when it
-// shows none. A list herdr does not give stops the click: without it, a launch could start a second
-// Claude on the conversation an agent outside our record holds (E11).
-async function listedPane($: EngineInterface, name: string): Promise<string | undefined> {
+// One `herdr agent list`, as a lookup: the pane of the live agent named `name`, or undefined when
+// the list shows none. A list herdr does not give stops the click: without it, a launch could start
+// a second Claude on the conversation an agent outside our record holds (E11).
+async function listedPanes($: EngineInterface): Promise<(name: string) => string | undefined> {
   const ran = await herdr($, ['agent', 'list'])
   if (!ran.isOk) throw new SidePaneError('agent list', ran.reason)
   const agents = field(ran.result, 'agents')
-  const found = Array.isArray(agents) ? agents.find(agent => text(agent, 'name') === name) : undefined
-  return text(found, 'pane_id')
+  return name => text(Array.isArray(agents) ? agents.find(agent => text(agent, 'name') === name) : undefined, 'pane_id')
 }
 
 // Moves herdr's focus to agent `name`. A focus herdr refuses stops the click, so the person is told
@@ -121,20 +120,27 @@ async function closeSide($: EngineInterface, side: Side): Promise<void> {
 
 // Routes a click on ticket `id` in a main session in herdr (R4), as the steps above say. A side
 // session opens no side pane of its own (D12), so it is refused before any herdr call. Throws a
-// SidePaneError naming the step that failed: here `agent list` or `agent focus`, and from herdr.ts
-// `herdr pane`, `tickets dir`, `uuidgen`, `pane split` or `agent start`.
+// SidePaneError naming the step that failed: here `agent list`, `agent get` or `agent focus`, and
+// from herdr.ts `herdr pane`, `tickets dir`, `uuidgen`, `pane split` or `agent start`.
 export async function openSidePane($: EngineInterface, id: string): Promise<OpenResult> {
   const { kind } = await role($)
   if (kind === 'side') throw new SidePaneError('side session', 'opens no side pane of its own')
   const side = await readSide($)
   const name = agentName(id)
-  const pane = await listedPane($, name)
+  const paneOf = await listedPanes($)
+  const pane = paneOf(name)
   const isOurs = side !== undefined && side.agentName === name && side.paneId === pane
   if (pane !== undefined && !isOurs) {
     await focusAgent($, name)
     return { kind: 'focused-foreign', paneId: pane }
   }
   if (side === undefined) return opened(await launch($, id))
+  // readSide read the side agent as gone, but the list shows it in its pane: herdr's `agent get`
+  // failed or missed it. Both steps below for a gone agent would act over a live one (a start over
+  // it, or a close of its pane), so the click stops (D13).
+  if (!side.sideAgentLive && paneOf(side.agentName) === side.paneId) {
+    throw new SidePaneError('agent get', `herdr lists ${side.agentName} in ${side.paneId} but did not show it there`)
+  }
   if (side.ticketId === id) return reopen($, side, id)
   if (side.sideAgentLive) return decideSwitch($, side, id)
   await closeSide($, side)

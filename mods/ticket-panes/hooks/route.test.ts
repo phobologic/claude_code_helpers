@@ -418,6 +418,30 @@ test('an agent list herdr does not give stops the click before anything changes'
   }
 })
 
+test('a side agent herdr lists in its pane but agent get missed stops the click before anything changes', async () => {
+  const cases: [string, SideRecord, Record<string, unknown>][] = [
+    // Without the stop, the click would start a resume over the working agent, and E13 would close
+    // its pane when that failed.
+    ['same ticket, with a recorded conversation', AB12, { [`session:${DIR}:x-ab12`]: { sessionId: 'old-session', cwd: '/repo' } }],
+    // Without the stop, the click would close the working agent's pane (D3).
+    ['another ticket', CD34, {}],
+  ]
+  for (const [label, record, sessions] of cases) {
+    const live: FakePane = { terminalId: 'term-2', agent: { name: record.agentName, status: 'working' } }
+    const f = fake({
+      store: { [KEY]: record, ...sessions },
+      panes: { 'w1:p2': live },
+      instead: { 'agent get': { rejects: new Error('process.run: herdr agent get ran past its timeout') } },
+    })
+    const error = await failure(openSidePane(f.$, 'x-ab12'))
+    expect(error.step, label).toBe('agent get')
+    expect(error.message, label).toBe(`agent get: herdr lists ${record.agentName} in w1:p2 but did not show it there`)
+    expect(changes(f), label).toEqual([])
+    expect(f.panes.get('w1:p2'), label).toStrictEqual(live)
+    expect(f.store.get(KEY), label).toStrictEqual(record)
+  }
+})
+
 // ---------- R4 ----------
 
 test('a side session, or a session not in herdr, opens no side pane and runs no herdr command', async () => {
