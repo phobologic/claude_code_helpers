@@ -454,6 +454,8 @@ check("gates: * stays within one folder", chosen(["tests/t.py"]) == ["make lint"
 check("gates: a folder prefix is not a match for a sibling with a longer name",
       chosen(["mods/blast-radius-two/x"]) == ["make lint", "mods-check"], chosen(["mods/blast-radius-two/x"]))
 check("gates: mods/** does not match a top-level file named mods", chosen(["modsfile"]) == ["make lint"])
+check("gates: a glob must match the whole path, not just its start", chosen(["tests/t.pyc"]) == ["make lint"],
+      chosen(["tests/t.pyc"]))
 
 
 def matches(glob, path):
