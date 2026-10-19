@@ -2,6 +2,9 @@ import type { On, PromptComposeInput, PromptComposeSection } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
+import { roleRef } from './role'
+import type { Role } from './role'
+
 // side.ts through the engine: the plugin loads fresh for each test, so each starts as a reload
 // would leave it (no compose yet in this load, a session record due). The test's hooks stand in
 // for the world beneath the plugin: the environment, the ticket's file, the session, the store,
@@ -39,10 +42,16 @@ type World = {
 }
 
 // Answers what the plugin asks of the world beneath it. Only the ticket's file exists: any other
-// path, the tickets folders a walk looks for included, is missing.
-function world(on: On, env: Record<string, string>): World {
+// path, the tickets folders a walk looks for included, is missing. With `kept`, the environment
+// refuses TICKET_PANES_TICKET, so the role is the one `$.state` kept (role.ts's fallback).
+function world(on: On, env: Record<string, string>, kept?: Role): World {
   const w: World = { ticket: { mtimeMs: 100, text: V1 }, sessionId: 'S1', contexts: [], records: [], storeRefusals: 0 }
-  mock.env(on, env)
+  if (kept === undefined) {
+    mock.env(on, env)
+  } else {
+    on('env.get', ($, e) => (e.name === 'TICKET_PANES_TICKET' ? { deny: 'the variable cannot be read here' } : { value: env[e.name] }))
+    on('state.get', roleRef, () => ({ value: { value: kept, version: 1 } }))
+  }
   mock.clock(on, { now: 1_000_000 })
   on('fs.stat', ($, e) => {
     if (e.path !== FILE || w.ticket === undefined) return { deny: `ENOENT: no such file or directory, stat '${e.path}'` }
@@ -124,6 +133,31 @@ test("AC: a main session's composed prompt has no ticket section", async ($, on)
   expect(await compose($)).toEqual([BASE])
 })
 
+test('a kept role of kind side reads as the side session it was', async ($, on) => {
+  const w = world(on, { TICKETS_DIR: DIR }, { kind: 'side', sideTicket: 'x-ab12' })
+  expect((await compose($))[1]?.id).toBe('ticket-panes:side')
+  await say($)
+  expect(w.records).toHaveLength(1)
+})
+
+// The kind decides, and a side role names its ticket: a kept role with one but not the other is
+// no side session, so nothing here acts on it.
+test('a kept role of kind main that names a ticket is a main session: no section, note or record', async ($, on) => {
+  const w = world(on, { TICKETS_DIR: DIR }, { kind: 'main', sideTicket: 'x-ab12' })
+  expect(await compose($)).toEqual([BASE])
+  await say($)
+  expect(w.contexts).toEqual([undefined])
+  expect(w.records).toEqual([])
+})
+
+test('a kept role of kind side that names no ticket does nothing either', async ($, on) => {
+  const w = world(on, { TICKETS_DIR: DIR }, { kind: 'side' })
+  expect(await compose($)).toEqual([BASE])
+  await say($)
+  expect(w.contexts).toEqual([undefined])
+  expect(w.records).toEqual([])
+})
+
 test("a ticket file that can't be read still leaves the rules, and says where the text is", async ($, on) => {
   const w = world(on, SIDE_ENV)
   w.ticket = undefined
@@ -194,6 +228,17 @@ test('a compose that could not read the file leaves the text to the first counte
   expect(w.contexts).toEqual([undefined, [note(V1)]])
 })
 
+test('a later compose that could not read the file drops the baseline, so the text follows as a note', async ($, on) => {
+  const w = world(on, SIDE_ENV)
+  await compose($)
+  w.ticket = undefined
+  await compose($)
+  // Back as it was: the agent's prompt no longer holds it, so the next counted prompt sends it.
+  change(w, 100, V1)
+  await say($)
+  expect(w.contexts).toEqual([[note(V1)]])
+})
+
 test('a file gone at a counted prompt sends no note; the change shows once it is back', async ($, on) => {
   const w = world(on, SIDE_ENV)
   await compose($)
@@ -235,6 +280,15 @@ test('AC: when compose runs again after /clear, the new prompt holds the current
   expect((await compose($))[1]?.text).toContain(`<ticket-file>\n${V2}\n</ticket-file>`)
   await say($)
   expect(w.contexts).toEqual([[note(V2)], undefined])
+})
+
+test('after /clear with the ticket as the last compose embedded it, no note is sent', async ($, on) => {
+  const w = world(on, SIDE_ENV)
+  await compose($)
+  await say($)
+  await end($, 'clear', 'S1')
+  await say($)
+  expect(w.contexts).toEqual([undefined, undefined])
 })
 
 test('/resume puts the baseline back to the last compose, as /clear does', async ($, on) => {
