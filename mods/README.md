@@ -124,7 +124,9 @@ a session loads it from a folder you own.
   toast when it is done.
 - A click in herdr (a session with `HERDR_ENV=1` and a `HERDR_PANE_ID`, not itself a
   side pane) opens the ticket's side pane: one per session, split to the right of the
-  session's pane without taking focus, running `claude` on the default model under
+  session's pane at 30% of its width (a switch, and a retry after a conversation that
+  could not be resumed, split the same way) without taking focus, running `claude` on
+  the default model under
   the herdr agent name `tp-<id>` and the session name `ticket <id>`.
   - The same ticket again focuses its agent. If its Claude has exited (`/exit` in the
     pane), the click starts it again in the same pane.
