@@ -107,22 +107,31 @@ export function registerBand(on: On): void {
   })
 
   // The first counted prompt (R5) since start or `/clear` collapses the band, whatever its mode;
-  // later ones leave the mode as the person set it. A write that fails skips this hook, and the
-  // prompt goes on.
+  // later ones leave the mode as the person set it. A collapse counts as done only once its write
+  // succeeds, so a refused one is logged and tried again on the next counted prompt. Either way the
+  // prompt goes on to the hooks beneath (side.ts's among them).
   on('prompt.submit', {}, async ($, e, next) => {
     if (isCountedPrompt(e) && !collapsedOnce && sideTicketOf(await role($)) !== undefined) {
-      collapsedOnce = true
-      await update($, MODE, () => 'collapsed')
+      try {
+        await update($, MODE, () => 'collapsed')
+        collapsedOnce = true
+      } catch (err) {
+        debugLog($, `ticket-panes: the band could not collapse: ${String(err)}`)
+      }
     }
     return next(e)
   })
 
   // `/clear` starts a new conversation: the band opens compact again, and the next counted prompt
-  // collapses it.
+  // collapses it. A refused write is logged, and the end goes on to the hooks beneath.
   on('session.end', {}, async ($, e, next) => {
     if (e.reason === 'clear' && sideTicketOf(await role($)) !== undefined) {
       collapsedOnce = false
-      await update($, MODE, () => 'compact')
+      try {
+        await update($, MODE, () => 'compact')
+      } catch (err) {
+        debugLog($, `ticket-panes: the band could not go back to compact: ${String(err)}`)
+      }
     }
     return next(e)
   })

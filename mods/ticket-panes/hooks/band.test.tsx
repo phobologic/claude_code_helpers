@@ -6,7 +6,7 @@ import { bandModeRef, roleRef, ticketVersionRef } from './role'
 import type { Role } from './role'
 import { VIEW_KEYS } from './view'
 
-// band.ts through the engine: the plugin loads fresh for each test, so each starts as a reload
+// band.tsx through the engine: the plugin loads fresh for each test, so each starts as a reload
 // would leave it (no session.start unless the test raises one). The test's hooks stand in for the
 // world beneath the plugin: the environment, the clock, the ticket's file, the session, and a band
 // of the hooks beneath (another mod's, say), which the side band draws above.
@@ -44,10 +44,12 @@ type World = {
   // Every `bandMode` and `ticketVersion` the plugin wrote.
   modes: unknown[]
   versions: unknown[]
-  // How many `ticketVersion` writes to refuse before taking them.
+  // How many `bandMode` and `ticketVersion` writes to refuse before taking them.
+  modeRefusals: number
   versionRefusals: number
-  // The prompts that reached the engine, by text.
+  // The prompts that reached the engine, by text, and the context each carried.
   prompts: string[]
+  contexts: unknown[][]
   logs: string[]
 }
 
@@ -63,8 +65,10 @@ function world(on: On, env: Record<string, string>, kept?: Role): World {
     periods: 0,
     modes: [],
     versions: [],
+    modeRefusals: 0,
     versionRefusals: 0,
     prompts: [],
+    contexts: [],
     logs: [],
   } as Omit<World, 'time'> as World
   // Ahead of the clock's own hooks, so it sees each period before they answer it; the clock
@@ -92,6 +96,10 @@ function world(on: On, env: Record<string, string>, kept?: Role): World {
   })
   on('fs.exists', ($, e) => ({ value: e.path === FILE && w.ticket !== undefined }))
   on('state.set', bandModeRef, ($, e, next) => {
+    if (w.modeRefusals > 0) {
+      w.modeRefusals -= 1
+      return { deny: 'the write was refused' }
+    }
     w.modes.push(e.value)
     return next(e)
   })
@@ -109,6 +117,7 @@ function world(on: On, env: Record<string, string>, kept?: Role): World {
   mock.store(on)
   on('prompt.submit', ($, e) => {
     w.prompts.push(e.text)
+    w.contexts.push([...(e.context ?? [])])
     return { text: e.text, context: e.context }
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -237,6 +246,7 @@ test('a kept role of kind side that names no ticket draws no ticket and polls no
   const ui = await mount($)
   expect(await ui.drawn()).toMatchObject({ type: 'Text', children: [BENEATH] })
   await say($)
+  await end($, 'clear')
   expect(w.modes).toEqual([])
   expect(w.periods).toBe(0)
 })
@@ -246,6 +256,7 @@ test('a kept role of kind side whose ticket is empty draws no ticket and polls n
   const ui = await mount($)
   expect(await ui.drawn()).toMatchObject({ type: 'Text', children: [BENEATH] })
   await say($)
+  await end($, 'clear')
   expect(w.modes).toEqual([])
   expect(w.periods).toBe(0)
 })
@@ -375,6 +386,40 @@ test('a session that ends for another reason leaves the mode, and the next count
   }
   expect(await form(ui)).toBe('compact')
   expect(w.modes).toEqual(['collapsed', 'compact'])
+})
+
+// A refused mode write stays in the band: the hooks beneath (side.ts's change note among them)
+// still see the event, and a refused collapse is tried again.
+const NOTE = 'Ticket x-ab12 changed'
+
+function hasNote(context: unknown[] | undefined): boolean {
+  return (context ?? []).some(c => String(c).includes(NOTE))
+}
+
+test('a refused collapse still lets the prompt reach the hooks beneath, and the next counted prompt collapses', async ($, on) => {
+  const w = world(on, SIDE_ENV)
+  const ui = await mount($)
+  w.modeRefusals = 1
+  await say($)
+  expect(hasNote(w.contexts[0])).toBe(true)
+  expect(await form(ui)).toBe('compact')
+  expect(w.modes).toEqual([])
+  expect(w.logs.some(l => l.includes('the band could not collapse') && l.includes('the write was refused'))).toBe(true)
+  await say($)
+  expect(await form(ui)).toBe('collapsed')
+  expect(w.modes).toEqual(['collapsed'])
+})
+
+test('a refused compact on /clear still lets the end reach the hooks beneath', async ($, on) => {
+  const w = world(on, SIDE_ENV)
+  await mount($)
+  await say($)
+  w.modeRefusals = 1
+  await end($, 'clear')
+  expect(w.logs.some(l => l.includes('the band could not go back to compact') && l.includes('the write was refused'))).toBe(true)
+  await say($)
+  expect(w.prompts).toHaveLength(2)
+  expect(hasNote(w.contexts[1])).toBe(true)
 })
 
 // ---------- the poll ----------
