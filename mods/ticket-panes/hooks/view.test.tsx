@@ -175,12 +175,18 @@ test('frontmatter is only a first line --- up to the next ---; the title is the 
 })
 
 test('field values are trimmed, and only status, type, priority and parent are read', () => {
-  const ticket = parseTicket('x-ab12', ['---', 'status:   closed  ', 'typed: no', 'priority:0', '---', '# T'].join('\n'))
+  const ticket = parseTicket('x-ab12', ['---', 'status:   closed  ', 'typed: no', 'subtype: no', 'priority:0', '---', '# T'].join('\n'))
   expect([ticket.status, ticket.type, ticket.priority, ticket.parent]).toEqual(['closed', '', '0', ''])
 })
 
-test('a file with CRLF line endings reads as the same ticket', () => {
+test('a line that opens with a bold time and goes on is part of its note', () => {
+  const text = ['# T', '', '## Notes', '', '**2030-03-01T11:00:00Z**', '', 'It broke at', '**2030-03-01T09:00:00Z** and again later.'].join('\n')
+  expect(parseTicket('x-ab12', text).notes).toEqual(['**2030-03-01T11:00:00Z**\n\nIt broke at\n**2030-03-01T09:00:00Z** and again later.'])
+})
+
+test('a file with CRLF or CR line endings reads as the same ticket', () => {
   expect(parseTicket('x-ab12', TASK.replace(/\n/g, '\r\n'))).toStrictEqual(parseTicket('x-ab12', TASK))
+  expect(parseTicket('x-ab12', TASK.replace(/\n/g, '\r'))).toStrictEqual(parseTicket('x-ab12', TASK))
 })
 
 // ---------- readTicket ----------
@@ -261,7 +267,7 @@ test('a ticket file gone since R1 found it is file not found', async () => {
 
 test('a file there but unreadable is the read failure, on one line', async () => {
   const path = '/view-5/.tickets/x-ab12.md'
-  const failure = new Error(`EACCES: permission denied,\n  open '${path}'`)
+  const failure = new Error(`EACCES: permission denied,\n  open '${path}'\n`)
   const r = fake({ env: { TICKETS_DIR: '/view-5/.tickets' }, files: { [path]: TASK }, readFailures: { [path]: failure } })
   expect(await readTicket(r.$, 'x-ab12')).toStrictEqual({ id: 'x-ab12', problem: `EACCES: permission denied, open '${path}'` })
   // A rejection that is not an Error is shown as it is.
@@ -478,7 +484,7 @@ test('control characters in the file are dropped, so the tree still draws; tabs 
     parent: 'x-cd\x1b[1m34\x1b[0m',
     title: '\x1b[1mDraw\x1b[0m the\twidget\x08',
     description: 'Ran \x1b[32mall\x1b[0m tests\x1b',
-    criteria: '## Acceptance Criteria\n\n- it shows\x9b',
+    criteria: '## Acceptance Criteria\n\n- it shows\x9b\x9f',
     notes: ['**2030-03-01T11:00:00Z**\n\nOutput: \x1b[31mred\x1b[0m\x0b'],
   }
   const shown: Shown = { ticket: dirty, mode: 'expanded' }
