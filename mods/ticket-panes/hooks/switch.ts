@@ -17,14 +17,18 @@ const CONFIRM_MS = 15_000
 // How long a herdr call may run, as herdr.ts gives its own.
 const HERDR_MS = 10_000
 
-// The last declined click: the ticket clicked, and when its toast was shown. A reload starts the
-// module, and so this, over (K6): the next click on a busy agent toasts again.
-let declined: { ticket: string; at: number } | undefined
+// The last declined click: the ticket clicked, the side pane's ticket its toast named, and when
+// that toast was shown. A reload starts the module, and so this, over (K6): the next click on a
+// busy agent toasts again.
+let declined: { ticket: string; from: string; at: number } | undefined
 
-// A click on `id` at `now` is the second one the toast asked for: the last decline was for `id`,
-// at most 15 seconds before. A clock that went back since counts as no confirmation.
-function isConfirmed(id: string, now: number): boolean {
-  if (declined === undefined || declined.ticket !== id) return false
+// A click on `id` at `now`, with `side` in the side pane, is the second one the toast asked for:
+// the last decline was for `id` past this same side ticket, at most 15 seconds before. The side
+// pane can change without a switch (the route closes a dead agent's pane, or launches when there
+// is no record), and a toast about one agent never confirms exiting another. A clock that went
+// back since counts as no confirmation.
+function isConfirmed(side: Side, id: string, now: number): boolean {
+  if (declined === undefined || declined.ticket !== id || declined.from !== side.ticketId) return false
   const elapsed = now - declined.at
   return elapsed >= 0 && elapsed < CONFIRM_MS
 }
@@ -76,8 +80,8 @@ async function switchTo($: EngineInterface, side: Side, id: string): Promise<Swi
 export async function decideSwitch($: EngineInterface, side: Side, id: string): Promise<SwitchResult> {
   if (isIdle(await agentStatus($, side.agentName))) return switchTo($, side, id)
   const now = await $.clock.now()
-  if (isConfirmed(id, now)) return switchTo($, side, id)
-  declined = { ticket: id, at: now }
+  if (isConfirmed(side, id, now)) return switchTo($, side, id)
+  declined = { ticket: id, from: side.ticketId, at: now }
   notify($, `${side.ticketId} is still working; click again to switch anyway`)
   return { kind: 'declined' }
 }

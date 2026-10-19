@@ -364,13 +364,48 @@ test('a switch spends the remembered click: a later busy agent toasts again for 
     if (!isConfirmed && agent) agent.status = 'idle'
     f.clock.now = 1_000
     expect((await decideSwitch(f.$, SIDE, 'x-cd34')).kind, String(isConfirmed)).toBe('opened')
-    // Another ticket's busy agent now holds the side pane, and x-cd34 is clicked within the window.
-    const later = { ...SIDE, ticketId: 'x-ef56', paneId: 'w1:p3', paneTerminalId: 'term-3', agentName: 'tp-x-ef56' }
-    f.panes.set('w1:p3', { terminalId: 'term-3', agent: { name: 'tp-x-ef56', status: 'working' } })
+    // x-ab12's busy agent holds the side pane again, in a fresh pane, and x-cd34 is clicked within
+    // the window: the same side ticket and the same click as the decline, so only the switch's
+    // spending of it stops a switch here.
+    const later = { ...SIDE, paneId: 'w1:p5', paneTerminalId: 'term-5' }
+    f.panes.set('w1:p5', { terminalId: 'term-5', agent: { name: 'tp-x-ab12', status: 'working' } })
     f.clock.now = 2_000
     expect(await decideSwitch(f.$, later, 'x-cd34'), String(isConfirmed)).toStrictEqual({ kind: 'declined' })
-    expect(f.seen.toasts.at(-1)).toBe('x-ef56 is still working; click again to switch anyway')
+    expect(f.seen.toasts.at(-1)).toBe(STILL_WORKING)
   }
+})
+
+test('a switch whose launch fails still spends the remembered click', async () => {
+  const f = fake({ panes: sidePanes('working'), fails: { 'pane split': { code: 'no_room', message: 'no room' } } })
+  await decideSwitch(f.$, SIDE, 'x-cd34')
+  f.clock.now = 1_000
+  const thrown = await decideSwitch(f.$, SIDE, 'x-cd34').then(
+    () => undefined,
+    (error: unknown) => error,
+  )
+  expect(thrown).toBeInstanceOf(SidePaneError)
+  // x-ab12's busy agent holds the side pane again, and x-cd34 is clicked within the window.
+  f.panes.set('w1:p5', { terminalId: 'term-5', agent: { name: 'tp-x-ab12', status: 'working' } })
+  f.clock.now = 2_000
+  expect(await decideSwitch(f.$, { ...SIDE, paneId: 'w1:p5', paneTerminalId: 'term-5' }, 'x-cd34')).toStrictEqual({ kind: 'declined' })
+  expect(f.seen.toasts).toEqual([STILL_WORKING, STILL_WORKING])
+})
+
+test('a confirmation counts only for the side agent its toast named', async () => {
+  const f = fake({ panes: sidePanes('working') })
+  expect(await decideSwitch(f.$, SIDE, 'x-cd34')).toStrictEqual({ kind: 'declined' })
+  // The side pane changed without a switch: the route closed x-ab12's pane and launched x-ef56,
+  // whose agent is busy too. The next click on x-cd34 is within the window.
+  f.panes.delete('w1:p2')
+  const later = { ...SIDE, ticketId: 'x-ef56', paneId: 'w1:p3', paneTerminalId: 'term-3', agentName: 'tp-x-ef56' }
+  f.panes.set('w1:p3', { terminalId: 'term-3', agent: { name: 'tp-x-ef56', status: 'working' } })
+  f.clock.now = 5_000
+  expect(await decideSwitch(f.$, later, 'x-cd34')).toStrictEqual({ kind: 'declined' })
+  expect(f.seen.toasts.at(-1)).toBe('x-ef56 is still working; click again to switch anyway')
+  expect(f.panes.has('w1:p3')).toBe(true)
+  // That toast is about x-ef56, so the click after it does switch.
+  f.clock.now = 6_000
+  expect((await decideSwitch(f.$, later, 'x-cd34')).kind).toBe('opened')
 })
 
 // ---------- the activity pane ----------
