@@ -22,12 +22,18 @@ does not report, and do not message or inspect agents yourself.
 
 1. Run it from the repo the run belongs to:
    ```bash
-   run-tickets-status [<run-id>]
+   run-tickets-status [--ticket <id>] [<run-id>]
    ```
    With no run ID it picks the newest run in the current repo, running or
    finished. Pass `$ARGUMENTS` through if the user named a run. If they ask
    about an earlier run without its ID ("yesterday's run", "the one before"),
-   run `run-tickets-status --list` first and pick it from there.
+   run `run-tickets-status --list` first and pick it from there. For a
+   question about one ticket, `--ticket <id>` prints only the run's opening
+   lines and that ticket's block; `run-tickets-status --find-ticket <id>`
+   prints `{"run_id": "<run-id>", "state": "running"}` for the running run
+   that holds the ticket unmerged, prints nothing and exits 1 when no running
+   run does, and exits 2 with the reason on stderr when it cannot tell. Never pass `--watch <N>`: it redraws the report
+   every N seconds until Ctrl-C, for a terminal pane, and does not return.
 
 2. If it exits with "no /run-tickets runs found", say there is no run to
    report in this repo.
