@@ -214,6 +214,22 @@ test('AC: x-ab12s, docs/x-ab12.md and an id in a fenced block get no button; one
   expect(await rowParts(ui)).toEqual(['text tickets: (dim)', ...buttons(['x-ef56'])])
 })
 
+// A main session sets no TICKETS_DIR, so the draw itself walks up from the session's root to find
+// the tickets dir (R1).
+test('with no TICKETS_DIR the draw finds the tickets dir above the session root', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  mock.env(on, {})
+  on('session.root', () => ({ value: '/repo/sub' }))
+  on('fs.stat', ($, e) => {
+    if (e.path === '/repo/.tickets') return { value: { kind: 'dir', size: 0, mtimeMs: 1, isLink: false, realPath: '/repo/.tickets' } }
+    if (e.path === `${DIR}/x-ab12.md`) return { value: { kind: 'file', size: 10, mtimeMs: 100, isLink: false } }
+    return { deny: `ENOENT: no such file or directory, stat '${e.path}'` }
+  })
+  on('ui.render', { component: 'AssistantMessage' }, () => ENGINE_ROW)
+  const ui = await mount($, 'see x-ab12, not x-cd34')
+  expect(await rowParts(ui)).toEqual(['text tickets: (dim)', ...buttons(['x-ab12'])])
+})
+
 // ---------- next(e) itself ----------
 
 test('AC: a reply whose candidates are no tickets, or that has none, draws next(e) itself', async ($, on) => {
