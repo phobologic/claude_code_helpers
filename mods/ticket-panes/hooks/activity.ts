@@ -48,10 +48,39 @@ function shellWord(word: string): string {
   return PLAIN_WORD.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`
 }
 
-// The command the activity pane runs (1.2's `--ticket` and `--watch`). The run id goes in as it
-// is: runs.ts answers only ids of the workflow's shape, which the shell reads as themselves.
+// The watch's arguments (1.2's `--ticket` and `--watch`), as its process gets them.
+function watchArgs(id: string, runId: string): string[] {
+  return ['--ticket', id, '--watch', String(WATCH_SECONDS), runId]
+}
+
+// The command the activity pane runs: its arguments as the shell reads them back. runs.ts answers
+// only run ids of the workflow's shape, which go in as they are.
 function watchCommand(id: string, runId: string): string {
-  return `run-tickets-status --ticket ${shellWord(id)} --watch ${WATCH_SECONDS} ${runId}`
+  return ['run-tickets-status', ...watchArgs(id, runId).map(shellWord)].join(' ')
+}
+
+// Whether `argv` holds `words` one after another.
+function holdsInOrder(argv: readonly unknown[], words: readonly string[]): boolean {
+  for (let start = 0; start + words.length <= argv.length; start++) {
+    if (words.every((word, at) => argv[start + at] === word)) return true
+  }
+  return false
+}
+
+// Whether the pane's foreground is still this watch, by `pane process-info`. herdr gives each
+// foreground process's `argv` as the kernel started it: run-tickets-status starts through its
+// shebang, so its argv is the interpreter, the script's path, then the watch's arguments. A look
+// that fails, or a foreground without them (the watch was stopped and the shell is back, or it
+// watches another run), is not this watch.
+async function isWatching($: EngineInterface, paneId: string, id: string, runId: string): Promise<boolean> {
+  const ran = await herdr($, ['pane', 'process-info', '--pane', paneId])
+  const processes = field(field(ran?.result, 'process_info'), 'foreground_processes')
+  if (!Array.isArray(processes)) return false
+  const words = watchArgs(id, runId)
+  return processes.some(entry => {
+    const argv = field(entry, 'argv')
+    return Array.isArray(argv) && holdsInOrder(argv, words)
+  })
 }
 
 // The record's side part: what stays when its activity pane goes.
@@ -75,6 +104,13 @@ async function openBelow($: EngineInterface, side: Side, id: string, runId: stri
   }
 }
 
+// Whether the record's activity pane stays as it is: it shows ticket `id` and its foreground is
+// still the watch of run `runId`. Another ticket's pane is not looked at.
+async function isKept($: EngineInterface, side: Side, id: string, runId: string): Promise<boolean> {
+  if (side.activityPaneId === undefined || side.activityTicketId !== id) return false
+  return isWatching($, side.activityPaneId, id, runId)
+}
+
 // The steps of `syncActivity`; what fails throws, its message naming what failed.
 async function sync($: EngineInterface, id: string): Promise<void> {
   // The lookup comes first, before herdr is asked anything: the noun's tests watch it to see this
@@ -87,7 +123,7 @@ async function sync($: EngineInterface, id: string): Promise<void> {
   // goes on to the toast.
   const side = await readSide($)
   if (side === undefined) return
-  if ('runId' in run && side.activityTicketId === id) return
+  if ('runId' in run && (await isKept($, side, id, run.runId))) return
   if (side.activityPaneId !== undefined) {
     await closePane($, side.activityPaneId)
     await updateSide($, () => sidePart(side))
@@ -101,10 +137,12 @@ function whatFailed(error: unknown): string {
 }
 
 // Opens, keeps or closes the activity pane for ticket `id`, once its side pane is placed (D8):
-// - In a running run (R2): an activity pane of ours for `id` is kept (the record names no run, so
-//   by its ticket alone). Otherwise any activity pane of ours closes, the side pane is split down,
-//   the new pane runs `run-tickets-status --ticket <id> --watch 30 <run id>`, and the record takes
-//   its pane, terminal and ticket.
+// - In a running run (R2): an activity pane of ours for `id` is kept while `pane process-info`
+//   shows it still running the watch of the run the lookup names now. Otherwise (another ticket,
+//   another run after a resume, a watch that was stopped, a look that failed) any activity pane of
+//   ours closes, the side pane is split down, the new pane runs
+//   `run-tickets-status --ticket <id> --watch 30 <run id>`, and the record takes its pane,
+//   terminal and ticket.
 // - In none: any activity pane of ours closes and the record's activity fields are cleared.
 // - When the lookup fails, nothing else is asked or changed. When the new pane can't be split or
 //   given its command, no activity pane is recorded. Either way `no run activity for <id>: <what

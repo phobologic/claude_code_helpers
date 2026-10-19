@@ -206,7 +206,10 @@ a session loads it from a folder you own.
   `run-tickets-status --ticket <id> --watch 30 <run-id>`, the run's opening lines and
   the ticket's block, drawn again every 30 seconds. It is checked on each click only,
   so a click after the run is done closes it, and a switch to another ticket closes it
-  with the side pane. When the lookup fails, or the new pane can't be split or given
+  with the side pane. A click keeps it only while `herdr pane process-info` shows it
+  still running that watch for the run that holds the ticket now: after a `--resume`
+  under a new run id, after Ctrl-C in it, or when herdr can't say, the click replaces it
+  with a fresh watch. When the lookup fails, or the new pane can't be split or given
   its command, the side pane stays and the toast says
   `no run activity for <id>: <what failed>`.
 - Outside herdr the button opens the read-only pane: the ticket from its file with
