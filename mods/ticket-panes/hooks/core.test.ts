@@ -274,6 +274,9 @@ test('R4: a side agent whose root moved stays side after a reload, by the side r
   const moved = fake({ env: LAUNCHED, root: '/elsewhere', stored: { ...SIDE } })
   expect(await resolveRole(moved.$)).toStrictEqual(SIDE)
   expect(moved.seen.sets).toEqual([])
+  // Surfaces that cannot be read count as drawing here too.
+  const unread = fake({ env: LAUNCHED, root: '/elsewhere', isSurfacesRefused: true, stored: { ...SIDE } })
+  expect(await resolveRole(unread.$)).toStrictEqual(SIDE)
   // Nothing stored, as in any new process the pane's Claude starts: main.
   expect(await resolveRole(fake({ env: LAUNCHED, root: '/elsewhere' }).$)).toStrictEqual(MAIN_IN_HERDR)
   // A stored side role for another ticket does not stay.
