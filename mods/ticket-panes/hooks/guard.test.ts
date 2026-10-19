@@ -2,7 +2,7 @@ import type { EngineInterface, On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { commandsIn, deniedGitOf, isSideOnFailure, tkUseOf } from './guard'
+import { commandsIn, deniedGitOf, isSideOnFailure, onGuardFailure, placeOf, tkUseOf } from './guard'
 import { forgetRole, role, roleRef } from './role'
 import type { Role } from './role'
 
@@ -131,8 +131,9 @@ test('commandsIn keeps the & of a redirection in its word', () => {
   expect(commandsIn('tk close x 2>&1')).toStrictEqual([['tk', 'close', 'x', '2>&1']])
   expect(commandsIn('tk close x <&3')).toStrictEqual([['tk', 'close', 'x', '<&3']])
   expect(commandsIn('tk close x &>/dev/null')).toStrictEqual([['tk', 'close', 'x', '&>/dev/null']])
-  // `&&` after `>` is still the operator.
+  // `&&` after `>` is still the operator, and a `|` always ends the command.
   expect(commandsIn('a >&& b')).toStrictEqual([['a', '>'], ['b']])
+  expect(commandsIn('a |>f')).toStrictEqual([['a'], ['>f']])
 })
 
 test('commandsIn removes quotes and backslashes, and never splits inside quotes', () => {
@@ -218,6 +219,7 @@ test('tkUseOf lets each allow-listed subcommand through, as itself or under supe
   expect(tkUseOf(['tk', 'super'])).toBeUndefined()
   expect(tkUseOf(['tk', 'dep', 'tree', 'x'])).toBeUndefined()
   expect(tkUseOf(['tk', 'dep', 'cycle'])).toBeUndefined()
+  expect(tkUseOf(['tk', 'super', 'dep', 'tree', 'x'])).toBeUndefined()
 })
 
 test('tkUseOf names any other subcommand, super read as the one after it', () => {
@@ -295,6 +297,50 @@ test('AC: before the role is resolved, a failed guard refuses when role.ts resol
   // A role of kind side that names no ticket is no side session, as side.ts reads it.
   expect(await isSideOnFailure(roleWorld(null, { kind: 'side' }))).toBe(false)
   forgetRole()
+})
+
+test('the guard\'s catch replays a call it let through, refuses in a side session and lets a main one run', async () => {
+  const calls: string[] = []
+  const next = (called: boolean) => {
+    const run = async (e: string) => {
+      calls.push(e)
+      return { result: 'ran' }
+    }
+    return Object.assign(run, { called })
+  }
+  forgetRole()
+  await role(roleWorld(SIDE_ENV))
+  expect(await onGuardFailure(roleWorld(SIDE_ENV), 'e1', next(true))).toStrictEqual({ result: 'ran' })
+  expect(await onGuardFailure(roleWorld(SIDE_ENV), 'e2', next(false))).toStrictEqual(FAILED)
+  forgetRole()
+  await role(roleWorld(MAIN_ENV))
+  expect(await onGuardFailure(roleWorld(MAIN_ENV), 'e3', next(false))).toStrictEqual({ result: 'ran' })
+  expect(await onGuardFailure(roleWorld(MAIN_ENV), 'e4', next(true))).toStrictEqual({ result: 'ran' })
+  expect(calls).toStrictEqual(['e1', 'e3', 'e4'])
+  forgetRole()
+})
+
+// placeOf against a stand-in stat that looks a path up by its spelling, folding nothing: the
+// engine's stat folds `.` and `..` first, so the hook tests can't tell placeOf's own folding apart.
+function rawStat(paths: Record<string, string>) {
+  const $ = {
+    fs: {
+      stat: async (path: string) => {
+        const real = paths[path]
+        if (real === undefined) throw new Error(`ENOENT: no such file or directory, stat '${path}'`)
+        return { kind: 'dir', size: 0, mtimeMs: 0, isLink: false, realPath: real }
+      },
+    },
+  }
+  return $ as unknown as EngineInterface
+}
+
+test('placeOf folds . itself and refuses any .., whatever the stat beneath folds', async () => {
+  const $ = rawStat({ '/': '/', '/repo': '/repo', '/repo/.tmp': '/repo/.tmp' })
+  expect(await placeOf($, '/repo/./.tmp/./x.md')).toBe('/repo/.tmp/x.md')
+  expect(await placeOf($, '/repo/.tmp/x/../../src/a.ts')).toBeUndefined()
+  expect(await placeOf($, '/repo/.tmp/../.tmp/a.md')).toBeUndefined()
+  expect(await placeOf($, '/repo//.tmp/a.md')).toBe('/repo/.tmp/a.md')
 })
 
 // ---------- writes in a side session (D5) ----------

@@ -314,8 +314,10 @@ async function statOf($: EngineInterface, path: string): Promise<FsStat | undefi
 // Where an absolute path lands: the real path of its nearest existing ancestor (the path itself
 // included) followed by the rest of the path. Undefined when it can't be placed: a path that is
 // not absolute (a `~` included), one with a `..` in it, or an ancestor that exists but leads
-// nowhere (a dangling link), which the tool would follow.
-async function placeOf($: EngineInterface, path: string): Promise<string | undefined> {
+// nowhere (a dangling link), which the tool would follow. This build's `$.fs.stat` folds `.` and
+// `..` by spelling before it looks; the folding and the `..` refusal here keep the answer the same
+// for a stat that does not.
+export async function placeOf($: EngineInterface, path: string): Promise<string | undefined> {
   if (!path.startsWith('/')) return undefined
   const parts = path.split('/').filter(part => part !== '' && part !== '.')
   if (parts.includes('..')) return undefined
@@ -383,6 +385,18 @@ export async function isSideOnFailure($: EngineInterface): Promise<boolean> {
   return known !== undefined && sideTicketOf(known) !== undefined
 }
 
+// The guard's `.catch`: a call it already let through goes on as it went (`next` replays it);
+// otherwise a side session refuses the call and a main one lets it run. A main session's guard
+// calls `next` before anything that can throw, so only this function reaches its second branch.
+export async function onGuardFailure<E, R>(
+  $: EngineInterface,
+  e: E,
+  next: { (e: E): Promise<R>; readonly called: boolean },
+): Promise<R | { deny: string }> {
+  if (next.called) return next(e)
+  return (await isSideOnFailure($)) ? { deny: GUARD_FAILED } : next(e)
+}
+
 // This module's hooks, registered by register.tsx.
 export function registerGuard(on: On): void {
   on('tool.call', { tool: ['Edit', 'Write', 'NotebookEdit', 'Bash'] }, async ($, e, next) => {
@@ -393,10 +407,7 @@ export function registerGuard(on: On): void {
         ? await judgeBash($, ticket, e.command)
         : await judgeWrite($, ticket, e.tool === 'NotebookEdit' ? e.notebook_path : e.file_path)
     return reason === undefined ? next(e) : { deny: reason }
-  }).catch(async ($, e, next) => {
-    if (next.called) return next(e)
-    return (await isSideOnFailure($)) ? { deny: GUARD_FAILED } : next(e)
-  })
+  }).catch(($, e, next) => onGuardFailure($, e, next))
 }
 
 // This module's ready step: register.tsx's `runReady` calls it once per load, when the role is
