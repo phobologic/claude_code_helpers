@@ -221,6 +221,21 @@ test('AC: a main session draws exactly what the hooks beneath draw, and starts n
   expect(w.stats).not.toContain(FILE)
 })
 
+// R4: Claude Code's session-title run, a `claude -p` the side pane's Claude starts in the temp
+// folder, inherits the ticket and the launch folder the pane was started in.
+test("AC: a title run (the pane's ticket, a root other than the launch folder) draws no ticket and polls nothing", async ($, on) => {
+  // Ahead of world()'s own hook, so it answers first; world registers the bare event.
+  on('session.root', {}, () => ({ value: '/private/var/folders/xy/T' }))
+  const w = world(on, { ...SIDE_ENV, TICKET_PANES_CWD: '/repo' })
+  const ui = await mount($)
+  expect(await ui.drawn()).toMatchObject({ type: 'Text', children: [BENEATH] })
+  await say($)
+  await w.time.advance(10_000)
+  expect(w.modes).toEqual([])
+  expect(w.periods).toBe(0)
+  expect(w.stats).not.toContain(FILE)
+})
+
 test('a main session leaves the mode alone on prompts and /clear', async ($, on) => {
   const w = world(on, MAIN_ENV)
   await say($)

@@ -2,7 +2,7 @@ import type { EngineInterface, FsStat, On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
 import { beginNotices, flushNotices, notify } from './notify'
-import { forgetRole, isCountedPrompt, knownRole, resolveRole, role, roleFrom, roleRef } from './role'
+import { forgetRole, isCountedPrompt, isPaneClaude, knownRole, resolveRole, role, roleFrom, roleRef } from './role'
 import type { Role } from './role'
 import { recordSession, recordedSession } from './sessions'
 import type { RecordedSession } from './sessions'
@@ -94,6 +94,7 @@ type World = {
   env?: Record<string, string>
   isEnvRefused?: boolean
   root?: string
+  isRootRefused?: boolean
   files?: Record<string, Entry>
   stored?: Role | null
   isStateGetRefused?: boolean
@@ -114,7 +115,12 @@ function fake(world: World = {}) {
         return world.env?.[name]
       },
     },
-    session: { root: async () => world.root ?? '/' },
+    session: {
+      root: async () => {
+        if (world.isRootRefused) throw new Error('session.root: refused')
+        return world.root ?? '/'
+      },
+    },
     fs: {
       stat: async (path: string, options?: { resolve: boolean }): Promise<FsStat> => {
         seen.stats.push(path)
@@ -211,6 +217,36 @@ test('resolveRole answers the role when $.state refuses the write, as it does in
   expect(await resolveRole(draw.$)).toStrictEqual(SIDE)
 })
 
+// The launch folder the side pane was started in (herdr.ts), and the temp folder Claude Code's
+// session-title run (a `claude -p` the pane's Claude starts) runs in with the pane's variables.
+const LAUNCHED = { ...SIDE_ENV, TICKET_PANES_CWD: '/repo' }
+const TEMP = '/private/var/folders/xy/T'
+
+test('R4: the pane is its own Claude unless the launcher named a folder and the root is known to be another', () => {
+  expect(isPaneClaude('/repo', '/repo')).toBe(true)
+  expect(isPaneClaude('/repo', TEMP)).toBe(false)
+  expect(isPaneClaude('/repo', '/repo/sub')).toBe(false)
+  // No launch folder named, or an empty one: R4 as before, whatever the root.
+  expect(isPaneClaude(undefined, TEMP)).toBe(true)
+  expect(isPaneClaude('', TEMP)).toBe(true)
+  // A root that cannot be read leaves the session the pane's own, so the guard still holds.
+  expect(isPaneClaude('/repo', undefined)).toBe(true)
+})
+
+test("AC R4: a session with the pane's ticket but a root other than the launch folder is a main session", async () => {
+  const titleRun = fake({ env: LAUNCHED, root: TEMP })
+  expect(await resolveRole(titleRun.$)).toStrictEqual({ kind: 'main', herdrPaneId: 'w1:p1' })
+  expect(titleRun.seen.sets).toEqual([{ kind: 'main', herdrPaneId: 'w1:p1' }])
+  // The pane's own Claude, with its root the launch folder, is the side session.
+  expect(await resolveRole(fake({ env: LAUNCHED, root: '/repo' }).$)).toStrictEqual(SIDE)
+})
+
+test('R4: a side pane whose root cannot be read, or whose launch folder is unset or empty, stays a side session', async () => {
+  expect(await resolveRole(fake({ env: LAUNCHED, isRootRefused: true }).$)).toStrictEqual(SIDE)
+  expect(await resolveRole(fake({ env: SIDE_ENV, root: TEMP }).$)).toStrictEqual(SIDE)
+  expect(await resolveRole(fake({ env: { ...SIDE_ENV, TICKET_PANES_CWD: '' }, root: TEMP }).$)).toStrictEqual(SIDE)
+})
+
 test('AC R4: after a reload, the first draw resolves the side role without throwing and runs the ready steps once', async () => {
   forgetRole() // as a reload leaves the module: nothing resolved, and no session.start
   const draw = fake({ env: SIDE_ENV, stateSetDenial: DRAW_DENIAL })
@@ -241,7 +277,7 @@ test('calls made while the role resolves wait for that one resolution', async ()
   const both = fake({ env: SIDE_ENV })
   expect(await Promise.all([role(both.$), role(both.$)])).toStrictEqual([SIDE, SIDE])
   // Each of the role's variables read once; the band's ready step then reads TICKETS_DIR (R1).
-  expect(both.seen.env.filter(name => name !== 'TICKETS_DIR')).toEqual(['TICKET_PANES_TICKET', 'HERDR_ENV', 'HERDR_PANE_ID'])
+  expect(both.seen.env.filter(name => name !== 'TICKETS_DIR')).toEqual(['TICKET_PANES_TICKET', 'HERDR_ENV', 'HERDR_PANE_ID', 'TICKET_PANES_CWD'])
   expect(both.seen.logs).toHaveLength(1)
 })
 

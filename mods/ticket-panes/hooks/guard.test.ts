@@ -437,6 +437,31 @@ test('.tmp itself, and a folder whose name starts with .tmp, are outside', async
   expect(w.ran).toStrictEqual([])
 })
 
+// R4: the launcher names the folder it starts the side pane in (TICKET_PANES_CWD). Claude Code's
+// session-title run, a `claude -p` the pane's Claude starts in the temp folder, inherits it with
+// the ticket.
+const LAUNCHED = { ...SIDE_ENV, TICKET_PANES_CWD: ROOT }
+
+test("AC: a title run (the pane's ticket, a root other than the launch folder) guards nothing and looks nothing up", async ($, on) => {
+  const temp = '/private/var/folders/xy/T'
+  const w = world(on, LAUNCHED, { root: temp, paths: { '/': '/', [temp]: temp } })
+  expect(denial(await write($, '/repo/src/a.ts'))).toBeUndefined()
+  expect(denial(await edit($, `${temp}/a.ts`))).toBeUndefined()
+  expect(await denials($, ['git commit -m x', 'tk close x-ab12'])).toStrictEqual([
+    ['git commit -m x', undefined],
+    ['tk close x-ab12', undefined],
+  ])
+  expect(w.ran).toStrictEqual(['Write /repo/src/a.ts', `Edit ${temp}/a.ts`, 'Bash git commit -m x', 'Bash tk close x-ab12'])
+  expect(w.runs).toStrictEqual([])
+})
+
+test("the pane's own Claude, its root the launch folder, is guarded", async ($, on) => {
+  const w = world(on, LAUNCHED)
+  expect(denial(await write($, '/repo/src/a.ts'))).toContain('side agent for ticket x-ab12')
+  expect(denial(await bash($, 'git commit -m x'))).toBeDefined()
+  expect(w.ran).toStrictEqual([])
+})
+
 test('a session root at / has its .tmp/ at /.tmp/', async ($, on) => {
   const w = world(on, SIDE_ENV, { root: '/' })
   expect(denial(await write($, '/.tmp/a.md'))).toBeUndefined()
@@ -667,6 +692,12 @@ test('a failure beneath a call the guard let through is passed on, not made a re
     result = { threw: String(err) }
   }
   expect(result).toStrictEqual({ threw: expect.stringContaining('no implementation for tool.call') })
+  expect(w.ran).toStrictEqual([])
+})
+
+test('a side pane that names its launch folder is still refused when the guard fails on its root', async ($, on) => {
+  const w = world(on, { ...SIDE_ENV, TICKET_PANES_CWD: ROOT }, { isRootRefused: true })
+  expect(await write($, '/repo/.tmp/a.md')).toStrictEqual(FAILED)
   expect(w.ran).toStrictEqual([])
 })
 

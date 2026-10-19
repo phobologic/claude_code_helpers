@@ -28,14 +28,37 @@ let resolving: Promise<Role | undefined> | undefined
 
 // R4, from the variables the session was started with. An empty value counts as unset, as tk
 // treats its own; `herdrPaneId` is set only in herdr (`HERDR_ENV` is `1` and a pane id is set).
+// `ticket` is TICKET_PANES_TICKET once `isPaneClaude` has said the session is the pane's own.
 export function roleFrom(ticket: string | undefined, herdrEnv: string | undefined, herdrPaneId: string | undefined): Role {
   const found: Role = ticket ? { kind: 'side', sideTicket: ticket } : { kind: 'main' }
   if (herdrEnv === '1' && herdrPaneId) found.herdrPaneId = herdrPaneId
   return found
 }
 
+// R4: whether a session with TICKET_PANES_TICKET set is the side pane's own Claude. The launcher
+// (herdr.ts) names the folder it starts the pane in as TICKET_PANES_CWD, and the pane's Claude
+// has that folder as its root, after `/clear` and an in-pane `/resume` too. Every process the
+// pane's Claude starts inherits the variables, Claude Code's session-title run among them (a
+// `claude -p` in the temp folder), and none of those may act as the side session: above all, none
+// may record itself as the ticket's conversation (R3). So a session is not the pane's own when the
+// launcher named a folder and the session's root is known to be another. A launch folder unset or
+// empty (a pane started before the launcher named one) leaves R4 as it was. A root that cannot be
+// read leaves the session side, so the guard still holds; R3 cannot be written without the root.
+export function isPaneClaude(launchFolder: string | undefined, root: string | undefined): boolean {
+  return !launchFolder || root === undefined || root === launchFolder
+}
+
 function sameRole(a: Role, b: Role | undefined): boolean {
   return b !== undefined && a.kind === b.kind && a.sideTicket === b.sideTicket && a.herdrPaneId === b.herdrPaneId
+}
+
+// The session's root, or undefined when it cannot be read here.
+async function rootOf($: EngineInterface): Promise<string | undefined> {
+  try {
+    return await $.session.root()
+  } catch {
+    return undefined
+  }
 }
 
 // The role the environment gives, or undefined when it cannot be read here.
@@ -44,7 +67,9 @@ async function envRole($: EngineInterface): Promise<Role | undefined> {
     const ticket = await $.env.get('TICKET_PANES_TICKET')
     const herdrEnv = await $.env.get('HERDR_ENV')
     const herdrPaneId = await $.env.get('HERDR_PANE_ID')
-    return roleFrom(ticket, herdrEnv, herdrPaneId)
+    const launchFolder = await $.env.get('TICKET_PANES_CWD')
+    const root = await rootOf($)
+    return roleFrom(isPaneClaude(launchFolder, root) ? ticket : undefined, herdrEnv, herdrPaneId)
   } catch {
     return undefined
   }
