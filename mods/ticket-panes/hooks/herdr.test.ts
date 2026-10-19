@@ -424,6 +424,14 @@ test('E7: the new session id is uuidgen\'s, lowercased; when uuidgen fails nothi
   expect((await failure(launch(odd.$, 'x-ab12'))).message).toBe('uuidgen: uuidgen is not installed')
 })
 
+test('uuidgen that fails with nothing on stderr is named by its exit status', async () => {
+  const f = fake()
+  const run = f.$.process.run
+  f.$.process.run = async (argv, init) =>
+    argv[0] === '/usr/bin/uuidgen' ? { exitCode: 4, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } : run(argv, init)
+  expect((await failure(launch(f.$, 'x-ab12'))).message).toBe('uuidgen: exit status 4')
+})
+
 test('launch needs the main session\'s herdr pane and a tickets dir', async () => {
   const outside = fake({ env: { TICKETS_DIR: DIR } })
   expect((await failure(launch(outside.$, 'x-ab12'))).step).toBe('herdr pane')
@@ -444,6 +452,13 @@ test('AC: launch in the recorded pane starts there with no split, and the record
   const fresh = fake({ store: { [KEY]: WITH_ACTIVITY }, panes })
   expect(await launch(fresh.$, 'x-ab12')).toStrictEqual({ paneId: 'w1:p4' })
   expect(fresh.store.get(KEY)).toStrictEqual({ ...RECORD, paneId: 'w1:p4', paneTerminalId: 'term-4' })
+})
+
+test('a launch over another ticket\'s record records the launched ticket and drops the old activity part', async () => {
+  const stale: SideRecord = { ticketId: 'x-cd34', paneId: 'w1:p9', paneTerminalId: 'term-9', agentName: 'tp-x-cd34', activityPaneId: 'w1:p8', activityTerminalId: 'term-8', activityTicketId: 'x-cd34' }
+  const f = fake({ store: { [KEY]: stale } })
+  expect(await launch(f.$, 'x-ab12')).toStrictEqual({ paneId: 'w1:p2' })
+  expect(f.store.get(KEY)).toStrictEqual(RECORD)
 })
 
 test('in the recorded pane, a new conversation that fails leaves that pane and its record as they were', async () => {
