@@ -16,6 +16,11 @@
       "name": "blast-radius",
       "source": "./blast-radius",
       "description": "Asks before a command deletes or overwrites anything outside the repo, touches .git, or loses uncommitted work"
+    },
+    {
+      "name": "ticket-panes",
+      "source": "./ticket-panes",
+      "description": "Clickable tk tickets: a button row under replies that mention them opens a Claude agent for the ticket in a herdr side pane, or a read-only ticket pane"
     }
   ]
 }
