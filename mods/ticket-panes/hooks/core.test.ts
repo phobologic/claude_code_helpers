@@ -373,7 +373,7 @@ test('AC R1: a ticket found stays found; a missing one is looked for again only 
 })
 
 test('ticketFile is <tickets dir>/<id>.md for a tk id, and undefined for an id holding / or with no tickets dir', async () => {
-  const given = fake({ env: { TICKETS_DIR: '/data/tickets' }, root: '/r6' })
+  const given = fake({ env: { TICKETS_DIR: '/data/tickets' }, root: '/r9' })
   expect(await ticketFile(given.$, 'x-ab12')).toBe('/data/tickets/x-ab12.md')
   // It names the file whether or not it exists: no file is looked at.
   expect(given.seen.stats).toEqual([])
@@ -389,6 +389,30 @@ test('ticketFile is <tickets dir>/<id>.md for a tk id, and undefined for an id h
   const nowhere = fake({ root: '/r8' })
   expect(await ticketFile(nowhere.$, 'x-ab12')).toBeUndefined()
   expect(nowhere.seen.stats).toEqual(['/r8/.tickets', '/.tickets'])
+})
+
+test('a fresh look skips a cached miss; the miss it finds is cached for other looks, and a hit is kept', async () => {
+  const files: Record<string, Entry> = { '/r6/.tickets': { kind: 'dir' } }
+  const r6 = fake({ root: '/r6', files })
+  const looks = () => r6.seen.stats.filter(path => path.endsWith('.md'))
+  r6.clock.now = 2_000_000
+  expect(await isTicket(r6.$, 'x-ab12')).toBe(false)
+  r6.clock.now += 30_000
+  expect(await isTicket(r6.$, 'x-ab12', { fresh: true })).toBe(false)
+  expect(looks()).toHaveLength(2)
+  // The fresh miss is noted: 60 s after the first miss, but not after the fresh one, a look that
+  // is not fresh still waits.
+  files['/r6/.tickets/x-ab12.md'] = { kind: 'file' }
+  r6.clock.now += 30_000
+  expect(await isTicket(r6.$, 'x-ab12')).toBe(false)
+  expect(looks()).toHaveLength(2)
+  expect(await isTicket(r6.$, 'x-ab12', { fresh: true })).toBe(true)
+  expect(looks()).toHaveLength(3)
+  // Found by a fresh look, it is found for every look after, with no file looked at again.
+  delete files['/r6/.tickets/x-ab12.md']
+  expect(await isTicket(r6.$, 'x-ab12')).toBe(true)
+  expect(await isTicket(r6.$, 'x-ab12', { fresh: true })).toBe(true)
+  expect(looks()).toHaveLength(3)
 })
 
 test('no tickets dir, or a folder named like a ticket file, is no ticket', async () => {

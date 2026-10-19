@@ -85,16 +85,22 @@ export async function ticketFile($: EngineInterface, id: string): Promise<string
   return dir === undefined ? undefined : `${dir}/${id}.md`
 }
 
+// How a caller wants R1 asked. `fresh` looks for a file even when it was missed less than 60
+// seconds ago: for a caller that asks only when it has seen the file change (the side band's
+// redraw), where a cached miss would outlast the file's appearing. The miss it may find is noted
+// as any other, and a ticket found is kept as any other.
+export type TicketLook = { fresh?: boolean }
+
 // R1 for one token, with the file checks cached (E2): a ticket found stays found for the load; a
-// file not found is looked for again only once 60 seconds have passed. A token no tk id could be
-// (one with a `/`, say) is no ticket, and no file is looked for.
-export async function isTicket($: EngineInterface, token: string): Promise<boolean> {
+// file not found is looked for again only once 60 seconds have passed, or at once for a `fresh`
+// look. A token no tk id could be (one with a `/`, say) is no ticket, and no file is looked for.
+export async function isTicket($: EngineInterface, token: string, look: TicketLook = {}): Promise<boolean> {
   const file = await ticketFile($, token)
   if (file === undefined) return false
   if (found.has(file)) return true
   const now = await $.clock.now()
   const missed = missedAt.get(file)
-  if (missed !== undefined && now - missed < MISS_RECHECK_MS) return false
+  if (!look.fresh && missed !== undefined && now - missed < MISS_RECHECK_MS) return false
   if (await isFile($, file)) {
     found.add(file)
     return true

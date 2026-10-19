@@ -242,6 +242,17 @@ test('a fence closes only on a bare fence of its own kind, at least as long', ()
   expect([ticket.criteria, ticket.description]).toEqual(['## Acceptance Criteria\n- a\n```', '```md\n## Design\nPlain.'])
 })
 
+test('a close followed by spaces still closes the fence', () => {
+  const criteria = ['## Acceptance Criteria', '- It shows:', '  ```sh', '  # not a heading', '  ```  ', '- Done.']
+  const ticket = parseTicket('x-ab12', ['# T', ...criteria, '## Design', 'Plain.'].join('\n'))
+  expect([ticket.criteria, ticket.description]).toEqual([criteria.join('\n'), '## Design\nPlain.'])
+})
+
+test('a heading on the line after the criteria start ends them', () => {
+  const ticket = parseTicket('x-ab12', ['# T', '**Acceptance criteria**', '**Confidence**: 80', 'Plain.'].join('\n'))
+  expect([ticket.criteria, ticket.description]).toEqual(['**Acceptance criteria**', '**Confidence**: 80\nPlain.'])
+})
+
 // ---------- readTicket ----------
 // readTicket is called by no hook of this task, and a test's own hooks cannot call `$`, so it
 // runs against this stand-in. R1's caches (tickets.ts) carry over from test to test in this

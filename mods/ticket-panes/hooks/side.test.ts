@@ -459,6 +459,19 @@ test('after a compaction, the next counted prompt carries the current text again
   expect(w.contexts).toEqual([[note(V2)], [note(V2)]])
 })
 
+test("the engine's own compaction and a plugin's resend the text, as /compact does", async ($, on) => {
+  const w = world(on, SIDE_ENV)
+  on('session.compact', () => ({ messages: [{ role: 'user', text: 'a summary', toolUses: [] }] }))
+  await compose($)
+  change(w, 200, V2)
+  await say($)
+  await $.session.compact({ trigger: 'auto', messages: [{ role: 'user', text: 'what next?', toolUses: [] }] })
+  await say($)
+  await $.session.compact({ trigger: 'plugin', messages: [{ role: 'user', text: 'what next?', toolUses: [] }] })
+  await say($)
+  expect(w.contexts).toEqual([[note(V2)], [note(V2)], [note(V2)]])
+})
+
 test('after a compaction, a ticket as the last compose embedded it sends no note', async ($, on) => {
   const w = world(on, SIDE_ENV)
   on('session.compact', () => ({ messages: [{ role: 'user', text: 'a summary', toolUses: [] }] }))

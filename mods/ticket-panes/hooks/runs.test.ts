@@ -131,12 +131,16 @@ test('AC: exit 0 with output other than the run\'s JSON is an error', async () =
 })
 
 // One character at a time, so that letting any single shell character into the id is caught,
-// not hidden by another bad character in the same id.
-test('a run id with any one character outside letters, digits, `_` and `-` is an error', async () => {
-  const chars = ['\t', ...Array.from({ length: 95 }, (_, i) => String.fromCharCode(32 + i))].filter(c => !/[A-Za-z0-9_-]/.test(c))
+// not hidden by another bad character in the same id. Each one is tried as the id's first
+// character and inside it, since RUN_ID has a class for each; printable ASCII, then control
+// characters and a non-ASCII letter.
+test('a run id that starts with, or holds, any one character outside letters, digits, `_` and `-` is an error', async () => {
+  const printable = Array.from({ length: 95 }, (_, i) => String.fromCharCode(32 + i))
+  const chars = ['\t', '\r', '\v', '\f', '\0', '\x7f', 'é', ...printable].filter(c => !/[A-Za-z0-9_-]/.test(c))
+  const ids = chars.flatMap(c => [`${c}wf_1`, `wf_1${c}x`])
   const answers: [string, unknown][] = []
-  for (const c of chars) answers.push([c, await lookUp({ exit: { code: 0, stdout: JSON.stringify({ run_id: `wf_1${c}x`, state: 'running' }) } })])
-  expect(answers).toStrictEqual(chars.map(c => [c, { error: UNEXPECTED }]))
+  for (const id of ids) answers.push([id, await lookUp({ exit: { code: 0, stdout: JSON.stringify({ run_id: id, state: 'running' }) } })])
+  expect(answers).toStrictEqual(ids.map(id => [id, { error: UNEXPECTED }]))
 })
 
 test('any other exit names its code, and stderr\'s first line when there is one', async () => {

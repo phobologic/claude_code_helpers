@@ -82,6 +82,8 @@ export function registerBand(on: On): void {
   // this draw is what resolves it and starts the poll (bandReady). It reads the stored role so it
   // draws again once that is stored, and the mode and the ticket's version so it draws again when
   // either moves. It yields to a survey, and in a main session draws what the hooks beneath do.
+  // Its read is fresh: R1 keeps a miss for 60 seconds, and the poll bumps the version only once
+  // for a file that appears, so a cached miss would draw `file not found` long after it came.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const known = await role($)
     await read($, ROLE)
@@ -89,7 +91,7 @@ export function registerBand(on: On): void {
     if (e.props.hasSurvey || id === undefined) return next(e)
     const mode = await read($, MODE)
     await read($, VERSION)
-    const ticket = await readTicket($, id)
+    const ticket = await readTicket($, id, { fresh: true })
     const { Box } = $.ui.resolve(e)
     return (
       <Box flexDirection="column">
