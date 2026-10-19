@@ -55,7 +55,7 @@ const QUOTE_MARKER = /^\s*>/
 const LIST_MARKER = /^\s*(?:[-*+]|\d{1,9}[.)])[ \t]+/
 
 // How many blockquote markers lead `line`, at most `most`, and the line after them.
-function unquote(line: string, most = Number.POSITIVE_INFINITY): [number, string] {
+function unquote(line: string, most: number): [number, string] {
   let depth = 0
   let rest = line
   while (depth < most) {
@@ -67,14 +67,34 @@ function unquote(line: string, most = Number.POSITIVE_INFINITY): [number, string
   return [depth, rest]
 }
 
+// How many blockquote markers lead `line` and the line after them, with the list markers among
+// and after them taken off too, in any order and nesting (`- - ```, `> - > ```). A list marker
+// adds no depth; a quote marker adds one.
+function unmark(line: string): [number, string] {
+  let depth = 0
+  let rest = line
+  for (;;) {
+    const list = LIST_MARKER.exec(rest)
+    if (list !== null) {
+      rest = rest.slice(list[0].length)
+      continue
+    }
+    const quote = QUOTE_MARKER.exec(rest)
+    if (quote === null) return [depth, rest]
+    rest = rest.slice(quote[0].length)
+    depth += 1
+  }
+}
+
 // The lines of `text` outside fenced code blocks, fence lines left out, with their blockquote
 // markers taken off. A fence inside a blockquote (`> ```) is one too, at that quote's depth: a
 // line with fewer markers ends the quote, and the block with it (CommonMark). Inside a block
 // opened outside a quote, a `> ``` line is the block's text. A fence not closed runs to the end
 // of the text, as CommonMark has it (a reply still streaming shows the ids after it once it
-// closes). A fence on a list marker's line opens a block too, the marker before or after the
-// quote markers (`- > ```, `> - ```); the block's indented lines and close need no marker. Lines
-// end in LF or CRLF.
+// closes). A fence on a list marker's line opens a block too, with list and quote markers in any
+// order and nesting (`- > ```, `> - ```, `- - ```, `> - > ```); the block's indented lines and
+// close need no list marker, only the quote markers. Inside a block, a list marker's fence line
+// (`- ```) is the block's text. Lines end in LF or CRLF.
 function linesOutsideFences(text: string): string[] {
   const kept: string[] = []
   let fence = ''
@@ -88,8 +108,7 @@ function linesOutsideFences(text: string): string[] {
       }
       // The quote holding the block ended, and the block with it: the line is read afresh.
     }
-    const [depth, quoted] = unquote(raw.replace(LIST_MARKER, ''))
-    const line = quoted.replace(LIST_MARKER, '')
+    const [depth, line] = unmark(raw)
     fence = fenceOpenedBy(line)
     fenceDepth = depth
     if (fence === '') kept.push(line)

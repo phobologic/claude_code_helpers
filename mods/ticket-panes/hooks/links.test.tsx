@@ -168,6 +168,24 @@ test('a fence on a list marker line is a fence', () => {
   expect(ticketsIn('-```\nx-ab12\n```\nx-cd34')).toEqual(['x-ab12'])
 })
 
+test('a list marker may be tab-indented, take a tab after it, and have nine digits; a bare delimiter is none', () => {
+  expect(ticketsIn('\t- ```\n\t  x-ab12\n\t  ```\nx-cd34')).toEqual(['x-cd34'])
+  expect(ticketsIn('-\t```\n  x-ab12\n  ```\nx-cd34')).toEqual(['x-cd34'])
+  expect(ticketsIn('123456789. ```\n  x-ab12\n  ```\nx-cd34')).toEqual(['x-cd34'])
+  expect(ticketsIn(') ```\nx-ab12\n```\nx-cd34')).toEqual(['x-ab12'])
+  expect(ticketsIn('. ```\nx-ab12\n```\nx-cd34')).toEqual(['x-ab12'])
+  // Inside an open block, a list marker's fence line is the block's text.
+  expect(ticketsIn('```\n- ```\nx-ab12\n```\nx-cd34')).toEqual(['x-cd34'])
+})
+
+test('list and quote markers nest in any order on a fence line', () => {
+  expect(ticketsIn('- - - ```\n      x-ab12\n      ```\nx-cd34')).toEqual(['x-cd34'])
+  expect(ticketsIn('> - > ```\n>   > x-ab12\n>   > ```\nx-cd34')).toEqual(['x-cd34'])
+  expect(ticketsIn('- > - ```\n  >   x-ab12\n  >   ```\nx-cd34')).toEqual(['x-cd34'])
+  // A nested list line's ids count, its markers taken off.
+  expect(ticketsIn('- 1. > - x-ab12')).toEqual(['x-ab12'])
+})
+
 test('a tab-indented fence is a fence', () => {
   expect(ticketsIn('\t```\nx-ab12\n\t```\nx-cd34')).toEqual(['x-cd34'])
 })
