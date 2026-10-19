@@ -282,6 +282,7 @@ function roleWorld(env: Record<string, string> | null, stored?: Role) {
         return env[name]
       },
     },
+    session: { surfaces: async () => ['terminal'] },
     state: {
       get: async () => ({ value: stored ?? null, version: 0 }),
       set: async () => ({ isSet: true, version: 1 }),
