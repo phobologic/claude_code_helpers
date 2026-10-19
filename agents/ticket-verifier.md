@@ -31,7 +31,9 @@ with the Bash call's `timeout` set to 600000: broken code can make a test loop
 forever, and a Bash call that gives up leaves it running. At the limit,
 `run-capped` stops the command's whole process group and exits 124 with a
 line starting `run-capped: TIMEOUT`, which on broken code means the test
-caught it (it hung). Write probe scripts and notes (such as the text for `tk add-note`) with
+caught it (it hung). Run the unbroken tests through it once first: they must
+exit 0. A 127 or a `run-capped:` usage line means the check proved nothing.
+Write probe scripts and notes (such as the text for `tk add-note`) with
 the Write tool, in the worktree's `.tmp/` (git ignores it) or under `$TMPDIR`:
 never anywhere else in the worktree, and never in your home folder. Don't pass
 code to an interpreter inline (`perl -pi -e`, `python3 -c`, `node -e`): a

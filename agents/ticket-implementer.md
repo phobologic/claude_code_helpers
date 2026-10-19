@@ -154,6 +154,14 @@ A script that runs several mutants puts each test command through
 `run-capped` on its own, and its own Bash call still has 600000 ms in all,
 so split the mutants across calls to fit.
 
+Before breaking anything, run the covering tests once through `run-capped` on
+the unbroken code; they must exit 0. Exit 127 (`run-capped` or the test
+command not found) or a line starting `run-capped:` followed by the usage text
+means the run proved nothing: fix the command, and never count such a run as
+caught. On a mutant, only a test failure or 124 with a `run-capped: TIMEOUT`
+line counts. A script that runs several mutants stops at the first 127 or
+usage error instead of marking the mutant caught.
+
 Report every condition in `conditions` with the test that failed. Only claim
 what you ran. If a condition genuinely cannot be tested (a type-narrowing
 guard, say, or code in a layer the project verifies by running the product),

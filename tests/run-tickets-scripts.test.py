@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 from datetime import datetime, timedelta, timezone
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
@@ -379,6 +380,18 @@ with tempfile.TemporaryDirectory() as tmp:
           finish.ancestors(tree, 70) == {70, 60, 50, 1}, finish.ancestors(tree, 70))
     check("finish sweep: a parent loop in the process list ends the walk",
           finish.ancestors([(5, 6, "a"), (6, 5, "b")], 5) == {5, 6})
+    found = [pid for pid, _ in finish.leftover_processes(
+        [(201, 1, f"env PYTHONPATH=/opt/lib:{slot}/src python3 -m pytest")], finish.worktree_patterns([slot]), set())]
+    check("finish sweep: a worktree after : in a path list matches", found == [201], found)
+
+    # A process that exits between ps and the signal is stopped, not a permission failure.
+    gone = subprocess.Popen(["true"])
+    gone.wait()
+    errs = types.SimpleNamespace(errors=[])
+    entries = [{"pid": gone.pid, "command": "x", "action": "would stop"}]
+    finish.stop_processes(errs, entries)
+    check("finish sweep: a process gone before the signal is reported stopped, not failed",
+          entries[0]["action"] == "stopped" and errs.errors == [], entries)
 
 
 class FakePs:
@@ -499,6 +512,25 @@ with tempfile.TemporaryDirectory() as tmp:
     finally:
         wrapper.kill()
         kill_group_in(pidfile)
+
+    # Ctrl-C reaches only run-capped's own group, never the command's new session, and a
+    # closed terminal sends SIGHUP: both must take the command's group down too.
+    for sig in (signal.SIGINT, signal.SIGHUP):
+        os.remove(pidfile)
+        wrapper = subprocess.Popen([CAPPED, "60", "sh", "-c", f"echo $$ > {pidfile}; while :; do sleep 0.1; done"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            deadline = time.monotonic() + 10
+            while not (os.path.exists(pidfile) and Path(pidfile).read_text().strip()) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            leader = pids(pidfile)[0]
+            wrapper.send_signal(sig)
+            code = wrapper.wait(timeout=10)
+            check(f"run-capped: on {sig.name} it stops the command's group and exits {128 + sig}",
+                  code == 128 + sig and gone_soon(group_alive, leader), code)
+        finally:
+            wrapper.kill()
+            kill_group_in(pidfile)
 
 print(f"\n{failures} check(s) failed" if failures else "\nall checks passed")
 raise SystemExit(1 if failures else 0)

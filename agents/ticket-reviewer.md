@@ -173,14 +173,20 @@ exits 124 with a line starting `run-capped: TIMEOUT`. On a mutant, that means
 the tests hung on it: the mutant was caught. On the real code it is a
 failure. If the tests take more than 100 seconds on the real code, use three
 times their time instead of 300, up to 540, so the limit always fires before
-the Bash call gives up.
+the Bash call gives up. Before breaking anything, run the covering tests once
+through `run-capped` on the real code; they must exit 0. Exit 127
+(`run-capped` or the test command not found) or a line starting `run-capped:`
+followed by the usage text means the run proved nothing: fix the command, and
+never count such a run as caught. On a mutant, only a test failure or 124 with
+a `run-capped: TIMEOUT` line counts.
 
 Make each mutation with the Edit tool on the copy's file, never with
 `perl -pi`, `sed -i` or inline interpreter code. For more than a few mutants,
 Write a script (in `.tmp/` or under `$TMPDIR`) that applies each one in turn, runs the tests
 and restores the file, and run it once: one Edit, test and restore per mutant
 costs three turns each. In the script, each test command goes through
-`run-capped 300` on its own, and a 124 counts as caught; give the script's
+`run-capped 300` on its own, a 124 counts as caught, and a 127 or a usage
+error stops the script; give the script's
 Bash call a timeout of 600000, and keep it to as many mutants as fit in that
 time. When you add a test to prove a finding, add it in the copy the same
 way, and run it through `run-capped` on the real code and on the mutant.
