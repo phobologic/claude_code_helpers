@@ -5,6 +5,7 @@ import { SidePaneError, agentName, agentStatus, exitAgent, isIdle, launch, readS
 import type { Side, SideRecord } from './herdr'
 import { forgetRole } from './role'
 import { recordSession } from './sessions'
+import { decideSwitch, forgetSwitch } from './switch'
 
 // herdr.ts is called by no hook of this task, and a test's own `$` has no env, store, fs or clock,
 // so its functions run against a stand-in `$` (as core.test.ts does) whose `process.run` fakes
@@ -216,7 +217,12 @@ function steps(f: ReturnType<typeof fake>): string[] {
 }
 
 function splitArgv(cwd: string): string[] {
-  return ['herdr', 'pane', 'split', MAIN, '--direction', 'right', '--no-focus', '--cwd', cwd, '--env', 'TICKET_PANES_TICKET=x-ab12', '--env', `TICKETS_DIR=${DIR}`]
+  return ['herdr', 'pane', 'split', MAIN, '--direction', 'right', '--ratio', '0.7', '--no-focus', '--cwd', cwd, '--env', 'TICKET_PANES_TICKET=x-ab12', '--env', `TICKETS_DIR=${DIR}`]
+}
+
+// The `--ratio` of each side-pane split a stand-in saw.
+function splitRatios(f: ReturnType<typeof fake>): (string | undefined)[] {
+  return f.seen.runs.filter(argv => argv[2] === 'split').map(argv => argv[argv.indexOf('--ratio') + 1])
 }
 
 function startArgv(paneId: string, session: string[]): string[] {
@@ -369,6 +375,30 @@ test('a new conversation that starts on a question after a failed resume says bo
   expect(await launch(f.$, 'x-ab12')).toStrictEqual({ paneId: 'w1:p3', waiting: true })
   expect(f.seen.toasts).toEqual([STARTED_OVER, NEEDS_ANSWER])
   expect(f.store.get(KEY)).toStrictEqual({ ...RECORD, paneId: 'w1:p3', paneTerminalId: 'term-3' })
+})
+
+test('AC: every side-pane split leaves the main pane 0.7, so the side pane is 30% of its width: first open, switch and E13 retry', async () => {
+  // herdr's --ratio is the share the split pane keeps (checked live), so 0.7 makes the side 30%.
+  const first = fake()
+  await launch(first.$, 'x-ab12')
+  expect(splitRatios(first)).toEqual(['0.7'])
+  // A switch from an idle agent ends it and splits a fresh pane for the clicked ticket.
+  forgetSwitch()
+  const other: Side = { ticketId: 'x-cd34', paneId: 'w1:p2', paneTerminalId: 'term-2', agentName: 'tp-x-cd34', sideAgentLive: true }
+  const switching = fake({ store: { [KEY]: other }, panes: { 'w1:p2': { terminalId: 'term-2', agent: { name: 'tp-x-cd34', status: 'idle' } } } })
+  expect(await decideSwitch(switching.$, other, 'x-ab12')).toStrictEqual({ kind: 'opened', paneId: 'w1:p3' })
+  expect(steps(switching).filter(step => step === 'pane split')).toHaveLength(1)
+  expect(splitRatios(switching)).toEqual(['0.7'])
+  // The E13 retry splits twice, the failed resume's pane and the fresh one, at the same width.
+  const retry = fake({ folders: [WORKTREE], starts: [{ code: 'agent_exited' }] })
+  await resumable(retry)
+  await launch(retry.$, 'x-ab12')
+  expect(splitRatios(retry)).toEqual(['0.7', '0.7'])
+  // Retried in the recorded pane, the fresh split is the only one, at the same width.
+  const inPane = fake({ folders: [WORKTREE], store: { [KEY]: RECORD }, panes: { 'w1:p2': { terminalId: 'term-2' } }, starts: [{ code: 'agent_exited' }] })
+  await resumable(inPane)
+  await launch(inPane.$, 'x-ab12', { inPane: RECORD })
+  expect(splitRatios(inPane)).toEqual(['0.7'])
 })
 
 test('a split that fails throws a SidePaneError naming pane split, with nothing to close or record', async () => {
