@@ -111,20 +111,42 @@ async function herdr($: EngineInterface, args: readonly string[], timeoutMs: num
 }
 
 // Closes a pane as best it can: when the close fails there is nothing more to do.
-async function closePane($: EngineInterface, paneId: string): Promise<void> {
+export async function closePane($: EngineInterface, paneId: string): Promise<void> {
   await herdr($, ['pane', 'close', paneId])
 }
 
-// A recorded pane is ours only while herdr shows it with the terminal it had (E9). A look that
-// fails counts as not ours, so nothing we can't see is closed or focused.
-async function isOurs($: EngineInterface, paneId: string, terminalId: string): Promise<boolean> {
-  const ran = await herdr($, ['pane', 'get', paneId])
-  return text(field(ran.result, 'pane'), 'terminal_id') === terminalId
+// What a look in herdr found: `yes`, `no`, or, when herdr gave no answer of its own (the call
+// rejected or timed out, failed with another code, or printed no JSON naming what was asked), the
+// SidePaneError that names the look's step and why.
+export type Look = 'yes' | 'no' | SidePaneError
+
+// A look's answer as `step` read it: what `shown` found against `expected`, or `no` when herdr
+// failed with `notFound`, its own word that the thing is gone.
+function lookOf(step: string, ran: Ran, notFound: string, shown: string | undefined, expected: string): Look {
+  if (!ran.isOk) return ran.code === notFound ? 'no' : new SidePaneError(step, ran.reason)
+  if (shown === undefined) return new SidePaneError(step, 'herdr gave no answer it could read')
+  return shown === expected ? 'yes' : 'no'
 }
 
-async function isAgentIn($: EngineInterface, name: string, paneId: string): Promise<boolean> {
+// Whether a look found yes. Only herdr's own answers decide (E9): a look herdr did not answer
+// throws its SidePaneError, so nothing is closed, focused or dropped on a guess.
+export function isYes(look: Look): boolean {
+  if (look instanceof SidePaneError) throw look
+  return look === 'yes'
+}
+
+// A recorded pane is ours only while herdr shows it with the terminal it had (E9). It is not ours
+// when herdr shows another terminal there or says `pane_not_found`.
+export async function isOurs($: EngineInterface, paneId: string, terminalId: string): Promise<Look> {
+  const ran = await herdr($, ['pane', 'get', paneId])
+  return lookOf('pane get', ran, 'pane_not_found', text(field(ran.result, 'pane'), 'terminal_id'), terminalId)
+}
+
+// The agent is live in the pane only while herdr shows it there. It is not when herdr shows it in
+// another pane or says `agent_not_found`.
+async function isAgentIn($: EngineInterface, name: string, paneId: string): Promise<Look> {
   const ran = await herdr($, ['agent', 'get', name])
-  return text(field(ran.result, 'agent'), 'pane_id') === paneId
+  return lookOf('agent get', ran, 'agent_not_found', text(field(ran.result, 'agent'), 'pane_id'), paneId)
 }
 
 // ---------- the record ----------
@@ -170,26 +192,29 @@ function sidePart(record: SideRecord): SideRecord {
 // The side-pane record with each pane checked in herdr (E9), or undefined when there is none or its
 // side pane is no longer ours. A pane that is not ours is dropped from the record and never closed;
 // but when the side pane goes, the activity pane below it is closed while it is still ours.
-// `sideAgentLive` is true only when herdr also finds the agent in the side pane.
+// `sideAgentLive` is true only when herdr also finds the agent in the side pane. A look herdr does
+// not answer (`pane get` or `agent get`) throws its SidePaneError before the record is written or
+// any pane closed, so a herdr hiccup loses nothing.
 export async function readSide($: EngineInterface): Promise<Side | undefined> {
   const key = await sideKey($)
   const record = recordOf(await $.store.get(key))
   if (record === undefined) return undefined
-  const isSideOurs = await isOurs($, record.paneId, record.paneTerminalId)
+  const isSideOurs = isYes(await isOurs($, record.paneId, record.paneTerminalId))
   const activity = activityOf(record)
   const ourActivity =
-    activity !== undefined && (await isOurs($, activity.activityPaneId, activity.activityTerminalId)) ? activity : undefined
+    activity !== undefined && isYes(await isOurs($, activity.activityPaneId, activity.activityTerminalId)) ? activity : undefined
   if (!isSideOurs) {
     if (ourActivity !== undefined) await closePane($, ourActivity.activityPaneId)
     await $.store.delete(key)
     return undefined
   }
+  const sideAgentLive = isYes(await isAgentIn($, record.agentName, record.paneId))
   let kept = record
   if (activity !== undefined && ourActivity === undefined) {
     kept = sidePart(record)
     await $.store.set(key, kept)
   }
-  return { ...kept, sideAgentLive: await isAgentIn($, kept.agentName, kept.paneId) }
+  return { ...kept, sideAgentLive }
 }
 
 // Writes the side-pane record that `change` makes of the stored one (undefined when there is
@@ -285,11 +310,12 @@ function placed($: EngineInterface, id: string, pane: Pane, started: Ran): Launc
 }
 
 // Before the E13 retry closes a side pane: the recorded activity pane closes first while it is
-// still ours, and the record goes, since neither pane stays.
+// still ours, and the record goes, since neither pane stays. A look herdr does not answer leaves
+// the activity pane open, as one not ours: the side pane above it is closing anyway.
 async function dropRecord($: EngineInterface): Promise<void> {
   const key = await sideKey($)
   const activity = activityOf(recordOf(await $.store.get(key)))
-  if (activity !== undefined && (await isOurs($, activity.activityPaneId, activity.activityTerminalId))) {
+  if (activity !== undefined && (await isOurs($, activity.activityPaneId, activity.activityTerminalId)) === 'yes') {
     await closePane($, activity.activityPaneId)
   }
   await $.store.delete(key)

@@ -1,6 +1,6 @@
 import type { EngineInterface, On, ProcessRunResult } from 'claude-code'
 
-import { readSide, updateSide } from './herdr'
+import { closePane, readSide, updateSide } from './herdr'
 import type { Side, SideRecord } from './herdr'
 import { notify } from './notify'
 import type { Role } from './role'
@@ -25,7 +25,8 @@ type Pane = { paneId: string; terminalId: string }
 // ---------- herdr ----------
 // herdr.ts keeps its runner to itself, so this file reads herdr's answers the same way: JSON on
 // stdout (`{ result }`) when the call went through. A failure is only that here: the toast names
-// the step that failed (D17), not what herdr said.
+// the step that failed (D17), not what herdr said. Which panes are ours is herdr.ts's look alone
+// (E9), through readSide, and every pane this file closes goes through herdr.ts's closePane.
 
 function field(value: unknown, key: string): unknown {
   return typeof value === 'object' && value !== null ? (value as Record<string, unknown>)[key] : undefined
@@ -54,11 +55,6 @@ async function herdr($: EngineInterface, args: readonly string[]): Promise<{ res
     return undefined
   }
   return out.exitCode === 0 ? { result: field(parsed(out.stdout), 'result') } : undefined
-}
-
-// Closes a pane as best it can: when the close fails there is nothing more to do.
-async function closePane($: EngineInterface, paneId: string): Promise<void> {
-  await herdr($, ['pane', 'close', paneId])
 }
 
 // A new pane below the side pane, starting in the session root, focus left where it was. Throws
@@ -117,7 +113,9 @@ async function sync($: EngineInterface, id: string): Promise<void> {
   const run = await unfinishedRunFor($, id)
   if ('error' in run) throw new Error(run.error)
   // readSide gives the activity part only whole, and only while that pane is ours (E9): one whose
-  // terminal no longer matches is dropped from the record there and never closed.
+  // terminal no longer matches is dropped from the record there and never closed. A look herdr
+  // does not answer throws (`pane get: <reason>`, `agent get: <reason>`) with the record kept, and
+  // goes on to the toast.
   const side = await readSide($)
   if (side === undefined) return
   if ('runId' in run && side.activityTicketId === id) return

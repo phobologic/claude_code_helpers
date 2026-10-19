@@ -503,6 +503,24 @@ test('AC: before the E13 retry closes the side pane, the recorded activity pane 
   expect(other.store.get(KEY)).toStrictEqual({ ...RECORD, paneId: 'w1:p4', paneTerminalId: 'term-4' })
 })
 
+test('before the E13 retry, an activity pane look herdr does not answer leaves that pane open and the retry goes on', async () => {
+  for (const failed of ['rejects', BOOM] as const) {
+    const f = fake({
+      folders: [WORKTREE],
+      store: { [KEY]: WITH_ACTIVITY },
+      panes: { 'w1:p2': { terminalId: 'term-2' }, 'w1:p3': { terminalId: 'term-3' } },
+      starts: [{ code: 'agent_exited' }],
+      fails: { 'pane get w1:p3': failed },
+    })
+    await resumable(f)
+    expect(await launch(f.$, 'x-ab12', { inPane: WITH_ACTIVITY }), JSON.stringify(failed)).toStrictEqual({ paneId: 'w1:p4' })
+    expect(steps(f).slice(0, 3)).toEqual(['agent start w1:p2 --resume S1', 'pane get w1:p3', 'pane close w1:p2'])
+    expect(f.panes.has('w1:p3')).toBe(true)
+    expect(f.store.get(KEY)).toStrictEqual({ ...RECORD, paneId: 'w1:p4', paneTerminalId: 'term-4' })
+    expect(f.seen.toasts).toEqual([STARTED_OVER])
+  }
+})
+
 test('when the E13 retry cannot split a fresh pane, the record of the closed one goes too', async () => {
   const f = fake({
     folders: [WORKTREE],
@@ -529,11 +547,89 @@ test('AC: a recorded side pane whose terminal no longer matches is dropped from 
     expect(f.store.has(KEY)).toBe(false)
     expect([...f.panes.keys()]).toEqual(Object.keys(panes))
   }
-  // A look that fails counts as not ours.
-  const blind = fake({ store: { [KEY]: RECORD }, panes: { 'w1:p2': { terminalId: 'term-2' } }, fails: { 'pane get': 'rejects' } })
-  expect(await readSide(blind.$)).toBeUndefined()
-  expect(steps(blind)).toEqual(['pane get w1:p2'])
-  expect(blind.panes.has('w1:p2')).toBe(true)
+})
+
+// `f` with `herdr <group> <verb> <target>` answering `out` in place of the fake's own answer.
+function answering(f: ReturnType<typeof fake>, call: string, out: ProcessRunResult): void {
+  const run = f.$.process.run
+  f.$.process.run = async (argv, init) => {
+    if (argv.slice(1, 4).join(' ') === call) {
+      f.seen.runs.push([...argv])
+      return out
+    }
+    return run(argv, init)
+  }
+}
+
+function written(exitCode: number, stdout: string, stderr = ''): ProcessRunResult {
+  return { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false }
+}
+
+// Answers to a look that are not herdr's own word on what was asked: a call that rejects, another
+// error code, a usage line, output that is not JSON, or JSON with no string where the answer goes.
+// Each gives its reason.
+function unanswered(call: string): [string, World['fails'], ProcessRunResult | undefined, string][] {
+  const [group = '', verb = '', target = ''] = call.split(' ')
+  const label = `${group} ${verb}`
+  // Where the look reads its answer: the pane's terminal, or the agent's pane.
+  const odd = written(0, JSON.stringify({ id: 'cli', result: { [group]: { terminal_id: 3, pane_id: 3 } } }))
+  return [
+    ['rejects', { [call]: 'rejects' }, undefined, `process.run: herdr ${label} ran past its timeout`],
+    ['another code', { [call]: BOOM }, undefined, 'herdr failed (faked)'],
+    ['usage line', undefined, written(2, '', `usage: herdr ${label}\n`), `usage: herdr ${label}`],
+    ['not JSON', undefined, written(0, `${target}\n`), 'herdr gave no answer it could read'],
+    ['no string there', undefined, odd, 'herdr gave no answer it could read'],
+  ]
+}
+
+test('AC: a side pane look herdr does not answer throws pane get, with the record kept and nothing closed', async () => {
+  for (const [label, fails, out, reason] of unanswered('pane get w1:p2')) {
+    const f = fake({ store: { [KEY]: WITH_ACTIVITY }, panes: { 'w1:p2': { terminalId: 'term-2' }, 'w1:p3': { terminalId: 'term-3' } }, fails })
+    if (out !== undefined) answering(f, 'pane get w1:p2', out)
+    const error = await failure(readSide(f.$))
+    expect(error.step, label).toBe('pane get')
+    expect(error.message, label).toBe(`pane get: ${reason}`)
+    expect(steps(f), label).toEqual(['pane get w1:p2'])
+    expect(f.store.get(KEY), label).toStrictEqual(WITH_ACTIVITY)
+    expect(f.seen.writes, label).toEqual([])
+    expect([...f.panes.keys()], label).toEqual(['w1:p2', 'w1:p3'])
+  }
+})
+
+test('AC: with the side pane ours, an activity pane look herdr does not answer throws pane get and keeps the activity fields', async () => {
+  for (const [label, fails, out, reason] of unanswered('pane get w1:p3')) {
+    const f = fake({ store: { [KEY]: WITH_ACTIVITY }, panes: { 'w1:p2': { terminalId: 'term-2' }, 'w1:p3': { terminalId: 'term-3' } }, fails })
+    if (out !== undefined) answering(f, 'pane get w1:p3', out)
+    const error = await failure(readSide(f.$))
+    expect(error.message, label).toBe(`pane get: ${reason}`)
+    expect(steps(f), label).toEqual(['pane get w1:p2', 'pane get w1:p3'])
+    expect(f.store.get(KEY), label).toStrictEqual(WITH_ACTIVITY)
+    expect(f.seen.writes, label).toEqual([])
+    expect([...f.panes.keys()], label).toEqual(['w1:p2', 'w1:p3'])
+  }
+  // With the side pane gone, the activity pane is not closed on a guess, and the record stays.
+  const f = fake({ store: { [KEY]: WITH_ACTIVITY }, panes: { 'w1:p3': { terminalId: 'term-3' } }, fails: { 'pane get w1:p3': 'rejects' } })
+  expect((await failure(readSide(f.$))).step).toBe('pane get')
+  expect(steps(f)).toEqual(['pane get w1:p2', 'pane get w1:p3'])
+  expect(f.store.get(KEY)).toStrictEqual(WITH_ACTIVITY)
+  expect(f.panes.has('w1:p3')).toBe(true)
+})
+
+test('AC: with the side pane ours, an agent look herdr does not answer throws agent get, with the record unchanged', async () => {
+  const working = { terminalId: 'term-2', agent: { name: 'tp-x-ab12', status: 'working' } }
+  for (const [label, fails, out, reason] of unanswered('agent get tp-x-ab12')) {
+    // An activity pane no longer ours would be dropped from the record: the agent's look comes
+    // first, so a look that throws leaves even that unwritten.
+    const f = fake({ store: { [KEY]: WITH_ACTIVITY }, panes: { 'w1:p2': working, 'w1:p3': { terminalId: 'term-8' } }, fails })
+    if (out !== undefined) answering(f, 'agent get tp-x-ab12', out)
+    const error = await failure(readSide(f.$))
+    expect(error.step, label).toBe('agent get')
+    expect(error.message, label).toBe(`agent get: ${reason}`)
+    expect(steps(f), label).toEqual(['pane get w1:p2', 'pane get w1:p3', 'agent get tp-x-ab12'])
+    expect(f.store.get(KEY), label).toStrictEqual(WITH_ACTIVITY)
+    expect(f.seen.writes, label).toEqual([])
+    expect([...f.panes.keys()], label).toEqual(['w1:p2', 'w1:p3'])
+  }
 })
 
 test('AC: when the side part is dropped, the recorded activity pane is closed while it still matches', async () => {
