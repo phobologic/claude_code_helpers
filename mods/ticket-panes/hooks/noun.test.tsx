@@ -73,6 +73,9 @@ type World = {
   openAnswer: 'placed' | 'unplaced' | 'refused'
   // Whether a close of the pane is refused beneath the plugin.
   isCloseRefused: boolean
+  // The ids of the panes the engine lists as open (`$.ui.panes()`): added by an open that is not
+  // refused, dropped by a close that is not.
+  openPanes: Set<string>
   // Every command run, every path stat'd, each `$.ui.open` argument, each toast, each pane close
   // that reached the surface (refused or not), and each `paneTicket` written.
   runs: string[][]
@@ -148,6 +151,7 @@ function world(on: On, env: Record<string, string>, store: Record<string, unknow
     lookupHoldMs: 0,
     openAnswer: 'placed',
     isCloseRefused: false,
+    openPanes: new Set<string>(),
     runs: [],
     stats: [],
     opens: [],
@@ -188,12 +192,16 @@ function world(on: On, env: Record<string, string>, store: Record<string, unknow
   on('ui.open', ($, e) => {
     w.opens.push({ ...e })
     if (w.openAnswer === 'refused') return { deny: 'no pane can open here (faked)' }
+    w.openPanes.add(e.id)
     return { value: w.openAnswer === 'placed' ? { isPlaced: true } : { isPlaced: false, reason: NO_ROOM } }
   })
   on('ui.close', ($, e) => {
     w.closes.push(e.id)
-    return w.isCloseRefused ? { deny: 'the pane stays (faked)' } : { value: undefined }
+    if (w.isCloseRefused) return { deny: 'the pane stays (faked)' }
+    w.openPanes.delete(e.id)
+    return { value: undefined }
   })
+  on('ui.panes', () => ({ value: [...w.openPanes].map(id => ({ id, title: id, isShown: true, isFocused: false, isPlaced: true })) }))
   on('ui.toast', ($, e) => {
     w.toasts.push(e.text)
     return { value: undefined }
@@ -351,6 +359,20 @@ test('AC: a click while an open runs, its run lookup included, toasts still open
   expect(w.toasts).toEqual(['still opening x-ab12'])
 })
 
+test('a click while an open runs keeps the messages that open has collected', WITH_CALLER, async ($, on) => {
+  const w = world(on, MAIN_ENV)
+  w.startFailure = { code: 'agent_not_ready', message: 'the agent is waiting on a question (faked)' }
+  w.lookupHoldMs = 5000
+  const first = open($, 'x-ab12')
+  await w.time.settle()
+  expect(lookups(w)).toEqual(['lookup x-ab12'])
+  await open($, 'x-cd34')
+  expect(w.toasts).toEqual(['still opening x-ab12'])
+  await w.time.advance(5000)
+  await first
+  expect(w.toasts).toEqual(['still opening x-ab12', 'x-ab12 needs an answer in the side pane'])
+})
+
 test('a click while a read-only open waits on its pane toasts still opening and opens nothing', WITH_CALLER, async ($, on) => {
   let release = () => {}
   const held = new Promise<void>(resolve => {
@@ -495,6 +517,14 @@ test('a close refused beneath the plugin leaves the pane on its ticket', WITH_CA
   expect(w.toasts).toEqual(['Showing x-cd34 (replaced x-ab12)'])
 })
 
+test('a pane the engine dropped without a close (unload) is replaced by none', WITH_CALLER, async ($, on) => {
+  const w = world(on, { TICKETS_DIR: DIR })
+  await open($, 'x-ab12')
+  w.openPanes.delete(PANE_ID) // an unload: the pane is gone and ui.close never ran
+  await open($, 'x-cd34')
+  expect(w.toasts).toEqual([])
+})
+
 test('a close of another pane leaves the ticket pane alone', WITH_CALLER, async ($, on) => {
   const w = world(on, { TICKETS_DIR: DIR })
   await open($, 'x-ab12')
@@ -563,4 +593,13 @@ test('an id that is not a string is not a ticket, even when a file has its text 
   // The same name as a string is the ticket.
   await open($, '42')
   expect(w.opens).toStrictEqual([PANE_OPEN('42')])
+})
+
+test('an id whose text cannot be read is not a ticket, and the call resolves', WITH_CALLER, async ($, on) => {
+  const w = world(on, { TICKETS_DIR: DIR })
+  await open($, { toString: 1 })
+  expect(w.toasts).toEqual(['not a ticket: object'])
+  expect(w.stats).toEqual([])
+  await open($, 'x-ab12')
+  expect(w.opens).toStrictEqual([PANE_OPEN('x-ab12')])
 })

@@ -36,14 +36,29 @@ let opening: string | undefined
 
 // What a failure says, on one line: the first line of its message.
 function whatFailed(error: unknown): string {
-  return (error instanceof Error ? error.message : String(error)).trim().split('\n')[0] ?? ''
+  return (error instanceof Error ? error.message : label(error)).trim().split('\n')[0] ?? ''
 }
 
-// Shows ticket `id` in the read-only pane, replacing the ticket it showed (D9). The ticket is
-// written before the pane opens, so its first draw is of this ticket; an open that is refused
-// puts back the ticket shown before, so the pane, open or not, still says what it shows.
+// What a toast calls a value (an id, or a failure that is no Error): itself when a string, else
+// its text, or its type when it has none.
+function label(value: unknown): string {
+  if (typeof value === 'string') return value
+  try {
+    return String(value)
+  } catch {
+    return typeof value
+  }
+}
+
+// Shows ticket `id` in the read-only pane, replacing the ticket it showed (D9). The ticket shown
+// is read only while the engine lists the pane: a pane dropped by an unload (its draw threw, or
+// the plugin unloaded) never reaches the `ui.close` hook, so `paneTicket` alone can name a ticket
+// no pane shows. The ticket is written before the pane opens, so its first draw is of this ticket;
+// an open that is refused puts back the ticket shown before, so the pane, open or not, still says
+// what it shows.
 async function openPane($: EngineInterface, id: string): Promise<void> {
-  const shown = await read($, PANE_TICKET)
+  const isUp = (await $.ui.panes()).some(pane => pane.id === PANE_ID)
+  const shown = isUp ? await read($, PANE_TICKET) : null
   await update($, PANE_TICKET, () => id)
   let opened: UiOpenResult
   try {
@@ -77,7 +92,7 @@ async function openSide($: EngineInterface, id: string): Promise<boolean> {
 // that is not a string is none either: a regular expression would read it as its text.
 async function openTicket($: EngineInterface, id: unknown): Promise<void> {
   if (typeof id !== 'string' || !(await isTicket($, id))) {
-    notify($, `not a ticket: ${String(id)}`)
+    notify($, `not a ticket: ${label(id)}`)
     return
   }
   const known = await role($)
@@ -94,12 +109,12 @@ async function open($: EngineInterface, id: unknown): Promise<void> {
     $.ui.toast(`still opening ${opening}`)
     return
   }
-  opening = String(id)
+  opening = label(id)
   beginNotices()
   try {
     await openTicket($, id)
   } catch (error) {
-    notify($, `could not open ${String(id)}: ${whatFailed(error)}`)
+    notify($, `could not open ${label(id)}: ${whatFailed(error)}`)
   } finally {
     opening = undefined
     flushNotices($)
