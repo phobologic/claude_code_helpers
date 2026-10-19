@@ -172,10 +172,13 @@ export function registerSide(on: On): void {
   // A compaction of the main conversation summarizes the notes away, and the system prompt still
   // holds the text the last compose embedded: so the next counted prompt sends the text again when
   // it changed since. A compose that runs again moves the baseline itself; without one, the worst
-  // case is one extra note. A subagent's compaction (`agentId` set) and a skip change nothing.
+  // case is one extra note. A subagent's compaction (`agentId` set) and a skip change nothing. A
+  // precompute installs nothing, so the notes already sent stand: the compaction that installs its
+  // summary raises session.compact again, and that one moves the baseline.
   on('session.compact', {}, async ($, e, next) => {
     const result = await next(e)
-    if (e.agentId === undefined && result.skip === undefined) baseline = composedMtime
+    const isInstalled = e.trigger !== 'precompute' && result.skip === undefined
+    if (isInstalled && e.agentId === undefined) baseline = composedMtime
     return result
   })
 }

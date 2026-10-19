@@ -438,6 +438,27 @@ test('after a compaction, the next counted prompt carries the current text again
   expect(w.contexts).toEqual([[note(V2)], [note(V2)]])
 })
 
+test('after a compaction, a ticket as the last compose embedded it sends no note', async ($, on) => {
+  const w = world(on, SIDE_ENV)
+  on('session.compact', () => ({ messages: [{ role: 'user', text: 'a summary', toolUses: [] }] }))
+  await compose($)
+  await say($)
+  await $.session.compact({ trigger: 'manual', messages: [{ role: 'user', text: 'what next?', toolUses: [] }] })
+  await say($)
+  expect(w.contexts).toEqual([undefined, undefined])
+})
+
+test('a precompute installs nothing, so the note already sent stands', async ($, on) => {
+  const w = world(on, SIDE_ENV)
+  on('session.compact', () => ({ messages: [{ role: 'user', text: 'a summary', toolUses: [] }] }))
+  await compose($)
+  change(w, 200, V2)
+  await say($)
+  await $.session.compact({ trigger: 'precompute', messages: [{ role: 'user', text: 'what next?', toolUses: [] }] })
+  await say($)
+  expect(w.contexts).toEqual([[note(V2)], undefined])
+})
+
 test("a subagent's compaction or a skipped one leaves the main conversation's baseline", async ($, on) => {
   const w = world(on, SIDE_ENV)
   let isSkip = false
