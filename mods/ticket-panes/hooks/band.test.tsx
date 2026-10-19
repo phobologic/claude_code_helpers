@@ -420,6 +420,9 @@ test('a refused compact on /clear still lets the end reach the hooks beneath', a
   await say($)
   expect(w.prompts).toHaveLength(2)
   expect(hasNote(w.contexts[1])).toBe(true)
+  // The band's own reset survives the refusal: the new conversation's first counted prompt
+  // collapses it again.
+  expect(w.modes).toEqual(['collapsed', 'collapsed'])
 })
 
 // ---------- the poll ----------
