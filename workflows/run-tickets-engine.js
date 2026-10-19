@@ -50,7 +50,7 @@ for (const g of GATES) {
   const ok = typeof g === 'string' ? oneLine(g)
     : Boolean(g) && typeof g === 'object' && Object.keys(g).sort().join() === 'command,paths' && oneLine(g.command)
       && Array.isArray(g.paths) && g.paths.length > 0 && g.paths.every(p => oneLine(p) && !/^\.?\//.test(p))
-  if (!ok) throw new Error(`gate ${JSON.stringify(g)} must be a command string or {command, paths: [glob, ...]} with at least one path`)
+  if (!ok) throw new Error(`gate ${JSON.stringify(g)} must be a command string or {command, paths: [glob, ...]} with at least one path, each relative to the repo root (no leading / or ./)`)
 }
 const gateCommand = g => typeof g === 'string' ? g : g.command
 // With any gate scoped, the merge step asks run-tickets-gates which gates apply.

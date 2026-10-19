@@ -513,6 +513,30 @@ with tempfile.TemporaryDirectory() as tmp:
           "1 changed file(s)" in res.stderr, res.stderr)
     sh("git", "merge", "--abort", cwd=root)
 
+    # Several changed files are read as separate names. README.md sorts before mods/, so a
+    # list read as one string would not match mods/** and would skip its gate.
+    sh("git", "checkout", "-qb", "ticket/two", "main", cwd=root)
+    os.makedirs(os.path.join(root, "mods", "r"))
+    commit(root, "README.md", "x\n", "readme")
+    commit(root, "mods/r/x.ts", "x\n", "mod")
+    sh("git", "checkout", "-q", "main", cwd=root)
+    sh("git", "merge", "--no-ff", "--no-commit", "ticket/two", cwd=root)
+    res = subprocess.run([GATES, json.dumps(SAMPLE_GATES)], cwd=root, capture_output=True, text=True)
+    check("gates: each of several changed files is matched on its own",
+          res.stdout.splitlines() == ["make lint", "mods-check"] and "2 changed file(s)" in res.stderr,
+          res.stdout + res.stderr)
+    sh("git", "merge", "--abort", cwd=root)
+
+    # A name that is not UTF-8 still matches its gate. APFS refuses such names, so a fake git prints one.
+    fake = os.path.join(tmp, "fakegit")
+    os.makedirs(fake)
+    Path(fake, "git").write_text('#!/usr/bin/env python3\nimport sys\nsys.stdout.buffer.write(b"mods/\\xff.txt\\0")\n')
+    os.chmod(os.path.join(fake, "git"), 0o755)
+    res = subprocess.run([GATES, json.dumps(SAMPLE_GATES)], cwd=root, capture_output=True, text=True,
+                         env={**os.environ, "PATH": fake + os.pathsep + os.environ["PATH"]})
+    check("gates: a changed file whose name is not UTF-8 still runs its gate",
+          res.returncode == 0 and res.stdout.splitlines() == ["make lint", "mods-check"], res.stdout + res.stderr)
+
     res = subprocess.run([GATES, json.dumps(SAMPLE_GATES)], cwd=tmp, capture_output=True, text=True)
     check("gates: outside a git repo it fails instead of choosing from nothing", res.returncode == 1 and not res.stdout,
           res.stdout + res.stderr)

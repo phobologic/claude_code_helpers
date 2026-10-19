@@ -319,7 +319,7 @@ for (const bad of [{ command: 'x', paths: [] }, { command: 'x' }, { command: 'x'
   // The message names the gate and the shape, rather than a TypeError from deeper in.
   let message = ''
   try { await run({ ...base, slots: ['s1'], gates: [bad], tickets: [T('BG')] }) } catch (e) { message = e.message }
-  check(`a malformed gate is rejected: ${JSON.stringify(bad)}`, /^gate .* must be a command string or \{command, paths/.test(message), message)
+  check(`a malformed gate is rejected: ${JSON.stringify(bad)}`, /^gate .* must be a command string or \{command, paths.*relative to the repo root \(no leading \/ or \.\/\)/.test(message), message)
 }
 
 // A ticket found already merged records its own merge commit, not whatever HEAD is now.
