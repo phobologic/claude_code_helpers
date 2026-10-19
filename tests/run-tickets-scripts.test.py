@@ -270,7 +270,7 @@ def at(minutes):
     return (launch + timedelta(minutes=minutes)).isoformat(timespec="seconds")
 
 
-steps =[{"step": "impl", "round": 1, "started": at(2), "seconds": 600},
+steps = [{"step": "impl", "round": 1, "started": at(2), "seconds": 600},
          {"step": "review", "round": 1, "started": at(12), "seconds": 300},
          {"step": "impl", "round": 2, "started": at(18), "seconds": None},
          {"step": "review", "round": 2, "started": None, "seconds": None}]
@@ -520,12 +520,14 @@ class Watch:
         self.err = tempfile.TemporaryFile()
         self.proc = subprocess.Popen([STATUS, *args], cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=self.err)
         self.out = b""
+        self.clears = []  # when each screen clear arrived, by the monotonic clock
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
 
     def _read(self):
         while chunk := os.read(self.proc.stdout.fileno(), 65536):
             self.out += chunk
+            self.clears += [time.monotonic()] * chunk.count(CLEAR.encode())
 
     def rounds(self):
         """The rounds printed in full: each ends where the next clear begins."""
@@ -577,9 +579,17 @@ with tempfile.TemporaryDirectory() as tmp:
         w.wait_for(lambda rounds: len(rounds) >= 2)
         took = time.monotonic() - begun
         rounds = w.rounds()
+        first_out = w.out
+        clears = list(w.clears)
         code, err = w.interrupt()
     check("status --watch: each round clears the screen and prints the --ticket report", rounds[:2] == [once, once], rounds)
+    check("status --watch: nothing is written before the first clear", first_out.startswith(CLEAR.encode()),
+          first_out[:80])
     check("status --watch: rounds come the given number of seconds apart", took >= 1.9, f"third round after {took:.2f}s")
+    # Measured between clears, so process startup is left out and the bound holds under load.
+    gap = clears[2] - clears[1] if len(clears) >= 3 else None
+    check("status --watch: a round comes about N seconds after the last, not much later",
+          gap is not None and gap < 1.8, f"gap {gap}")
     check("status --watch: Ctrl-C exits 0 with nothing on stderr", (code, err) == (0, ""), f"{code} {err}")
 
     # The run appears while the watch is going, first with a journal caught mid-write.
@@ -609,9 +619,12 @@ def found(ticket, cwd, env):
 with tempfile.TemporaryDirectory() as tmp:
     root, home, env = status_repo(tmp)
     # wf_a and wf_c are running. wf_c was launched later but its record is older, so file age cannot pick it.
-    add_run(root, home, "wf_a", ["x-1", "x-3", "x-4"], launched="2030-03-01T10:00:00", record_mtime=utc("12:00"),
+    # wf_a has x-3 merged and x-8 blocked (its implementer failed).
+    add_run(root, home, "wf_a", ["x-1", "x-3", "x-4", "x-8"], launched="2030-03-01T10:00:00",
+            record_mtime=utc("12:00"),
             events=[{"type": "launched"}, started("a1", "impl x-1"), started("a3", "merge x-3"),
-                    finished("a3", {"result": "merged", "sha": "f00"}), started("a4", "impl x-4")])
+                    finished("a3", {"result": "merged", "sha": "f00"}), started("a4", "impl x-4"),
+                    started("a8", "impl x-8"), finished("a8", {"status": "failed"})])
     add_run(root, home, "wf_c", ["x-4"], launched="2030-03-01T11:00:00", record_mtime=utc("09:00"),
             events=[{"type": "launched"}, started("c1", "review x-4")])
     # wf_b was launched after both and has finished.
@@ -645,6 +658,17 @@ with tempfile.TemporaryDirectory() as tmp:
     check_output("status --find-ticket: a record with no run id yet is skipped, not a failure", found("x-6", root, env), "", 1)
     check_output("status --find-ticket: a run with no launch time loses to one that has it",
                  found("x-7", root, env), '{"run_id": "wf_g", "state": "running"}\n')
+    check_output("status --find-ticket: a ticket blocked in a running run is still held by it",
+                 found("x-8", root, env), '{"run_id": "wf_a", "state": "running"}\n')
+    code, out, err = run_status("wf_d", cwd=root, env=env)
+    check("status: a launching run (record, no journal yet) reports instead of crashing",
+          code == 0 and out.startswith("run-tickets wf_d  [launching]"), f"{code} {out[:80]!r} {err[-200:]!r}")
+
+    meta_dir = os.path.join(home, ".claude", "projects", "p", "s", "workflows")
+    Path(meta_dir, "wf_zz.json").write_text('{"workflowName": ')
+    check_output("status --find-ticket: a torn metadata file is skipped, not a failure",
+                 found("x-1", root, env), '{"run_id": "wf_a", "state": "running"}\n')
+    os.remove(os.path.join(meta_dir, "wf_zz.json"))
 
     good = journal_of(home, "wf_c").read_text()
     journal_of(home, "wf_c").write_text(good + '{"type": "star')
