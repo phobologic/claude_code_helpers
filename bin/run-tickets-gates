@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+# Merge-gate selection for /run-tickets: which gates a merge must run, from the files it changes.
+"""
+Usage: run-tickets-gates GATES_JSON [--files PATH ...]
+
+The run-tickets-engine merge step runs this in the integration worktree after
+`git merge --no-commit`, then runs exactly the commands it prints.
+
+GATES_JSON is the workflow's `gates` list. Each gate is either
+  "<command>"                          always runs
+  {"command": "<command>", "paths": [<glob>, ...]}
+                                       runs when the merge changes at least one
+                                       file matching any of its paths
+
+The changed files are `git diff -z --name-only --no-renames HEAD` in the current
+directory: what the merge in progress changes relative to the integration
+branch. --no-renames lists a moved file under both its old and new path, so a
+file moved out of a gate's paths still runs that gate. --files gives the list
+directly instead (for tests).
+
+Paths are globs relative to the repo root (no leading / or ./):
+  **     any number of characters, across folders (mods/** is everything under mods/)
+  *      any characters within one folder name
+  ?      one character within one folder name
+  dir/   a trailing slash means everything under dir/
+  a path with no wildcard matches that file, or everything under it if it is a folder
+Anything else, brackets included, matches itself.
+
+Prints the commands to run, one per line, in the order given; nothing when no
+gate applies. A summary of what was skipped goes to stderr. Exit 2 on a
+malformed gates list, 1 when git fails.
+"""
+
+import json
+import re
+import subprocess
+import sys
+
+GATE_KEYS = {"command", "paths"}
+
+
+def die(msg, code):
+    print(f"run-tickets-gates: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def text(value):
+    """A usable command or glob: a non-empty one-line string."""
+    return isinstance(value, str) and value.strip() != "" and "\n" not in value
+
+
+def problem(gate):
+    """Why a gate is malformed, or None."""
+    if isinstance(gate, str):
+        return None if text(gate) else "a command must be a non-empty single line"
+    if not isinstance(gate, dict):
+        return "a gate must be a command string or {command, paths}"
+    if set(gate) != GATE_KEYS:
+        return f"a scoped gate has exactly the keys command and paths, got {sorted(gate)}"
+    if not text(gate["command"]):
+        return "a command must be a non-empty single line"
+    paths = gate["paths"]
+    if not isinstance(paths, list) or not paths or not all(text(p) for p in paths):
+        return "paths must be a non-empty list of globs (a gate that always runs is a plain string)"
+    if any(p.startswith(("/", "./")) for p in paths):
+        return "paths are relative to the repo root: no leading / or ./"
+    return None
+
+
+def pattern(glob):
+    """Compile one path glob to a regex that matches whole repo-relative paths."""
+    if glob.endswith("/"):
+        glob += "**"
+    if not re.search(r"[*?]", glob):
+        return re.compile(re.escape(glob) + r"(?:/.*)?")
+    out, i = [], 0
+    while i < len(glob):
+        if glob.startswith("**/", i):
+            out.append(r"(?:.*/)?")
+            i += 3
+        elif glob.startswith("**", i):
+            out.append(r".*")
+            i += 2
+        elif glob[i] == "*":
+            out.append(r"[^/]*")
+            i += 1
+        elif glob[i] == "?":
+            out.append(r"[^/]")
+            i += 1
+        else:
+            out.append(re.escape(glob[i]))
+            i += 1
+    return re.compile("".join(out))
+
+
+def applies(gate, files):
+    if isinstance(gate, str):
+        return True
+    regexes = [pattern(p) for p in gate["paths"]]
+    return any(r.fullmatch(f) for f in files for r in regexes)
+
+
+def select(gates, files):
+    """The commands of the gates these changed files call for, in gate order."""
+    return [g if isinstance(g, str) else g["command"] for g in gates if applies(g, files)]
+
+
+def changed_files():
+    # -z: without it git quotes names it would escape (non-ASCII, ", tab, backslash), and no glob matches those.
+    res = subprocess.run(["git", "diff", "-z", "--name-only", "--no-renames", "HEAD"], capture_output=True)
+    if res.returncode != 0:
+        die(f"git diff failed: {(res.stderr or res.stdout).decode(errors='replace').strip()}", 1)
+    # The trailing NUL leaves an empty last entry.
+    return [name for name in res.stdout.decode("utf-8", "surrogateescape").split("\0") if name]
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help"):
+        die(f"usage\n{__doc__}", 2)
+    try:
+        gates = json.loads(argv[0])
+    except json.JSONDecodeError as e:
+        die(f"GATES_JSON is not valid JSON: {e}", 2)
+    if not isinstance(gates, list):
+        die("GATES_JSON must be a list of gates", 2)
+    for n, gate in enumerate(gates, 1):
+        why = problem(gate)
+        if why:
+            die(f"gate {n} ({json.dumps(gate)}): {why}", 2)
+    rest = argv[1:]
+    if rest and rest[0] == "--files":
+        files = rest[1:]
+    elif rest:
+        die(f"unknown argument {rest[0]!r}\n{__doc__}", 2)
+    else:
+        files = changed_files()
+
+    chosen = select(gates, files)
+    for command in chosen:
+        print(command)
+    skipped = [g["command"] for g in gates if not applies(g, files)]
+    summary = f"run-tickets-gates: {len(files)} changed file(s); {len(chosen)} of {len(gates)} gate(s) apply"
+    if skipped:
+        summary += f"; skipped (no changed file in their paths): {'; '.join(skipped)}"
+    print(summary, file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

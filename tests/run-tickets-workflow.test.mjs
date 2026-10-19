@@ -9,9 +9,14 @@
 // milliseconds so tickets really overlap, and returns a canned result unless the scenario scripts one. It also
 // records every prompt, and which tickets are in flight with which files.
 //
+// For scoped merge gates, it takes the run-tickets-gates command out of the merge prompt and runs the real
+// bin/run-tickets-gates (with python3) on a list of changed files, to see which gates that merge would run.
+//
 // Not covered: whether real agents follow their prompts, how the git commands in the merge prompt behave, and
 // anything the /run-tickets skill's lead does before or after the workflow.
+import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 const src = readFileSync(process.env.WF_SRC || new URL('../workflows/run-tickets-engine.js', import.meta.url), 'utf8')
   .replace('export const meta =', 'const meta =')
@@ -33,8 +38,10 @@ async function run(args, behave = () => ({})) {
   const sharedStarts = []
   const byId = Object.fromEntries(args.tickets.map(t => [t.id, t]))
   const rounds = {}
+  const checkPrompts = []
   const agent = async (prompt, opts) => {
     if (opts.label === 'integration check') {
+      checkPrompts.push(prompt)
       return { status: 'pass', commands: [], new_failures: [], preexisting_failures: [], summary: '' }
     }
     const [kind, id] = opts.label.split(' ')
@@ -65,7 +72,7 @@ async function run(args, behave = () => ({})) {
   const logs = []
   const fn = new AsyncFunction('args', 'agent', 'log', 'phase', src)
   const out = await fn(args, agent, m => logs.push(m), () => {})
-  return { out, calls, logs, sharedStarts }
+  return { out, calls, logs, sharedStarts, checkPrompts }
 }
 
 const base = { repoRoot: '/r', integrationBranch: 'run/x', integrationWorktree: '/r/int', findingsParent: 'f', backlogParent: 'b' }
@@ -236,6 +243,83 @@ const implDone = (sha, extra = {}) => ({ result: { status: 'done', head_sha: sha
   const { calls } = await run({ ...base, slots: ['s1'], tickets: [T('N', [], ['n'])] })
   const p = promptOf(calls, 'merge')
   check('a run without gates merges and commits directly', /git merge --no-ff ticket\/N -m /.test(p) && !p.includes('--no-commit'))
+}
+
+// ---------- scoped merge gates ----------
+// The merge prompt cannot know what a merge changes, so it hands the gates to bin/run-tickets-gates. These
+// checks take that command out of the prompt and run the real script on a list of changed files.
+
+const GATES_SCRIPT = fileURLToPath(new URL('../bin/run-tickets-gates', import.meta.url))
+const gateCall = prompt => (prompt.split('\n').find(l => l.trim().startsWith('run-tickets-gates ')) || '').trim()
+// What the merge step would run, for these changed files.
+function gatesFor(prompt, files) {
+  const call = gateCall(prompt)
+  if (!call) return null
+  const cmd = `python3 '${GATES_SCRIPT}'${call.slice('run-tickets-gates'.length)} --files ${files.map(f => `'${f}'`).join(' ')}`
+  return execFileSync('sh', ['-c', cmd], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).split('\n').filter(Boolean)
+}
+const scopedGates = [
+  'npm run lint',
+  { command: 'claude plugin validate mods/sample-mod', paths: ['mods/**'] },
+  { command: 'python3 mods/blast-radius/bin/judge.test.py', paths: ['mods/blast-radius/**'] },
+  { command: 'python3 tests/run-tickets-scripts.test.py', paths: ['bin/**', 'workflows/**', 'tests/**'] },
+]
+
+// A mods-only ticket's merge runs the mods gate and the unscoped one, nothing else.
+{
+  const { out, calls } = await run({ ...base, slots: ['s1'], gates: scopedGates, tickets: [T('MO', [], ['mods/sample-mod/'])] })
+  const p = promptOf(calls, 'merge')
+  const listed = p.split('\n').map(l => l.trim())
+  check('a scoped run\'s merge prompt asks run-tickets-gates which gates apply', gateCall(p) !== '', p)
+  check('it does not list the scoped commands to run unconditionally',
+    !scopedGates.slice(1).some(g => listed.includes(g.command)) && p.includes('no other command as a gate'), p)
+  const ran = gatesFor(p, ['mods/sample-mod/hooks/panel.ts'])
+  check('a mods-only merge runs only the unscoped gate and the mods gate',
+    JSON.stringify(ran) === JSON.stringify(['npm run lint', 'claude plugin validate mods/sample-mod']), JSON.stringify(ran))
+  check('a merge under bin/ runs the unscoped gate and the bin gate',
+    JSON.stringify(gatesFor(p, ['bin/tool'])) === JSON.stringify(['npm run lint', 'python3 tests/run-tickets-scripts.test.py']))
+  check('a scoped run records that in its policy', out.policy.mergeGates === 'scoped', JSON.stringify(out.policy))
+}
+
+// Commands with quotes and dollar signs reach the script intact.
+{
+  const gates = [{ command: `echo 'it''s' "$HOME" \`x\``, paths: ['a/**'] }, 'echo $(date)']
+  const { calls } = await run({ ...base, slots: ['s1'], gates, tickets: [T('QU', [], ['a'])] })
+  const ran = gatesFor(promptOf(calls, 'merge'), ['a/b'])
+  check('gate commands survive the shell quoting in the prompt', JSON.stringify(ran) === JSON.stringify([gates[0].command, gates[1]]), JSON.stringify(ran))
+}
+
+// Every attempt re-chooses from its own merged result, and the integration check runs every gate.
+{
+  const { calls, checkPrompts } = await run({ ...base, slots: ['s1'], gates: scopedGates, tickets: [T('RC', [], ['mods/x'])] },
+    (kind, id, round) => {
+      if (kind === 'impl') return implDone(`h${round}`)
+      return kind === 'merge' && round === 1 ? { result: { result: 'conflict', conflicted_files: ['mods/x'], detail: '' } } : {}
+    })
+  const merges = calls.filter(c => c.kind === 'merge')
+  check('a re-merge after a conflict chooses its gates again', merges.length === 2 && merges.every(m => gateCall(m.prompt) !== ''),
+    merges.map(m => m.prompt).join('\n---\n'))
+  const checkPrompt = checkPrompts[0] || ''
+  check('the integration check runs every gate, scoped or not',
+    scopedGates.every(g => checkPrompt.includes(typeof g === 'string' ? g : g.command)), checkPrompt)
+}
+
+// A run of plain-string gates keeps listing them, and every merge runs them all.
+{
+  const { out, calls } = await run({ ...base, slots: ['s1'], gates: ['npm test', 'npx tsc --noEmit'], tickets: [T('PS', [], ['p'])] })
+  const p = promptOf(calls, 'merge')
+  check('plain-string gates are listed and run without run-tickets-gates', !p.includes('run-tickets-gates') && /^ +npm test$/m.test(p) && /^ +npx tsc --noEmit$/m.test(p), p)
+  check('an unscoped run keeps the policy value earlier runs recorded', out.policy.mergeGates === true)
+}
+
+// A malformed gate is refused before anything runs.
+for (const bad of [{ command: 'x', paths: [] }, { command: 'x' }, { command: 'x', paths: ['a/**'], extra: 1 }, { command: '', paths: ['a'] },
+  { command: 'x', paths: [''] }, { command: 'x', paths: 'a/**' }, { command: 'x', paths: ['/a/**'] }, { command: 'x', paths: ['./a/**'] },
+  'two\nlines', '', null, 3]) {
+  // The message names the gate and the shape, rather than a TypeError from deeper in.
+  let message = ''
+  try { await run({ ...base, slots: ['s1'], gates: [bad], tickets: [T('BG')] }) } catch (e) { message = e.message }
+  check(`a malformed gate is rejected: ${JSON.stringify(bad)}`, /^gate .* must be a command string or \{command, paths.*relative to the repo root \(no leading \/ or \.\/\)/.test(message), message)
 }
 
 // A ticket found already merged records its own merge commit, not whatever HEAD is now.
