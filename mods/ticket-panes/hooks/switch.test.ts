@@ -427,16 +427,11 @@ test('AC: an activity pane that is ours closes before the side agent is exited',
   expect(steps(busy).slice(0, 5)).toEqual(['agent get tp-x-ab12', 'agent get tp-x-ab12', 'pane get w1:p3', 'pane close w1:p3', 'agent get tp-x-ab12'])
 })
 
-test('an activity pane that is not ours, or that herdr cannot show, is left open and the switch goes on', async () => {
+test('an activity pane that is not ours is left open and the switch goes on', async () => {
   const cases: [string, World][] = [
     ['another terminal', { panes: sidePanes('idle', { 'w1:p3': { terminalId: 'term-8' } }) }],
+    // herdr says pane_not_found.
     ['gone', { panes: sidePanes('idle') }],
-    ['refused', { panes: sidePanes('idle', ACTIVITY_PANE), fails: { 'pane get': BOOM } }],
-    ['rejected', { panes: sidePanes('idle', ACTIVITY_PANE), fails: { 'pane get': 'rejects' } }],
-    // A failed exit status counts as failed, whatever it printed.
-    ['exit 1', { panes: sidePanes('idle', ACTIVITY_PANE), paneGets: { 'w1:p3': { exitCode: 1, stdout: answer({ pane: { pane_id: 'w1:p3', terminal_id: 'term-3' } }).stdout } } }],
-    ['not JSON', { panes: sidePanes('idle', ACTIVITY_PANE), paneGets: { 'w1:p3': { exitCode: 0, stdout: 'pane w1:p3\n' } } }],
-    ['no terminal', { panes: sidePanes('idle', ACTIVITY_PANE), paneGets: { 'w1:p3': { exitCode: 0, stdout: answer({ pane: { pane_id: 'w1:p3', terminal_id: 3 } }).stdout } } }],
   ]
   for (const [label, world] of cases) {
     const f = fake(world)
@@ -444,6 +439,42 @@ test('an activity pane that is not ours, or that herdr cannot show, is left open
     expect(steps(f).slice(0, 3), label).toEqual(['agent get tp-x-ab12', 'pane get w1:p3', 'agent get tp-x-ab12'])
     expect(steps(f), label).not.toContain('pane close w1:p3')
     expect(f.panes.has('w1:p2'), label).toBe(false)
+  }
+})
+
+test('AC: an activity pane look herdr does not answer stops the switch: nothing is closed and the record stays', async () => {
+  const cases: [string, World, string][] = [
+    ['refused', { panes: sidePanes('idle', ACTIVITY_PANE), fails: { 'pane get': BOOM } }, 'herdr failed (faked)'],
+    ['rejected', { panes: sidePanes('idle', ACTIVITY_PANE), fails: { 'pane get': 'rejects' } }, 'process.run: herdr pane get ran past its timeout'],
+    // A failed exit status with no error of herdr's is no answer, whatever it printed.
+    [
+      'exit 1',
+      { panes: sidePanes('idle', ACTIVITY_PANE), paneGets: { 'w1:p3': { exitCode: 1, stdout: answer({ pane: { pane_id: 'w1:p3', terminal_id: 'term-3' } }).stdout } } },
+      'exit status 1',
+    ],
+    ['not JSON', { panes: sidePanes('idle', ACTIVITY_PANE), paneGets: { 'w1:p3': { exitCode: 0, stdout: 'pane w1:p3\n' } } }, 'herdr gave no answer it could read'],
+    [
+      'no terminal',
+      { panes: sidePanes('idle', ACTIVITY_PANE), paneGets: { 'w1:p3': { exitCode: 0, stdout: answer({ pane: { pane_id: 'w1:p3', terminal_id: 3 } }).stdout } } },
+      'herdr gave no answer it could read',
+    ],
+  ]
+  const record: SideRecord = { ...RECORD, activityPaneId: 'w1:p3', activityTerminalId: 'term-3', activityTicketId: 'x-ab12' }
+  for (const [label, world, reason] of cases) {
+    const f = fake(world)
+    f.store.set(KEY, record)
+    const thrown = await decideSwitch(f.$, WITH_ACTIVITY, 'x-cd34').then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    expect(thrown, label).toBeInstanceOf(SidePaneError)
+    expect((thrown as SidePaneError).step, label).toBe('pane get')
+    expect((thrown as SidePaneError).message, label).toBe(`pane get: ${reason}`)
+    // The look is the last step: the side agent is not exited, and no pane closes or opens.
+    expect(steps(f), label).toEqual(['agent get tp-x-ab12', 'pane get w1:p3'])
+    expect([...f.panes.keys()], label).toEqual(['w1:p2', 'w1:p3'])
+    expect(f.store.get(KEY), label).toStrictEqual(record)
+    expect(f.seen.writes, label).toEqual([])
   }
 })
 

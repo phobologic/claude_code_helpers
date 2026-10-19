@@ -397,7 +397,7 @@ test('AC: a live agent named for the ticket outside the record is focused, nothi
       {
         store: { [KEY]: CD34 },
         panes: { 'w1:p2': { terminalId: 'term-2', agent: { name: 'tp-x-cd34', status: 'working' } }, 'w3:p5': THEIRS },
-        instead: { 'agent get': { rejects: new Error('process.run: herdr agent get ran past its timeout') } },
+        instead: { 'agent get': refusal('agent_not_found', 'agent target tp-x-cd34 not found') },
       },
       'w3:p5',
     ],
@@ -439,10 +439,11 @@ test('a side agent herdr lists in its pane but agent get missed stops the click 
   ]
   for (const [label, record, sessions] of cases) {
     const live: FakePane = { terminalId: 'term-2', agent: { name: record.agentName, status: 'working' } }
+    // herdr's agent get says not found, but its list shows the agent there.
     const f = fake({
       store: { [KEY]: record, ...sessions },
       panes: { 'w1:p2': live },
-      instead: { 'agent get': { rejects: new Error('process.run: herdr agent get ran past its timeout') } },
+      instead: { 'agent get': refusal('agent_not_found', `agent target ${record.agentName} not found`) },
     })
     const error = await failure(openSidePane(f.$, 'x-ab12'))
     expect(error.step, label).toBe('agent get')
@@ -450,6 +451,17 @@ test('a side agent herdr lists in its pane but agent get missed stops the click 
     expect(changes(f), label).toEqual([])
     expect(f.panes.get('w1:p2'), label).toStrictEqual(live)
     expect(f.store.get(KEY), label).toStrictEqual(record)
+    // An agent get herdr does not answer at all stops the click in readSide, before the list.
+    const blind = fake({
+      store: { [KEY]: record, ...sessions },
+      panes: { 'w1:p2': live },
+      instead: { 'agent get': { rejects: new Error('process.run: herdr agent get ran past its timeout') } },
+    })
+    const unanswered = await failure(openSidePane(blind.$, 'x-ab12'))
+    expect(unanswered.message, label).toBe('agent get: process.run: herdr agent get ran past its timeout')
+    expect(steps(blind), label).toEqual(['pane get w1:p2', `agent get ${record.agentName}`])
+    expect(changes(blind), label).toEqual([])
+    expect(blind.store.get(KEY), label).toStrictEqual(record)
   }
 })
 
