@@ -64,7 +64,7 @@ const FINDING = [
   '**Files**: src/cache.ts:12',
   '**Description**: entries never expire.',
   '**Acceptance criteria**',
-  '- WHEN an entry is older than a minute THEN it is read again',
+  '- WHEN entry #2 is older than a **minute** THEN it is read again',
   '**--max-age** keeps its meaning',
   '**Confidence**: 80',
   '',
@@ -84,7 +84,7 @@ const FINDING = [
   '',
 ].join('\n')
 
-const FINDING_CRITERIA = '**Acceptance criteria**\n- WHEN an entry is older than a minute THEN it is read again\n**--max-age** keeps its meaning'
+const FINDING_CRITERIA = '**Acceptance criteria**\n- WHEN entry #2 is older than a **minute** THEN it is read again\n**--max-age** keeps its meaning'
 const FINDING_DESCRIPTION = '**Files**: src/cache.ts:12\n**Description**: entries never expire.\n**Confidence**: 80'
 const FINDING_NOTES = [
   '**2030-03-02T09:00:00Z**\n\nACCEPTANCE CRITERIA: restated for the fix\n- WHEN the clock moves THEN entries expire',
@@ -115,12 +115,13 @@ test('E18: bold-line criteria end at the next bold line, not at a bold flag; not
 })
 
 test('E18: a criteria heading of any level or case, or a criteria: line, starts the criteria; a # heading ends them', () => {
-  const heading = parseTicket('x-ab12', ['# T', '', 'Intro.', '', '### acceptance criteria', '- one', '', '## Design', 'Plain.'].join('\n'))
+  const heading = parseTicket('x-ab12', ['# T', '', 'Intro.', '', '### acceptance criteria', '- one', '', '  ## Design', 'Plain.'].join('\n'))
   expect(heading.criteria).toBe('### acceptance criteria\n- one')
-  expect(heading.description).toBe('Intro.\n\n## Design\nPlain.')
-  const line = parseTicket('x-ab12', ['# T', '', 'Intro.', '  Acceptance Criteria: it reads all three forms.', 'and keeps going.'].join('\n'))
+  expect(heading.description).toBe('Intro.\n\n  ## Design\nPlain.')
+  // Only at the start of a line, after any indent.
+  const line = parseTicket('x-ab12', ['# T', '', 'Intro: see the acceptance criteria: below.', '  Acceptance Criteria: it reads all three forms.', 'and keeps going.'].join('\n'))
   expect(line.criteria).toBe('Acceptance Criteria: it reads all three forms.\nand keeps going.')
-  expect(line.description).toBe('Intro.')
+  expect(line.description).toBe('Intro: see the acceptance criteria: below.')
 })
 
 test('E18: criteria are looked for only above ## Notes', () => {
@@ -137,9 +138,9 @@ test('a ticket with no notes keeps its last line and has none', () => {
   expect(ticket.notes).toEqual([])
 })
 
-test('a ## Notes heading with more words after it is part of the description', () => {
-  const ticket = parseTicket('x-ab12', ['# T', '', '## Notes for the reviewer', 'Look at the cache.'].join('\n'))
-  expect(ticket.description).toBe('## Notes for the reviewer\nLook at the cache.')
+test('a ## Notes heading with more words after it, or a ### Notes one, is part of the description', () => {
+  const ticket = parseTicket('x-ab12', ['# T', '', '## Notes for the reviewer', 'Look at the cache.', '### Notes', 'And the timer.'].join('\n'))
+  expect(ticket.description).toBe('## Notes for the reviewer\nLook at the cache.\n### Notes\nAnd the timer.')
   expect(ticket.notes).toEqual([])
 })
 
@@ -179,9 +180,11 @@ test('field values are trimmed, and only status, type, priority and parent are r
   expect([ticket.status, ticket.type, ticket.priority, ticket.parent]).toEqual(['closed', '', '0', ''])
 })
 
-test('a line that opens with a bold time and goes on is part of its note', () => {
-  const text = ['# T', '', '## Notes', '', '**2030-03-01T11:00:00Z**', '', 'It broke at', '**2030-03-01T09:00:00Z** and again later.'].join('\n')
-  expect(parseTicket('x-ab12', text).notes).toEqual(['**2030-03-01T11:00:00Z**\n\nIt broke at\n**2030-03-01T09:00:00Z** and again later.'])
+test('a line with a bold time and more text is part of its note', () => {
+  const text = ['# T', '', '## Notes', '', '**2030-03-01T11:00:00Z**', '', 'It broke at', '**2030-03-01T09:00:00Z** and again later,', 'first seen at **2030-03-01T08:00:00Z**'].join('\n')
+  expect(parseTicket('x-ab12', text).notes).toEqual([
+    '**2030-03-01T11:00:00Z**\n\nIt broke at\n**2030-03-01T09:00:00Z** and again later,\nfirst seen at **2030-03-01T08:00:00Z**',
+  ])
 })
 
 test('a file with CRLF or CR line endings reads as the same ticket', () => {
