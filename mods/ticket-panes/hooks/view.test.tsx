@@ -248,6 +248,15 @@ test('a tilde fence opens even when its info string holds a backtick', () => {
   expect([ticket.criteria, ticket.description]).toEqual([criteria.join('\n'), '## Design\nPlain.'])
 })
 
+test('a backtick fence whose info string holds a space still opens', () => {
+  // A backtick fence's info string may hold anything but a backtick, spaces included.
+  for (const open of ['```sh title="a"', '```js {1,3}']) {
+    const criteria = ['## Acceptance Criteria', '- It shows:', `  ${open}`, '  # not a heading', '  ```', '- Done.']
+    const ticket = parseTicket('x-ab12', ['# T', ...criteria, '## Design', 'Plain.'].join('\n'))
+    expect([ticket.criteria, ticket.description]).toEqual([criteria.join('\n'), '## Design\nPlain.'])
+  }
+})
+
 test('a fence closes only on a bare fence of its own kind, at least as long', () => {
   const blocks = [
     ['```md', '~~~', '```'],
