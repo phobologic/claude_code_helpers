@@ -135,7 +135,7 @@ The workflow's merge step and final integration check (both sonnet, medium effor
 
 ## Tests
 
-After changing `workflows/run-tickets-engine.js`, any `bin/run-tickets-*` script, or `bin/wrap-epic-plan`, run:
+After changing `workflows/run-tickets-engine.js`, any `bin/run-tickets-*` script, `bin/run-capped`, or `bin/wrap-epic-plan`, run:
 
 ```
 node tests/run-tickets-workflow.test.mjs
@@ -144,7 +144,7 @@ python3 tests/run-tickets-scripts.test.py
 python3 tests/wrap-epic-plan.test.py
 ```
 
-The workflow test runs the real script with fake agents and checks scheduling (critical-path order, shared files as a tiebreak that never idles a slot), resolution reviews, merge gates, halts, and what each agent's prompt carries. It cannot check real agent behavior or how the merge prompt's git commands behave. The planner test checks that prose in `**Files**:` lines never parses as a path and that decision wording is flagged without false positives. The scripts test runs `run-tickets-setup` and `run-tickets-finish` against throwaway git repos with a fake `tk`, and the wrap-epic-plan test checks the blocking/movable/unfinished classification and branch resolution the same way. Keep sample text in all of them generic: this repo is public (see Important Notes), so no text from other projects.
+The workflow test runs the real script with fake agents and checks scheduling (critical-path order, shared files as a tiebreak that never idles a slot), resolution reviews, merge gates, halts, and what each agent's prompt carries. It cannot check real agent behavior or how the merge prompt's git commands behave. The planner test checks that prose in `**Files**:` lines never parses as a path and that decision wording is flagged without false positives. The scripts test runs `run-tickets-setup` and `run-tickets-finish` against throwaway git repos with a fake `tk` (and real sleeper processes for finish's leftover-process sweep), checks that `run-capped`, the hard time limit agents put on test runs while a condition is broken, takes down a looping process group that ignores SIGTERM, and the wrap-epic-plan test checks the blocking/movable/unfinished classification and branch resolution the same way. Keep sample text in all of them generic: this repo is public (see Important Notes), so no text from other projects.
 
 ## Gate Tags
 

@@ -21,13 +21,19 @@ In order:
      An unmerged ticket's checks wait for the run that merges it, which carries
      them over when it skips straight to merge, so none is filed twice.
      Steps 2 and 3 are marked done in the run record and skipped on a re-run.
-  4. Worktrees are removed without --force, integration worktree first. After a
+  4. Leftover processes: any process whose command line names one of the run's
+     worktrees (the integration worktree or a slot, as a whole path) gets SIGTERM,
+     then SIGKILL if it is still running 3 seconds later. These are test runs an
+     agent gave up on, such as one looping on a deliberately broken condition.
+     Processes that name no worktree of this run are never touched, and neither are
+     this script and its parent processes.
+  5. Worktrees are removed without --force, integration worktree first. After a
      merge halt the integration worktree is left as is, and its status reported,
      unless it is clean with no merge in progress.
-  5. Slot placeholder branches are deleted once their worktree is gone, if they
+  6. Slot placeholder branches are deleted once their worktree is gone, if they
      hold no commits of their own. ticket/<id> branches of merged tickets are
      deleted once the integration branch contains them. Blocked tickets keep theirs.
-  6. The run record is deleted, unless a worktree was left in place.
+  7. The run record is deleted, unless a worktree was left in place.
 
 --dry-run reports the actions it would take and changes nothing.
 
@@ -44,6 +50,9 @@ Prints one JSON object:
                       ticket needs an owner's choice. The lead checks the claim.
   human_checks        [{id, check}]: criteria of merged tickets a person should check by hand
   disputed            [{source, check, ticket}]: the needs-human tickets filed
+  leftover_processes  [{pid, command, action}]: processes step 4 found; action is
+                      "stopped" (exited on SIGTERM), "killed" (needed SIGKILL),
+                      "would stop" (--dry-run), or "failed: <why>"
   findings, backlog, noted
                       ids across all tickets (findings includes out-of-scope
                       tickets the implementers filed)
@@ -63,14 +72,17 @@ import glob
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
+import time
 
 BIN = os.path.dirname(os.path.realpath(__file__))
 TK = os.environ.get("TK_SCRIPT", "tk")
 STATUS = os.environ.get("RUN_TICKETS_STATUS", os.path.join(BIN, "run-tickets-status"))
 PROJECTS = os.path.expanduser("~/.claude/projects")
 DISPUTED_RE = re.compile(r"(?:^|: )DISPUTED:")
+SWEEP_GRACE = 3
 
 
 def die(msg):
@@ -190,6 +202,109 @@ def record_tickets(r, report, args, result, tickets_dir):
             report["disputed"].append({"source": tid, "check": check, "ticket": new_id})
 
 
+def worktree_patterns(paths):
+    """Regexes that find each path, or its realpath, as a whole path in a command line.
+
+    The path must start the line or follow whitespace, a quote, = or :, and must end
+    the line or be followed by /, whitespace or a quote, so run-X-slot-1 never matches
+    run-X-slot-10 or a longer path that merely contains it.
+    """
+    forms = set()
+    for path in paths:
+        if path:
+            forms.update({path.rstrip("/"), os.path.realpath(path)})
+    return [re.compile(r"(?<![^\s'\"=:])" + re.escape(f) + r"(?=[/\s'\"]|$)") for f in sorted(forms)]
+
+
+def list_processes(r):
+    """[(pid, ppid, command)] for every process, or [] (with an error) if ps fails."""
+    res = r.read("ps", "-A", "-ww", "-o", "pid=", "-o", "ppid=", "-o", "command=")
+    if res.returncode != 0:
+        r.errors.append(f"ps: {(res.stderr or res.stdout).strip()}")
+        return []
+    procs = []
+    for line in res.stdout.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit():
+            procs.append((int(parts[0]), int(parts[1]), parts[2]))
+    return procs
+
+
+def ancestors(procs, pid):
+    """pid and every process above it."""
+    parent = {p: pp for p, pp, _ in procs}
+    chain = set()
+    while pid and pid not in chain:
+        chain.add(pid)
+        pid = parent.get(pid)
+    return chain
+
+
+def leftover_processes(procs, patterns, skip):
+    """[(pid, command)] of the processes whose command line a pattern matches, minus `skip`."""
+    return [(pid, cmd) for pid, _, cmd in procs
+            if pid not in skip and any(p.search(cmd) for p in patterns)]
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def send(r, pid, sig):
+    """True when the signal was sent or the process is already gone."""
+    try:
+        os.kill(pid, sig)
+    except ProcessLookupError:
+        pass
+    except PermissionError as e:
+        r.errors.append(f"kill -{sig.name} {pid}: {e.strerror}")
+        return False
+    return True
+
+
+def sweep_processes(r, report, args):
+    """Stop processes left running in this run's worktrees: SIGTERM, then SIGKILL."""
+    patterns = worktree_patterns([args.get("integrationWorktree"), *args.get("slots", [])])
+    procs = list_processes(r)
+    found = leftover_processes(procs, patterns, ancestors(procs, os.getpid()))
+    entries = [{"pid": pid, "command": cmd, "action": "would stop"} for pid, cmd in found]
+    report["leftover_processes"] = entries
+    if not r.dry:
+        stop_processes(r, entries)
+
+
+def stop_processes(r, entries):
+    """SIGTERM each entry's pid, SIGKILL whatever is left after SWEEP_GRACE; set each action."""
+    pending = []
+    for e in entries:
+        if send(r, e["pid"], signal.SIGTERM):
+            pending.append(e)
+        else:
+            e["action"] = "failed: no permission"
+    for e in still_running(pending, SWEEP_GRACE):
+        e["action"] = "killed" if send(r, e["pid"], signal.SIGKILL) else "failed: no permission"
+
+
+def still_running(entries, seconds):
+    """Waits up to `seconds` for the entries' processes to exit, marking each that does as
+    stopped, and returns the ones still running."""
+    deadline = time.monotonic() + seconds
+    pending = list(entries)
+    while pending and time.monotonic() < deadline:
+        time.sleep(0.1)
+        for e in pending:
+            if not alive(e["pid"]):
+                e["action"] = "stopped"
+        pending = [e for e in pending if e["action"] != "stopped"]
+    return pending
+
+
 def tree_clean(r, path):
     """No tracked changes and no merge in progress."""
     return (r.read("git", "status", "--porcelain", "--untracked-files=no", cwd=path).stdout.strip() == ""
@@ -282,7 +397,7 @@ def main(argv):
         "findings_parent": args.get("findingsParent"), "backlog_parent": args.get("backlogParent"),
         "merge_halted": result.get("mergeHalted"), "integration_status": [],
         "integration": result.get("integration"),
-        "tickets": [], "needs_decision": [], "human_checks": [], "disputed": [],
+        "tickets": [], "needs_decision": [], "human_checks": [], "disputed": [], "leftover_processes": [],
         "decided": [{"id": t["id"], "decision": t["decision"]} for t in args.get("tickets", []) if t.get("decision")],
         "findings": sorted({i for t in result.get("tickets", []) for i in (t.get("findings") or []) + (t.get("outOfScope") or [])}),
         "backlog": sorted({i for t in result.get("tickets", []) for i in t.get("backlog") or []}),
@@ -309,10 +424,13 @@ def main(argv):
             with open(record_path, "w") as f:
                 json.dump(record, f, indent=2)
 
-    # 4-5. Worktrees and branches.
+    # 4. Leftover processes, before the worktrees they run in are removed.
+    sweep_processes(r, report, args)
+
+    # 5-6. Worktrees and branches.
     clean_git(r, report, args, result)
 
-    # 6. Run record.
+    # 7. Run record.
     if record_path and not report["worktrees_left"] and not dry:
         os.remove(record_path)
         report["record_deleted"] = True

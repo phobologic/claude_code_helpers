@@ -162,12 +162,28 @@ added or changed (each guard, branch, filter predicate, comparison, boundary,
 and early return), break it: delete it, invert it, or shift the boundary by
 one. Run the tests that should cover it, note whether any fail, then restore.
 
+**Run every test command in the copy through `run-capped`**:
+`run-capped 300 <test command>`, with the Bash call's `timeout` set to
+600000. A broken condition can turn a test into an infinite loop, and a Bash
+call that gives up does not stop the processes it started: one such test was
+left looping for hours and grew until it filled swap. `run-capped` runs the
+command in its own process group and passes its exit status through. At the
+limit it stops the whole group (SIGTERM, then SIGKILL 2 seconds later) and
+exits 124 with a line starting `run-capped: TIMEOUT`. On a mutant, that means
+the tests hung on it: the mutant was caught. On the real code it is a
+failure. If the tests take more than 100 seconds on the real code, use three
+times their time instead of 300, up to 540, so the limit always fires before
+the Bash call gives up.
+
 Make each mutation with the Edit tool on the copy's file, never with
 `perl -pi`, `sed -i` or inline interpreter code. For more than a few mutants,
 Write a script (in `.tmp/` or under `$TMPDIR`) that applies each one in turn, runs the tests
 and restores the file, and run it once: one Edit, test and restore per mutant
-costs three turns each. When you add a test to prove a finding, add it in the
-copy the same way.
+costs three turns each. In the script, each test command goes through
+`run-capped 300` on its own, and a 124 counts as caught; give the script's
+Bash call a timeout of 600000, and keep it to as many mutants as fit in that
+time. When you add a test to prove a finding, add it in the copy the same
+way, and run it through `run-capped` on the real code and on the mutant.
 
 Your prompt lists the conditions the implementer says it broke and what caught
 each. Break every condition in the diff that is missing from that list, and at
