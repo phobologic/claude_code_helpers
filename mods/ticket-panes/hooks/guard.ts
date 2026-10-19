@@ -137,16 +137,12 @@ function scan(text: string, from: number, isInner: boolean, out: string[][]): nu
       endCommand()
       i += 1
     } else if (c === '&' || c === '|') {
-      // `&&`, `||`, `|&`; or one `&` or `|`. An `&` in a redirection (`2>&1`, `&>file`) is part
-      // of its word.
+      // `&&`, `||`, `|&` (each character ending the command in turn), or one `&` or `|`. An `&`
+      // in a redirection (`2>&1`, `&>file`) is part of its word.
       const before = text[i - 1] ?? ''
-      if (c === '&' && after !== '&' && (before === '>' || before === '<' || after === '>')) {
-        add(c)
-        i += 1
-      } else {
-        endCommand()
-        i += after === '&' || after === '|' ? 2 : 1
-      }
+      if (c === '&' && after !== '&' && (before === '>' || before === '<' || after === '>')) add(c)
+      else endCommand()
+      i += 1
     } else if (c === '(') {
       endCommand()
       depth += 1
@@ -243,8 +239,8 @@ export function deniedGitOf(words: readonly string[]): string | undefined {
   if (basename(cmd[0] ?? '') !== 'git') return undefined
   let at = 1
   while ((cmd[at] ?? '').startsWith('-')) at += GIT_VALUE_OPTIONS.has(cmd[at] ?? '') ? 2 : 1
-  const sub = cmd[at]
-  return sub !== undefined && GIT_DENIED.has(sub) ? sub : undefined
+  const sub = cmd[at] ?? ''
+  return GIT_DENIED.has(sub) ? sub : undefined
 }
 
 // A tk command that the allow-list does not let through by itself: how the refusal names it and,
@@ -279,8 +275,8 @@ function createParent(args: readonly string[]): string | undefined {
 
 // ---------- the refusals ----------
 
-function writeReason(ticket: string, tmp: string, path: unknown): string {
-  return `This is the side agent for ticket ${ticket}: it may write files only under \`.tmp/\` (${tmp}), and ${String(path)} is not there. Other changes are for the main session.`
+function writeReason(ticket: string, tmp: string, path: string): string {
+  return `This is the side agent for ticket ${ticket}: it may write files only under \`.tmp/\` (${tmp}), and ${path} is not there. Other changes are for the main session.`
 }
 
 function gitReason(ticket: string, sub: string): string {
@@ -334,10 +330,10 @@ async function placeOf($: EngineInterface, path: string): Promise<string | undef
 
 // The refusal for an Edit, Write or NotebookEdit on `path`, or undefined when the path lands
 // inside the session root's `.tmp/`, both resolved (D5). A root that can't be read throws.
-async function judgeWrite($: EngineInterface, ticket: string, path: unknown): Promise<string | undefined> {
+async function judgeWrite($: EngineInterface, ticket: string, path: string): Promise<string | undefined> {
   const root = await $.session.root()
   const base = await placeOf($, root)
-  const place = typeof path === 'string' ? await placeOf($, path) : undefined
+  const place = await placeOf($, path)
   const isInside = base !== undefined && place !== undefined && place.startsWith(`${base.replace(/\/$/, '')}/.tmp/`)
   return isInside ? undefined : writeReason(ticket, `${root.replace(/\/$/, '')}/.tmp/`, path)
 }

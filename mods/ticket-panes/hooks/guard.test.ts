@@ -139,6 +139,9 @@ test('commandsIn removes quotes and backslashes, and never splits inside quotes'
   expect(commandsIn('tk add-note x "a; tk close y" \'b && c\'')).toStrictEqual([['tk', 'add-note', 'x', 'a; tk close y', 'b && c']])
   expect(commandsIn('tk add-note x "say \\"hi\\" for \\$5 \\\\ \\n"')).toStrictEqual([['tk', 'add-note', 'x', 'say "hi" for $5 \\ \\n']])
   expect(commandsIn('a "line\\\nend"')).toStrictEqual([['a', 'lineend']])
+  expect(commandsIn('a "\\`b"')).toStrictEqual([['a', '`b']])
+  // A $ that opens no group is a character of its word.
+  expect(commandsIn('echo $HOME "$USER" x$')).toStrictEqual([['echo', '$HOME', '$USER', 'x$']])
   expect(commandsIn('a x\\;y\\ z')).toStrictEqual([['a', 'x;y z']])
   // A backslash and newline join the lines; a quoted empty word is still a word.
   expect(commandsIn('tk \\\nclose x')).toStrictEqual([['tk', 'close', 'x']])
@@ -222,6 +225,9 @@ test('tkUseOf names any other subcommand, super read as the one after it', () =>
   expect(tkUseOf(['tk', 'super', 'status', 'x-ab12', 'open'])).toStrictEqual({ label: 'tk status' })
   expect(tkUseOf(['tk', 'dep', 'x', 'y'])).toStrictEqual({ label: 'tk dep' })
   expect(tkUseOf(['tk', 'dep'])).toStrictEqual({ label: 'tk dep' })
+  // tree and cycle are allowed only after dep.
+  expect(tkUseOf(['tk', 'close', 'tree'])).toStrictEqual({ label: 'tk close' })
+  expect(tkUseOf(['tk', 'start', 'cycle'])).toStrictEqual({ label: 'tk start' })
   // super is read only right after tk.
   expect(tkUseOf(['tk', 'show', 'super'])).toBeUndefined()
 })
@@ -485,9 +491,12 @@ test('with no backlog epic, or none that can be read, a create is refused and th
     expect([out, deny]).toStrictEqual([out, expect.stringContaining('`tk backlog ensure` makes one')])
     expect(deny).toContain('`tk create ... --parent <backlog id>`, the id `tk backlog` prints')
   }
-  // An empty --parent is no parent, and an empty answer is no backlog epic.
+  // A create with no parent, or an empty one, is refused when there is no backlog epic either.
   w.backlog = { code: 0, stdout: '' }
   expect(denial(await bash($, 'tk create "t" --parent ""'))).toContain('`tk create` is refused')
+  expect(denial(await bash($, 'tk create "t"'))).toContain('`tk create` is refused')
+  w.backlog = { code: 1 }
+  expect(denial(await bash($, 'tk create "t"'))).toContain('`tk create` is refused')
   expect(w.ran).toStrictEqual([])
 })
 
