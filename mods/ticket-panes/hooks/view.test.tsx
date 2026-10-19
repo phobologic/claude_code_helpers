@@ -224,6 +224,39 @@ test('a line led by two backticks or two tildes opens no fence', () => {
   }
 })
 
+test('a line led by triple-backtick inline code opens no fence', () => {
+  // A backtick fence's info string holds no backtick (CommonMark), so this line is text.
+  const line = '```tk show``` prints the id.'
+  const above = parseTicket('x-ab12', ['# T', line, '', '## Acceptance Criteria', '- a', '', '## Design', 'Plain.'].join('\n'))
+  expect([above.criteria, above.description]).toEqual(['## Acceptance Criteria\n- a', `${line}\n\n## Design\nPlain.`])
+  const within = parseTicket('x-ab12', ['# T', '## Acceptance Criteria', '- a', line, '## Design', 'Plain.'].join('\n'))
+  expect([within.criteria, within.description]).toEqual([`## Acceptance Criteria\n- a\n${line}`, '## Design\nPlain.'])
+})
+
+test('a bare backtick fence, with no info string, opens a fence', () => {
+  for (const fence of ['```', '````']) {
+    const criteria = ['## Acceptance Criteria', '- It shows:', `  ${fence}`, '  # not a heading', `  ${fence}`, '- Done.']
+    const ticket = parseTicket('x-ab12', ['# T', ...criteria, '## Design', 'Plain.'].join('\n'))
+    expect([ticket.criteria, ticket.description]).toEqual([criteria.join('\n'), '## Design\nPlain.'])
+  }
+})
+
+test('a tilde fence opens even when its info string holds a backtick', () => {
+  // A tilde fence's info string may hold anything (CommonMark), so the # line stays in the block.
+  const criteria = ['## Acceptance Criteria', '- It shows:', '  ~~~sh `x`', '  # not a heading', '  ~~~', '- Done.']
+  const ticket = parseTicket('x-ab12', ['# T', ...criteria, '## Design', 'Plain.'].join('\n'))
+  expect([ticket.criteria, ticket.description]).toEqual([criteria.join('\n'), '## Design\nPlain.'])
+})
+
+test('a backtick fence whose info string holds a space still opens', () => {
+  // A backtick fence's info string may hold anything but a backtick, spaces included.
+  for (const open of ['```sh title="a"', '```js {1,3}']) {
+    const criteria = ['## Acceptance Criteria', '- It shows:', `  ${open}`, '  # not a heading', '  ```', '- Done.']
+    const ticket = parseTicket('x-ab12', ['# T', ...criteria, '## Design', 'Plain.'].join('\n'))
+    expect([ticket.criteria, ticket.description]).toEqual([criteria.join('\n'), '## Design\nPlain.'])
+  }
+})
+
 test('a fence closes only on a bare fence of its own kind, at least as long', () => {
   const blocks = [
     ['```md', '~~~', '```'],

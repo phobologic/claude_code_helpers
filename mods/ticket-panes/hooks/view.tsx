@@ -71,8 +71,10 @@ const CRITERIA_START = /^\s*(#+\s*acceptance criteria|\*\*acceptance criteria\*\
 // `**-` (a bold flag such as `**--watch**` opens no section).
 const NEXT_HEADING = /^\s*(#|\*\*(?!-))/
 // A line that opens a fenced code block: three or more backticks or tildes, after any indent. The
-// run is the fence a close must match.
-const FENCE = /^\s*(`{3,}|~{3,})/
+// run is the fence a close must match. A backtick fence's info string holds no backtick
+// (CommonMark), so a line led by inline code in triple backticks (```tk show``` ...) is text, not
+// a fence; a tilde fence's info string may hold anything.
+const FENCE = /^\s*(`{3,}(?=[^`]*$)|~{3,})/
 // A line that may close one: a run of backticks or tildes and nothing else (a close takes no info
 // string).
 const BARE_FENCE = /^\s*(`+|~+)\s*$/
