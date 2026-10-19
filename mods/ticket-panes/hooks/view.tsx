@@ -2,6 +2,7 @@ import type { ElementTable, EngineInterface, RenderElement } from 'claude-code'
 
 import type { TicketPanesBandMode } from '../types'
 import { isTicket, ticketsDir } from './tickets'
+import type { TicketLook } from './tickets'
 
 // A ticket drawn from its file, as the side session's band (band.tsx) and the read-only ticket
 // pane (noun.tsx) show it. `readTicket` reads the file tk keeps and parses it; `TicketView` draws
@@ -169,10 +170,11 @@ function oneLine(err: unknown): string {
 
 // Ticket `id` from `<tickets dir>/<id>.md` (R1), or the problem that kept it from being read:
 // `file not found` when R1 finds no such ticket or the file has gone since, else what failed. It
-// never rejects, so a draw that calls it always has something to draw.
-export async function readTicket($: EngineInterface, id: string): Promise<TicketRead> {
+// never rejects, so a draw that calls it always has something to draw. `look` goes to R1 as given
+// (a `fresh` look skips its cached misses).
+export async function readTicket($: EngineInterface, id: string, look: TicketLook = {}): Promise<TicketRead> {
   try {
-    if (!(await isTicket($, id))) return { id, problem: NOT_FOUND }
+    if (!(await isTicket($, id, look))) return { id, problem: NOT_FOUND }
     const path = `${await ticketsDir($)}/${id}.md`
     try {
       return parseTicket(id, await $.fs.read(path))

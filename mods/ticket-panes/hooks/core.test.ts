@@ -372,6 +372,30 @@ test('AC R1: a ticket found stays found; a missing one is looked for again only 
   expect(await isTicket(r1.$, 'x-ab12')).toBe(true)
 })
 
+test('a fresh look skips a cached miss; the miss it finds is cached for other looks, and a hit is kept', async () => {
+  const files: Record<string, Entry> = { '/r6/.tickets': { kind: 'dir' } }
+  const r6 = fake({ root: '/r6', files })
+  const looks = () => r6.seen.stats.filter(path => path.endsWith('.md'))
+  r6.clock.now = 2_000_000
+  expect(await isTicket(r6.$, 'x-ab12')).toBe(false)
+  r6.clock.now += 30_000
+  expect(await isTicket(r6.$, 'x-ab12', { fresh: true })).toBe(false)
+  expect(looks()).toHaveLength(2)
+  // The fresh miss is noted: 60 s after the first miss, but not after the fresh one, a look that
+  // is not fresh still waits.
+  files['/r6/.tickets/x-ab12.md'] = { kind: 'file' }
+  r6.clock.now += 30_000
+  expect(await isTicket(r6.$, 'x-ab12')).toBe(false)
+  expect(looks()).toHaveLength(2)
+  expect(await isTicket(r6.$, 'x-ab12', { fresh: true })).toBe(true)
+  expect(looks()).toHaveLength(3)
+  // Found by a fresh look, it is found for every look after, with no file looked at again.
+  delete files['/r6/.tickets/x-ab12.md']
+  expect(await isTicket(r6.$, 'x-ab12')).toBe(true)
+  expect(await isTicket(r6.$, 'x-ab12', { fresh: true })).toBe(true)
+  expect(looks()).toHaveLength(3)
+})
+
 test('no tickets dir, or a folder named like a ticket file, is no ticket', async () => {
   const nowhere = fake({ root: '/nowhere' })
   expect(await isTicket(nowhere.$, 'x-ab12')).toBe(false)
