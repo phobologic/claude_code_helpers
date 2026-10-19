@@ -468,6 +468,8 @@ check("gates: a path with no wildcard is that file or the folder's contents",
       matches("src/app", "src/app") and matches("src/app", "src/app/main.go") and not matches("src/app", "src/application"))
 check("gates: other characters are literal", matches("a.b/[x]", "a.b/[x]") and not matches("a.b/[x]", "aXb/[x]")
       and not matches("a.b/[x]", "a.b/x"))
+check("gates: other characters stay literal next to a wildcard", matches("a.b/[x]/*", "a.b/[x]/f")
+      and not matches("a.b/[x]/*", "aXb/[x]/f") and not matches("a.b/[x]/*", "a.b/x/f"))
 
 with tempfile.TemporaryDirectory() as tmp:
     root, env = new_repo(tmp)
@@ -501,6 +503,7 @@ with tempfile.TemporaryDirectory() as tmp:
           res.stdout + res.stderr)
 
 for bad in ('{"command": "x"}', "[3]", '[{"command": "x", "paths": []}]', '[{"command": "x"}]', '[{"command": "x", "path": ["a"]}]',
+            '[{"command": "x", "paths": ["a"], "extra": 1}]',
             '[{"command": "", "paths": ["a"]}]', '[{"command": "x", "paths": [""]}]', '[{"command": "x", "paths": "a"}]',
             '["a\\nb"]', '[""]', "not json"):
     res = subprocess.run([GATES, bad, "--files", "a"], capture_output=True, text=True)
