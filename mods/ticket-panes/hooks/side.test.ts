@@ -196,6 +196,27 @@ test('with no tickets folder at all, the section says so and keeps the rules', a
   expect(text).toContain("The ticket's file could not be read (no tickets folder was found). Run `tk show x-ab12` for its text.")
 })
 
+test('a side ticket no tk id could be names no file: the section says it could not be read, and nothing outside the tickets dir is read', async ($, on) => {
+  // Ahead of the world's own fs hooks, so it sees every look; the world registers the bare
+  // events, so these have a matcher.
+  const looked: string[] = []
+  on('fs.stat', {}, ($, e, next) => {
+    looked.push(`stat ${e.path}`)
+    return next(e)
+  })
+  on('fs.read', {}, ($, e, next) => {
+    looked.push(`read ${e.path}`)
+    return next(e)
+  })
+  const w = world(on, { TICKET_PANES_TICKET: '../x', TICKETS_DIR: DIR })
+  const text = (await compose($))[1]?.text ?? ''
+  expect(text).toContain('must not edit')
+  expect(text).toContain("The ticket's file could not be read (the id is not a tk id). Run `tk show ../x` for its text.")
+  await say($)
+  expect(w.contexts).toEqual([undefined])
+  expect(looked).toEqual([])
+})
+
 // ---------- ticket changes as notes (D16) ----------
 
 test('AC: a change between two counted prompts reaches the second as a note; no change, no note', async ($, on) => {

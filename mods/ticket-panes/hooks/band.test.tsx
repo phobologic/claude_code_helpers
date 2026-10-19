@@ -508,6 +508,15 @@ test('a version write the engine refuses is tried again on the next look', async
   expect(await texts(ui)).toContain('Narrow the widget')
 })
 
+test('a side ticket no tk id could be: the band says the file is not found, and neither it nor the poll looks at any file', async ($, on) => {
+  const w = world(on, { TICKET_PANES_TICKET: '../x', TICKETS_DIR: DIR })
+  const ui = await mount($)
+  expect(await texts(ui)).toEqual(['ticket ../x: file not found', BENEATH])
+  await w.time.advance(5000)
+  expect(w.periods).toBe(3)
+  expect(w.stats).toEqual([])
+})
+
 test('with no tickets folder, the band says the file is not found and the poll looks at no ticket file', async ($, on) => {
   const w = world(on, { TICKET_PANES_TICKET: 'x-ab12' })
   const ui = await mount($)
