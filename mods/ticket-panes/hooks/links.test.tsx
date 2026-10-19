@@ -139,6 +139,10 @@ test('only a bare run of the same character, at least as long, closes a fence', 
   expect(ticketsIn('```\nx-ab12\n  `````  \nx-cd34')).toEqual(['x-cd34'])
 })
 
+test('two backticks or two tildes open no fence', () => {
+  expect(ticketsIn('``\nx-ab12\n``\n~~\nx-cd34\n~~')).toEqual(['x-ab12', 'x-cd34'])
+})
+
 test('a fence never closed runs to the end of the text', () => {
   expect(ticketsIn('x-ab12\n```\nx-cd34\nx-ef56')).toEqual(['x-ab12'])
 })
