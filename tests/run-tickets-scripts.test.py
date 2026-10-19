@@ -526,8 +526,9 @@ class Watch:
 
     def _read(self):
         while chunk := os.read(self.proc.stdout.fileno(), 65536):
-            self.out += chunk
+            # clears first: the main thread decides from out that a clear has come, then reads clears.
             self.clears += [time.monotonic()] * chunk.count(CLEAR.encode())
+            self.out += chunk
 
     def rounds(self):
         """The rounds printed in full: each ends where the next clear begins."""
