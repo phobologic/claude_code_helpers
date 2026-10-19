@@ -36,17 +36,18 @@ let opening: string | undefined
 
 // What a failure says, on one line: the first line of its message.
 function whatFailed(error: unknown): string {
-  return (error instanceof Error ? error.message : label(error)).trim().split('\n')[0] ?? ''
+  return (error instanceof Error ? error.message : String(error)).trim().split('\n')[0] ?? ''
 }
 
-// What a toast calls a value (an id, or a failure that is no Error): itself when a string, else
-// its text, or its type when it has none.
-function label(value: unknown): string {
-  if (typeof value === 'string') return value
+// What a toast calls an id: itself when a string, else its text, or its type when it has none.
+// whatFailed keeps String: a hook that throws a value that is no Error is skipped, and the call
+// rejects with an Error (seen in the test kit).
+function label(id: unknown): string {
+  if (typeof id === 'string') return id
   try {
-    return String(value)
+    return String(id)
   } catch {
-    return typeof value
+    return typeof id
   }
 }
 
