@@ -70,7 +70,7 @@ test('AC R2: a running run that holds the ticket gives its run id; the lookup ru
 })
 
 test('a run id of the workflow\'s shape, with letters, digits, `_` and `-`, is the answer', async () => {
-  for (const runId of ['wf_82c81840-05c', 'A9-_z', '_1'])
+  for (const runId of ['wf_82c81840-05c', 'A9-_z', '_1', '9a', 'wF-1'])
     expect(await lookUp({ exit: { code: 0, stdout: `{"run_id": "${runId}", "state": "running"}` } })).toStrictEqual({ runId })
 })
 
@@ -128,6 +128,15 @@ test('AC: exit 0 with output other than the run\'s JSON is an error', async () =
   const answers: [string, unknown][] = []
   for (const stdout of outputs) answers.push([stdout, await lookUp({ exit: { code: 0, stdout } })])
   expect(answers).toStrictEqual(outputs.map(stdout => [stdout, { error: UNEXPECTED }]))
+})
+
+// One character at a time, so that letting any single shell character into the id is caught,
+// not hidden by another bad character in the same id.
+test('a run id with any one character outside letters, digits, `_` and `-` is an error', async () => {
+  const chars = ['\t', ...Array.from({ length: 95 }, (_, i) => String.fromCharCode(32 + i))].filter(c => !/[A-Za-z0-9_-]/.test(c))
+  const answers: [string, unknown][] = []
+  for (const c of chars) answers.push([c, await lookUp({ exit: { code: 0, stdout: JSON.stringify({ run_id: `wf_1${c}x`, state: 'running' }) } })])
+  expect(answers).toStrictEqual(chars.map(c => [c, { error: UNEXPECTED }]))
 })
 
 test('any other exit names its code, and stderr\'s first line when there is one', async () => {
