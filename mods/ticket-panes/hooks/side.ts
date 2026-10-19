@@ -21,6 +21,11 @@ let baseline: number | undefined
 // The mtime of the text the last compose of this load put in the system prompt: what a new
 // conversation after `/clear` or `/resume` starts from, unless compose runs again for it.
 let composedMtime: number | undefined
+// Whether a new session's first compose is still to come: from `session.start` (which a reload
+// does not raise) until a compose that is sent. The system prompt may be composed only when the
+// first request is built, after that prompt's `prompt.submit`; meanwhile no note is sent, as the
+// compose will carry the text itself. `/clear` does not set it: compose may not run again then.
+let isComposeDue = false
 // Whether the next counted prompt records this session as the ticket's (R3): so at start, after a
 // reload (recording the same id again is harmless), and after `/clear` or `/resume`.
 let isRecordDue = true
@@ -98,8 +103,10 @@ async function recordIfDue($: EngineInterface, id: string): Promise<void> {
 
 // The note for a counted prompt (D16): the ticket's current text when its file changed since the
 // agent was last given it, or when that is not known (after a reload); else undefined. Sending it
-// moves the baseline. A file that cannot be read sends nothing.
+// moves the baseline. A file that cannot be read sends nothing, and neither does a prompt that a
+// new session's first compose is still to follow.
 async function changeNote($: EngineInterface, id: string): Promise<string | undefined> {
+  if (isComposeDue) return undefined
   const ticket = await readTicket($, id)
   if (!('text' in ticket) || ticket.mtimeMs === baseline) return undefined
   baseline = ticket.mtimeMs
@@ -108,6 +115,13 @@ async function changeNote($: EngineInterface, id: string): Promise<string | unde
 
 // This module's hooks, registered by register.tsx.
 export function registerSide(on: On): void {
+  // A new session: its first compose is to come (see `isComposeDue`). register.tsx registers the
+  // bare `session.start`, so this one has a matcher too.
+  on('session.start', {}, ($, e, next) => {
+    isComposeDue = true
+    return next(e)
+  })
+
   // The side agent's rules and its ticket. Compose runs once per conversation, so it resolves the
   // role itself: a miss here would leave the agent without its rules for the whole conversation.
   // A render that measures the prompt and sends nothing (`analysis`, as `/context` does) leaves
@@ -120,6 +134,7 @@ export function registerSide(on: On): void {
     if (!e.traits.includes('analysis')) {
       composedMtime = 'text' in ticket ? ticket.mtimeMs : undefined
       baseline = composedMtime
+      isComposeDue = false
     }
     const section = { id: SECTION_ID, text: sectionText(known.sideTicket, ticket), scope: 'session' } as const
     return { sections: [...composed.sections, section] }

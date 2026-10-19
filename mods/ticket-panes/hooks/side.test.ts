@@ -76,9 +76,15 @@ function world(on: On, env: Record<string, string>, kept?: Role): World {
     w.contexts.push(e.context)
     return { text: e.text, context: e.context }
   })
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   on('ui.log', () => ({ value: undefined }))
   return w
+}
+
+// A new session starting, which a reload never raises.
+async function start($: Engine): Promise<void> {
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
 }
 
 async function compose($: Engine, traits: PromptComposeInput['traits'] = []): Promise<readonly PromptComposeSection[]> {
@@ -211,6 +217,33 @@ test('a slash command or a hidden prompt carries no note and leaves the change f
   expect(w.contexts[2]).toEqual([note(V2)])
 })
 
+test("a new session's first counted prompt, ahead of its first compose, carries no note: the compose brings the text", async ($, on) => {
+  const w = world(on, SIDE_ENV)
+  await start($)
+  await say($)
+  expect(w.contexts).toEqual([undefined])
+  expect((await compose($))[1]?.text).toContain(`<ticket-file>\n${V1}\n</ticket-file>`)
+  await say($)
+  change(w, 200, V2)
+  await say($)
+  expect(w.contexts).toEqual([undefined, undefined, [note(V2)]])
+})
+
+test('in a new session, /context ahead of the first compose leaves that compose due', async ($, on) => {
+  const w = world(on, SIDE_ENV)
+  await start($)
+  await compose($, ['analysis'])
+  await say($)
+  expect(w.contexts).toEqual([undefined])
+})
+
+test('a new session still records its first counted prompt, ahead of its first compose', async ($, on) => {
+  const w = world(on, SIDE_ENV)
+  await start($)
+  await say($)
+  expect(w.records).toEqual([{ key: KEY, value: { sessionId: 'S1', cwd: '/repo' } }])
+})
+
 test("after a reload, with no compose in this load, the first counted prompt sends the ticket's text", async ($, on) => {
   const w = world(on, SIDE_ENV)
   await say($)
@@ -260,6 +293,7 @@ test('a render that only measures the prompt (/context) shows the new text but s
 
 test("AC: after a note and then /clear, the first counted prompt carries the ticket's current text", async ($, on) => {
   const w = world(on, SIDE_ENV)
+  await start($)
   await compose($)
   change(w, 200, V2)
   await say($)
