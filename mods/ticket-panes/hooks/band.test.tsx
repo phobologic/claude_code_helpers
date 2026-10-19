@@ -481,6 +481,20 @@ test('a file that goes and comes back with its old mtime redraws each time', asy
   expect(w.versions).toEqual([1, 2])
 })
 
+// R1 keeps a miss for 60 seconds, and the poll bumps the version only once for a file that
+// appears: the band's read must look past the miss.
+test('AC: a ticket file missing at the first draw and back 1 s later is drawn within 5 s', async ($, on) => {
+  const w = world(on, SIDE_ENV)
+  w.ticket = undefined
+  const ui = await mount($)
+  expect(await texts(ui)).toEqual(['ticket x-ab12: file not found', BENEATH])
+  await w.time.advance(1000)
+  change(w, 200, V1)
+  await w.time.advance(5000)
+  expect(await texts(ui)).toContain('Widen the widget')
+  expect(w.versions).toEqual([1])
+})
+
 test('a version write the engine refuses is tried again on the next look', async ($, on) => {
   const w = world(on, SIDE_ENV)
   const ui = await mount($)
