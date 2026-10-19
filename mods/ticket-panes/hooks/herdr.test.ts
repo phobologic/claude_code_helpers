@@ -567,15 +567,16 @@ function written(exitCode: number, stdout: string, stderr = ''): ProcessRunResul
 
 // Answers to a look that are not herdr's own word on what was asked: a call that rejects, another
 // error code, a usage line, output that is not JSON, or JSON with no string where the answer goes.
-// Each gives its reason.
-function unanswered(call: string): [string, World['fails'], ProcessRunResult | undefined, string][] {
+// Each gives its reason. `failing` is the fake's `fails` key: every call of the kind, or only `call`.
+function unanswered(call: string, failing: 'kind' | 'call'): [string, World['fails'], ProcessRunResult | undefined, string][] {
   const [group = '', verb = '', target = ''] = call.split(' ')
   const label = `${group} ${verb}`
+  const key = failing === 'kind' ? label : call
   // Where the look reads its answer: the pane's terminal, or the agent's pane.
   const odd = written(0, JSON.stringify({ id: 'cli', result: { [group]: { terminal_id: 3, pane_id: 3 } } }))
   return [
-    ['rejects', { [call]: 'rejects' }, undefined, `process.run: herdr ${label} ran past its timeout`],
-    ['another code', { [call]: BOOM }, undefined, 'herdr failed (faked)'],
+    ['rejects', { [key]: 'rejects' }, undefined, `process.run: herdr ${label} ran past its timeout`],
+    ['another code', { [key]: BOOM }, undefined, 'herdr failed (faked)'],
     ['usage line', undefined, written(2, '', `usage: herdr ${label}\n`), `usage: herdr ${label}`],
     ['not JSON', undefined, written(0, `${target}\n`), 'herdr gave no answer it could read'],
     ['no string there', undefined, odd, 'herdr gave no answer it could read'],
@@ -583,7 +584,7 @@ function unanswered(call: string): [string, World['fails'], ProcessRunResult | u
 }
 
 test('AC: a side pane look herdr does not answer throws pane get, with the record kept and nothing closed', async () => {
-  for (const [label, fails, out, reason] of unanswered('pane get w1:p2')) {
+  for (const [label, fails, out, reason] of unanswered('pane get w1:p2', 'kind')) {
     const f = fake({ store: { [KEY]: WITH_ACTIVITY }, panes: { 'w1:p2': { terminalId: 'term-2' }, 'w1:p3': { terminalId: 'term-3' } }, fails })
     if (out !== undefined) answering(f, 'pane get w1:p2', out)
     const error = await failure(readSide(f.$))
@@ -597,7 +598,7 @@ test('AC: a side pane look herdr does not answer throws pane get, with the recor
 })
 
 test('AC: with the side pane ours, an activity pane look herdr does not answer throws pane get and keeps the activity fields', async () => {
-  for (const [label, fails, out, reason] of unanswered('pane get w1:p3')) {
+  for (const [label, fails, out, reason] of unanswered('pane get w1:p3', 'call')) {
     const f = fake({ store: { [KEY]: WITH_ACTIVITY }, panes: { 'w1:p2': { terminalId: 'term-2' }, 'w1:p3': { terminalId: 'term-3' } }, fails })
     if (out !== undefined) answering(f, 'pane get w1:p3', out)
     const error = await failure(readSide(f.$))
@@ -617,7 +618,7 @@ test('AC: with the side pane ours, an activity pane look herdr does not answer t
 
 test('AC: with the side pane ours, an agent look herdr does not answer throws agent get, with the record unchanged', async () => {
   const working = { terminalId: 'term-2', agent: { name: 'tp-x-ab12', status: 'working' } }
-  for (const [label, fails, out, reason] of unanswered('agent get tp-x-ab12')) {
+  for (const [label, fails, out, reason] of unanswered('agent get tp-x-ab12', 'kind')) {
     // An activity pane no longer ours would be dropped from the record: the agent's look comes
     // first, so a look that throws leaves even that unwritten.
     const f = fake({ store: { [KEY]: WITH_ACTIVITY }, panes: { 'w1:p2': working, 'w1:p3': { terminalId: 'term-8' } }, fails })
