@@ -6,9 +6,11 @@ import { recordedSession } from './sessions'
 import { ticketsDir } from './tickets'
 
 // herdr's side of a main session in herdr (R4): the side-pane record, and starting and ending the
-// Claude agent in the side pane. Every herdr call goes through `$.process.run` with a timeout of
-// its own. herdr answers JSON on stdout (`{ result }`), and on failure exits 1 with
-// `{ error: { code, message } }` on stderr.
+// Claude agent in the side pane. It holds the mod's one herdr runner, `herdr`, and its answer
+// readers `field` and `text`: route.ts, switch.ts and activity.ts call herdr through them too, so
+// every file reads the same answer the same way. Every herdr call goes through `$.process.run`
+// with a timeout of its own. herdr answers JSON on stdout (`{ result }`), and on failure exits 1
+// with `{ error: { code, message } }` on stderr.
 
 // How long a herdr call may run. `agent wait` waits up to 10 s of its own and `agent start` up to
 // 30 s, so each gets more than that.
@@ -64,18 +66,20 @@ type Activity = Required<Pick<SideRecord, 'activityPaneId' | 'activityTerminalId
 type Split = { from: string; cwd: string; env: string[] }
 // A herdr call's answer: its result, or the code herdr gave (when it gave one) and why it failed.
 // A failed call has no result, so a reader of one finds nothing there.
-type Ran = { isOk: true; result: unknown } | { isOk: false; result?: undefined; code?: string; reason: string }
+export type Ran ={ isOk: true; result: unknown } | { isOk: false; result?: undefined; code?: string; reason: string }
 
 const SIDE_FIELDS = ['ticketId', 'paneId', 'paneTerminalId', 'agentName'] as const
 const ACTIVITY_FIELDS = ['activityPaneId', 'activityTerminalId', 'activityTicketId'] as const
 
 // ---------- reading herdr's answers ----------
 
-function field(value: unknown, key: string): unknown {
+// `value[key]` when `value` is an object, else undefined.
+export function field(value: unknown, key: string): unknown {
   return typeof value === 'object' && value !== null ? (value as Record<string, unknown>)[key] : undefined
 }
 
-function text(value: unknown, key: string): string | undefined {
+// `value[key]` when it is a string, else undefined.
+export function text(value: unknown, key: string): string | undefined {
   const found = field(value, key)
   return typeof found === 'string' ? found : undefined
 }
@@ -96,7 +100,8 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-async function herdr($: EngineInterface, args: readonly string[], timeoutMs: number = HERDR_MS): Promise<Ran> {
+// Runs `herdr <args>` with a timeout of `timeoutMs` (10 s unless given), and gives its answer.
+export async function herdr($: EngineInterface, args: readonly string[], timeoutMs: number = HERDR_MS): Promise<Ran> {
   let out: ProcessRunResult
   try {
     out = await $.process.run(['herdr', ...args], { timeoutMs })
@@ -111,7 +116,7 @@ async function herdr($: EngineInterface, args: readonly string[], timeoutMs: num
 }
 
 // Closes a pane as best it can: when the close fails there is nothing more to do.
-async function closePane($: EngineInterface, paneId: string): Promise<void> {
+export async function closePane($: EngineInterface, paneId: string): Promise<void> {
   await herdr($, ['pane', 'close', paneId])
 }
 
