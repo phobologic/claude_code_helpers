@@ -461,16 +461,21 @@ test('AC: without showToggles neither Show all nor Show less is drawn', async ($
   }
 })
 
-test('AC: collapsed is one row, a + button then <id> · <status> · <title>, the button calling onCompact', async ($, on) => {
+test('AC: collapsed is one plain Button holding [+] <id> · <status> · <title>, the whole line calling onCompact', async ($, on) => {
   const pressed = drawView(on, { ticket: parseTicket('x-ab12', TASK), mode: 'collapsed', showToggles: true })
   for (const surface of SURFACES) {
     pressed.length = 0
     const ui = await mountView($, surface)
     const drawn = (await ui.drawn()) as Drawn
-    expect(drawn).toMatchObject({ type: 'Box', props: { flexDirection: 'row' } })
+    // D7: the line itself is the Button, drawn without `[ ]` chrome, so a press anywhere on it
+    // lands on the Button. Not a Box holding a Button beside a Text.
+    expect(drawn).toMatchObject({ type: 'Button', props: { key: VIEW_KEYS.restore, plain: true } })
+    // With no label of its own, the engine names the control by its children's text.
+    expect(drawn.props?.label).toBe('[+] x-ab12 · open · Draw the widget')
     expect(drawn.children).toHaveLength(2)
-    expect(drawn.children[0]).toMatchObject({ type: 'Button', props: { key: VIEW_KEYS.restore, label: '+' } })
+    expect(drawn.children[0]).toBe('[+] ')
     expect(drawn.children[1]).toMatchObject({ type: 'Text', props: { wrap: 'truncate' }, children: ['x-ab12 · open · Draw the widget'] })
+    expect(await ui.findAll({ type: 'Button' })).toHaveLength(1)
     await ui.press({ key: VIEW_KEYS.restore })
     expect(pressed).toEqual(['compact'])
     await ui.unmount()

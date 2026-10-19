@@ -162,7 +162,7 @@ type Band = Awaited<ReturnType<typeof mount>>
 type Drawn = { type: string; props?: Record<string, unknown>; children?: Drawn[] }
 
 // The band's form: the ticket's box drawn compact or expanded (by its toggle), or collapsed (by
-// its `+`), with what the hooks beneath drew under it; or only what they drew.
+// its restore row), with what the hooks beneath drew under it; or only what they drew.
 async function form(ui: Band): Promise<string> {
   const keys = (await ui.findAll({ type: 'Button' })).map(b => b.key)
   if (keys.includes(VIEW_KEYS.restore)) return 'collapsed'

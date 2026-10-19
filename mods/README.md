@@ -158,7 +158,7 @@ a session loads it from a folder you own.
   the file. It opens compact (id, status, type, priority, title, parent, description,
   acceptance criteria and how many notes) and collapses to one row,
   `[+] <id> · <status> · <title>`, on the first message you send (after start or
-  `/clear`); the row's `+` brings compact back. `Show all` adds the notes and
+  `/clear`); pressing anywhere on the row brings compact back. `Show all` adds the notes and
   `Show less` takes them away. The engine's `[-]` mark hides the whole band, as for
   any band.
 - The side agent's system prompt carries its rules and the ticket's file as the

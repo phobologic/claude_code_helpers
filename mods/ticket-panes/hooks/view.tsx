@@ -41,7 +41,7 @@ export type TicketViewProps = {
   mode: TicketPanesBandMode
   // Draws `Show all` in compact and `Show less` in expanded.
   showToggles?: boolean
-  // Run by `Show less` and by the collapsed row's `+`.
+  // Run by `Show less` and by a press on the collapsed row.
   onCompact?: () => void
   // Run by `Show all`.
   onExpand?: () => void
@@ -215,19 +215,19 @@ function noop(): void {}
 // A ticket in one of the three forms (D7), or the one row its problem is. Compact is a bordered
 // box: the id (the box's first row, bold), its status, type and priority, title and parent; the
 // description and criteria; how many notes; `Show all` with toggles. Expanded adds each note,
-// and `Show less` takes the place of `Show all`. Collapsed is one row: a `+` button, then
-// `<id> · <status> · <title>`. Every text is passed through `drawable`, and an empty one is not
-// drawn: a Box draws a string child, '' too, as a row.
+// and `Show less` takes the place of `Show all`. Collapsed is one row, `[+] <id> · <status> ·
+// <title>`, all of it one plain Button (no `[ ]` chrome), so a press anywhere on the line runs
+// `onCompact`. Every text is passed through `drawable`, and an empty one is not drawn: a Box draws
+// a string child, '' too, as a row.
 export function TicketView(props: TicketViewProps): RenderElement {
   const { elements, ticket, mode, showToggles, onCompact = noop, onExpand = noop } = props
   const { Box, Button, Markdown, Text } = elements
   if ('problem' in ticket) return <Text wrap="truncate">{drawable(`ticket ${ticket.id}: ${ticket.problem}`)}</Text>
   if (mode === 'collapsed') {
     return (
-      <Box flexDirection="row" gap={1}>
-        <Button key={VIEW_KEYS.restore} label="+" onPress={onCompact} />
-        <Text wrap="truncate">{drawable(joined([ticket.id, ticket.status, ticket.title]))}</Text>
-      </Box>
+      <Button key={VIEW_KEYS.restore} plain onPress={onCompact}>
+        [+] <Text wrap="truncate">{drawable(joined([ticket.id, ticket.status, ticket.title]))}</Text>
+      </Button>
     )
   }
   const isExpanded = mode === 'expanded'
