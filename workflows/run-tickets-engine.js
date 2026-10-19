@@ -544,7 +544,7 @@ ${GATES.map(g => `     ${g}`).join('\n')}`
      output in detail.
    - A gate times out or cannot run at all (command not found, missing dependencies): put the tree back (step 7) and
      return result "error" as the end of these steps describes. That is a problem with the gate, not with this ticket.
-6. Every gate passed${SCOPED_GATES ? ', or none applied' : ''}. \`git diff --name-only\` must print nothing. If it lists files, a gate rewrote them (a formatter,
+6. No gate failed. \`git diff --name-only\` must print nothing. If it lists files, a gate rewrote them (a formatter,
    a lockfile, snapshots), so the merged result needs changes the ticket did not make: put the tree back (step 7) and
    return "gate_fail" with failed_gate set to the gate that wrote them and the file list in detail.
    Otherwise commit the merge the same way merges are always committed here, by repeating it in two Bash calls:
