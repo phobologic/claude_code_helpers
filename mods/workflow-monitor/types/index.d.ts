@@ -19,7 +19,8 @@ export type TicketRow = {
   runningFor?: number // seconds the running step had run when the status was read
 }
 
-// The newest /run-tickets run of the session's repo, from run-tickets-status --json.
+// The /run-tickets run the band shows, from run-tickets-status --json: the newest run of
+// the session's repo that this session launched, else the repo's newest.
 export type RunSummary = {
   runId: string
   state: string
@@ -42,7 +43,7 @@ declare module 'claude-code' {
       agents: AgentRow[]
       run: RunSummary | null
       tick: number
-      utcOffsetMinutes: number
+      utcOffsetMinutes: number | null // null until `date +%z` has answered
       visibility: Visibility
     }
   }

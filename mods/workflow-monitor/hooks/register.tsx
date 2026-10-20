@@ -4,8 +4,9 @@ import type { EngineInterface, Register, RenderElement } from 'claude-code'
 import type { AgentRow, RunSummary, TicketRow, Visibility } from '../types'
 
 // A band above the prompt with two parts:
-// - the newest /run-tickets run of the session's repo, from `run-tickets-status --json`:
-//   its progress and every ticket not merged yet, with when its current step started;
+// - a /run-tickets run of the session's repo, from `run-tickets-status --json`: the newest
+//   one this session launched, else the repo's newest; its progress and every ticket not
+//   merged yet, with when its current step started;
 // - the agents a workflow script started in this session: how many ran, and each one
 //   still running with its start time and how long it has run, unless a ticket row above
 //   already shows that agent.
@@ -15,18 +16,21 @@ import type { AgentRow, RunSummary, TicketRow, Visibility } from '../types'
 // While the ticket-panes mod is loaded, each unmerged ticket's id is a button that opens
 // the ticket through `$.ticketPanes.open`. workflow-monitor does not depend on that mod:
 // it asks whether it is there and draws plain rows when it is not.
-// Hooks modules have no Date, so clock times come from the UTC offset `date +%z` gives.
+// Hooks modules have no Date, so clock times come from the UTC offset `date +%z` gives:
+// read at session start, and by the next poll whenever it is unread (a /clear, which
+// raises no session start, or a `date` that failed). Until then times show in UTC.
 
 const TICK_MS = 15_000 // redraws running times
 const BUSY_POLL_TICKS = 2 // read the run's status every 30s while something runs
-const IDLE_POLL_TICKS = 20 // and every 5 minutes otherwise, to notice a run started elsewhere
+const IDLE_POLL_TICKS = 20 // and every 5 minutes otherwise; a session that launched no run notices one started elsewhere
 const VISIBLE_MS = 60_000 // only while the band has drawn within this long
 const KEEP_AGENTS = 300
 
 const agents = atom({ plugin: 'workflow-monitor', key: 'agents' } as const, [])
 const run = atom({ plugin: 'workflow-monitor', key: 'run' } as const, null)
 const tick = atom({ plugin: 'workflow-monitor', key: 'tick' } as const, 0)
-const offset = atom({ plugin: 'workflow-monitor', key: 'utcOffsetMinutes' } as const, 0)
+// null until `date +%z` answered: 0 is a real offset, `+0000`.
+const offset = atom({ plugin: 'workflow-monitor', key: 'utcOffsetMinutes' } as const, null as number | null)
 const visibility = atom({ plugin: 'workflow-monitor', key: 'visibility' } as const, 'unset' as Visibility)
 
 // Module state: it starts over on a reload, which costs at most one extra poll.
@@ -62,8 +66,10 @@ async function openTicket($: EngineInterface, id: string): Promise<void> {
 
 // ---------- formatting ----------
 
+const OFFSET = /^([+-])(\d\d)(\d\d)/
+
 export function parseOffset(text: string): number {
-  const m = /^([+-])(\d\d)(\d\d)/.exec(text.trim())
+  const m = OFFSET.exec(text.trim())
   if (!m) return 0
   const minutes = Number(m[2]) * 60 + Number(m[3])
   return m[1] === '-' ? -minutes : minutes
@@ -82,6 +88,20 @@ export function duration(seconds: number): string {
   if (s < 600) return `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s`
   const m = Math.round(s / 60)
   return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}m`
+}
+
+// Stores the UTC offset `date +%z` gives. A `date` that fails (it prints no offset) or
+// answers something else leaves the stored value as it was, so an unread offset stays
+// unread for the next poll.
+async function readOffset($: EngineInterface): Promise<void> {
+  try {
+    const out = await $.process.run(['/bin/date', '+%z'])
+    if (!OFFSET.test(out.stdout.trim())) return
+    const minutes = parseOffset(out.stdout)
+    await update($, offset, () => minutes)
+  } catch {
+    // Times show in UTC until a later read works.
+  }
 }
 
 // ---------- the run's status ----------
@@ -131,18 +151,51 @@ export function summarize(report: Report, checkedAt: number): RunSummary {
   }
 }
 
+function status($: EngineInterface, args: string[]) {
+  return $.process.run(['run-tickets-status', ...args], { timeoutMs: 60_000 })
+}
+
+// The runs this session's workflow agents belong to, newest first. An agent whose workflow
+// gave no run id names no run: `--json ''` would read the repo's newest.
+export function sessionRuns(list: readonly AgentRow[]): string[] {
+  const ids: string[] = []
+  for (const a of [...list].reverse()) if (a.runId && !ids.includes(a.runId)) ids.push(a.runId)
+  return ids
+}
+
+// The newest of the session's runs that `--list` names (a run-tickets run of this repo,
+// not some other workflow's), or undefined when none is or it can't be read.
+async function ownRun($: EngineInterface, mine: readonly string[]): Promise<Report | undefined> {
+  const listed = await status($, ['--list'])
+  if (listed.exitCode !== 0) return undefined
+  const ids = new Set(listed.stdout.split('\n').map(line => line.trim().split(/\s+/)[0]))
+  const id = mine.find(r => ids.has(r))
+  if (id === undefined) return undefined
+  const out = await status($, ['--json', id])
+  return out.exitCode === 0 ? (JSON.parse(out.stdout) as Report) : undefined
+}
+
+// The run to show: the newest run this session launched, so another session's run
+// started later in the same repo never takes the band; else the repo's newest run.
+// null when the repo has no run.
+async function readReport($: EngineInterface): Promise<Report | null> {
+  const out = await status($, ['--json'])
+  if (out.exitCode !== 0) return null // no run in this repo, or not a repo at all
+  const newest = JSON.parse(out.stdout) as Report
+  const mine = sessionRuns(await read($, agents))
+  if (!mine.length || mine.includes(newest.run_id)) return newest
+  return (await ownRun($, mine)) ?? newest
+}
+
 async function poll($: EngineInterface): Promise<void> {
   if (polling) return
   polling = true
   try {
-    const out = await $.process.run(['run-tickets-status', '--json'], { timeoutMs: 60_000 })
+    // A draw can't write state, so an offset still unread is read here, once a poll.
+    if ((await read($, offset)) === null) await readOffset($)
+    const report = await readReport($)
     const checkedAt = await $.clock.now()
-    if (out.exitCode !== 0) {
-      // No run in this repo, or not a repo at all.
-      await update($, run, () => null)
-      return
-    }
-    const summary = summarize(JSON.parse(out.stdout) as Report, checkedAt)
+    const summary = report && summarize(report, checkedAt)
     await update($, run, () => summary)
   } catch {
     // Not installed, too slow this time, or output it could not read: keep the last summary.
@@ -230,13 +283,7 @@ export const register: Register = on => {
       name: 'workflow-monitor',
       description: 'Show or hide the band above the prompt with this session\'s workflow agents and this repo\'s /run-tickets run',
     })
-    try {
-      const { stdout } = await $.process.run(['/bin/date', '+%z'])
-      const minutes = parseOffset(stdout)
-      await update($, offset, () => minutes)
-    } catch {
-      // Times show in UTC.
-    }
+    await readOffset($)
     await probeTicketPanes($)
     let ticks = 0
     $.clock.every(TICK_MS, () => {
@@ -251,6 +298,13 @@ export const register: Register = on => {
     })
     return next(e)
   })
+
+  // A /clear goes on in this process under a new session and raises no session start, so
+  // the offset is marked unread here and the next poll reads it again.
+  on('session.end', async ($, e, next) => {
+    if (e.reason === 'clear') await update($, offset, () => null)
+    return next(e)
+  }).catch(($, e, next) => next(e)) // nor does it ever hold up the session's end
 
   // Toggles the band. Hiding it keeps it hidden until shown again, even as new agents start.
   on('command.run', { command: 'workflow-monitor' }, async $ => {
@@ -303,7 +357,7 @@ export const register: Register = on => {
     await read($, tick) // redraw on every tick, so running times move
     const now = await $.clock.now()
     lastDrawnAt = now
-    const offsetMinutes = await read($, offset)
+    const offsetMinutes = (await read($, offset)) ?? 0 // UTC until the offset is read
     const list = await read($, agents)
     const summary = await read($, run)
     const columns = Math.max(20, e.props.bodyColumns)
