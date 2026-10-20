@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, RenderElement } from 'claude-code'
 
 import type { AgentRow, RunSummary, TicketRow, Visibility } from '../types'
 
@@ -10,7 +10,11 @@ import type { AgentRow, RunSummary, TicketRow, Visibility } from '../types'
 //   still running with its start time and how long it has run, unless a ticket row above
 //   already shows that agent.
 // It takes rows from the transcript, so finished agents are a count, not a list; a tree
-// taller than the band's room scrolls.
+// taller than the band's room scrolls. It draws above whatever the hooks beneath it draw
+// there (another mod's band), never in place of it.
+// While the ticket-panes mod is loaded, each unmerged ticket's id is a button that opens
+// the ticket through `$.ticketPanes.open`. workflow-monitor does not depend on that mod:
+// it asks whether it is there and draws plain rows when it is not.
 // Hooks modules have no Date, so clock times come from the UTC offset `date +%z` gives.
 
 const TICK_MS = 15_000 // redraws running times
@@ -28,6 +32,33 @@ const visibility = atom({ plugin: 'workflow-monitor', key: 'visibility' } as con
 // Module state: it starts over on a reload, which costs at most one extra poll.
 let lastDrawnAt = 0
 let polling = false
+// Whether ticket-panes answered `$.ticketPanes.available({})` since this module loaded;
+// undefined until asked. Not `$.state`: a draw can't write state, and a reload starts this
+// over exactly when it is worth asking again.
+let canOpenTickets: boolean | undefined
+
+// ---------- ticket-panes ----------
+
+// Asked at session start, and by the first draw after a reload.
+async function probeTicketPanes($: EngineInterface): Promise<boolean> {
+  try {
+    await $.ticketPanes.available({})
+    canOpenTickets = true
+  } catch {
+    // Not loaded (`$.ticketPanes` is missing), or it failed: the ticket rows stay text.
+    canOpenTickets = false
+  }
+  return canOpenTickets
+}
+
+async function openTicket($: EngineInterface, id: string): Promise<void> {
+  try {
+    await $.ticketPanes.open({ id })
+  } catch {
+    // ticket-panes tells the person about its own failures. What reaches here (the mod
+    // went away since the probe, say) leaves the press doing nothing.
+  }
+}
 
 // ---------- formatting ----------
 
@@ -124,21 +155,47 @@ async function poll($: EngineInterface): Promise<void> {
 
 type Line = { text: string; isDim?: boolean }
 
-export function runLines(summary: RunSummary, now: number): Line[] {
-  const since = summary.state === 'running' ? (now - summary.checkedAt) / 1000 : 0
+// An unmerged ticket's line in two parts, its id and the rest after it, so the text and
+// the band's row with a button for the id share one formatter. The caller pads the id to
+// the widest one (`idWidth`), so the statuses line up.
+export type TicketLine = { id: string; rest: string; isDim: boolean }
+
+// How far a running run has moved on since its status was read, in seconds.
+function sinceRead(summary: RunSummary, now: number): number {
+  return summary.state === 'running' ? (now - summary.checkedAt) / 1000 : 0
+}
+
+// The run's progress, and why its merges stopped if they did.
+function runHeader(summary: RunSummary, since: number): Line[] {
   const lines: Line[] = [{
     text: `run-tickets ${summary.runId}  ${summary.state} ${duration(summary.durationSeconds + since)}  `
       + `merged ${summary.merged}/${summary.total}  ${summary.branch}`,
   }]
   if (summary.mergeHalted) lines.push({ text: `  MERGES HALTED: ${summary.mergeHalted}` })
-  const width = Math.max(0, ...summary.open.map(t => t.id.length))
-  for (const t of summary.open) {
-    const when = t.isActive && t.startedClock
-      ? `  started ${t.startedClock}  running ${duration((t.runningFor ?? 0) + since)}`
-      : ''
-    lines.push({ text: `  ${t.id.padEnd(width)}  ${t.status}${when}`, isDim: !t.isActive })
-  }
   return lines
+}
+
+export function ticketLine(row: TicketRow, since: number): TicketLine {
+  const when = row.isActive && row.startedClock
+    ? `  started ${row.startedClock}  running ${duration((row.runningFor ?? 0) + since)}`
+    : ''
+  return { id: row.id, rest: `  ${row.status}${when}`, isDim: !row.isActive }
+}
+
+function idWidth(open: readonly TicketRow[]): number {
+  return Math.max(0, ...open.map(t => t.id.length))
+}
+
+export function runLines(summary: RunSummary, now: number): Line[] {
+  const since = sinceRead(summary, now)
+  const width = idWidth(summary.open)
+  return [
+    ...runHeader(summary, since),
+    ...summary.open.map(t => {
+      const line = ticketLine(t, since)
+      return { text: `  ${line.id.padEnd(width)}${line.rest}`, isDim: line.isDim }
+    }),
+  ]
 }
 
 // A count of the session's workflow agents, then each one still running, newest first.
@@ -180,6 +237,7 @@ export const register: Register = on => {
     } catch {
       // Times show in UTC.
     }
+    await probeTicketPanes($)
     let ticks = 0
     $.clock.every(TICK_MS, () => {
       ticks += 1
@@ -236,11 +294,12 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // The band yields to a survey, and draws nothing until shown. The engine scrolls a tree
-  // taller than its room, so every line is drawn.
+  // The band yields to a survey, and draws nothing until shown. Shown, it draws above
+  // what the hooks beneath draw (another mod's band), so both show. The engine scrolls a
+  // tree taller than its room, so every line is drawn.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey || (await read($, visibility)) !== 'shown') return next(e)
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Button, Text } = $.ui.resolve(e)
     await read($, tick) // redraw on every tick, so running times move
     const now = await $.clock.now()
     lastDrawnAt = now
@@ -248,17 +307,36 @@ export const register: Register = on => {
     const list = await read($, agents)
     const summary = await read($, run)
     const columns = Math.max(20, e.props.bodyColumns)
+    const canOpen = canOpenTickets ?? (await probeTicketPanes($))
 
-    const lines: Line[] = []
-    if (summary) lines.push(...runLines(summary, now))
-    if (list.length) lines.push(...agentLines(list, now, offsetMinutes, new Set(summary?.open.map(t => t.id))))
-    if (!lines.length) lines.push({ text: 'No workflow agents in this session yet.', isDim: true })
+    const textRow = (line: Line) => (
+      <Text dimColor={line.isDim === true}>{line.text.slice(0, columns) || ' '}</Text>
+    )
+    // `  [ x-2 ]  reviewing ...`: the rest is cut to what the indent and the button leave.
+    const ticketRow = (line: TicketLine, width: number) => (
+      <Box flexDirection="row" paddingLeft={2}>
+        <Button key={`ticket-${line.id}`} label={line.id} dimColor={line.isDim} onPress={() => openTicket($, line.id)} />
+        <Text dimColor={line.isDim}>
+          {(' '.repeat(width - line.id.length) + line.rest).slice(0, Math.max(0, columns - 2 - (line.id.length + 4)))}
+        </Text>
+      </Box>
+    )
+    const runRows = (s: RunSummary): RenderElement[] => {
+      if (!canOpen) return runLines(s, now).map(textRow)
+      const since = sinceRead(s, now)
+      const width = idWidth(s.open)
+      return [...runHeader(s, since).map(textRow), ...s.open.map(t => ticketRow(ticketLine(t, since), width))]
+    }
+
+    const rows: RenderElement[] = []
+    if (summary) rows.push(...runRows(summary))
+    if (list.length) rows.push(...agentLines(list, now, offsetMinutes, new Set(summary?.open.map(t => t.id))).map(textRow))
+    if (!rows.length) rows.push(textRow({ text: 'No workflow agents in this session yet.', isDim: true }))
 
     return (
       <Box flexDirection="column">
-        {lines.map(line => (
-          <Text dimColor={line.isDim === true}>{line.text.slice(0, columns) || ' '}</Text>
-        ))}
+        {rows}
+        {await next(e)}
       </Box>
     )
   })
