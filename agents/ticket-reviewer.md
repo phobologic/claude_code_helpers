@@ -81,6 +81,15 @@ These apply to every finding:
 verifier notes, earlier `**Review round N**` notes, and `**Implementer round
 N**` notes.
 
+Then `tk show` the spec epics: the ticket's parent epic, plus the planning
+epic above it when the parent's description points there (as `/spec`'s
+execution sub-epic does). Their descriptions are the spec the ticket was built
+against, and their notes hold earlier implementers' handoffs. The implementer
+keeps that text current in `<repo-root>/.tickets/<epic-id>.md`, which git
+ignores, so the edit never shows in the diff: its summary, its commit message
+and its `**Epic text changed**` notes on the ticket list each epic line it
+changed. Read the epics as they are now.
+
 Concerns an earlier round filed as out of scope must not come back inline
 unless the latest change made them worse. Re-raising the same concern across
 rounds is how reviews drift.
@@ -246,6 +255,10 @@ user-facing paths.
 **Performance:** quadratic or worse work on hot paths; N+1 queries; big
 allocations in tight loops; allocations sized by user input without a bound.
 
+**Spec text:** each statement in the spec epics' descriptions and notes
+about behavior this diff changed, compared with the code as it now is (see
+Bucket A below for where a stale one goes).
+
 **Complexity:** functions this change pushed over the project's complexity
 threshold (medium), or to D/F grade or cognitive complexity above 25 (high).
 
@@ -260,6 +273,17 @@ regressions in files the ticket touched** (a wrong sentence in a doc it wrote,
 an edge case its new code gets wrong). Do not ticket these; they go in
 `findings`.
 
+**The spec epics' text (the parent, and the planning epic above it when the
+parent points there) counts as one of the ticket's files.** When the diff
+changes behavior, a record shape, or a contract that the epic's description or
+one of its handoff notes states, and that text no longer matches (the
+implementer left it, or updated it wrongly), it is a regression in the
+ticket's files: a low Bucket A finding, not a new ticket (in a FINAL ROUND it
+is filed as `deferred-rework`, like any other low). Quote the stale
+epic line, the `path:line` in the diff that made it wrong, and the corrected
+wording. Epic text that was already wrong before this diff is `preexisting`,
+not this ticket's.
+
 Low regressions go inline because a regression blocks the epic's wrap at any
 priority. Ticketed, a two-line fix costs a whole extra run. Sent back now, it
 is fixed in the diff that caused it, by the agent that has the context.
@@ -267,7 +291,7 @@ is fixed in the diff that caused it, by the agent that has the context.
 **Bucket B, ticketed.** Fixing it would need files or changes the ticket never
 anticipated, or it is a low-priority finding that is not a regression in the
 ticket's files: `worsened` and `preexisting` lows, and lows outside those
-files.
+files (the spec epics' text is not outside them, as above).
 
 Give each Bucket B finding an **origin**:
 
