@@ -476,13 +476,17 @@ const ok = (report: Report): Answer => ({ exitCode: 0, stdout: JSON.stringify(re
 
 // Stands in for the engine as `engine` does, but answers run-tickets-status by its
 // arguments (`--json`, `--list`, `--json <run-id>`); an argv it was not given exits 1,
-// and 'deny' fails the call, as a timeout does.
+// and 'deny' fails the call, as a timeout does. `/bin/date` answers `+0000` and, as in
+// `engine`, is not put in `ran`.
 function statuses(on: On, answers: Record<string, Answer>, ran: string[][]) {
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine band</Text>
   })
   on('process.run', ($, e) => {
+    if (e.argv[0] === '/bin/date') {
+      return { value: { exitCode: 0, stdout: '+0000\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     ran.push([...e.argv])
     const answer = answers[e.argv.slice(1).join(' ')] ?? { exitCode: 1, stdout: '' }
     if (answer === 'deny') return { deny: 'timed out' }
