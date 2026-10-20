@@ -18,7 +18,7 @@ const KEY = `side:${MAIN}`
 const ENV: Record<string, string> = { HERDR_ENV: '1', HERDR_PANE_ID: MAIN }
 const ROOT = '/repo/.worktrees/w1'
 
-const SIDE: SideRecord = { ticketId: 'x-ab12', paneId: 'w1:p2', paneTerminalId: 'term-2', paneCwd: '/repo', agentName: 'tp-x-ab12' }
+const SIDE: SideRecord = { ticketId: 'x-ab12', paneId: 'w1:p2', paneTerminalId: 'term-2', agentName: 'tp-x-ab12' }
 const WITH_ACTIVITY: SideRecord = { ...SIDE, activityPaneId: 'w1:p3', activityTerminalId: 'term-3', activityTicketId: 'x-ab12' }
 const WATCH = 'run-tickets-status --ticket x-ab12 --watch 30 wf_1'
 const SPLIT_FAILED = 'no run activity for x-ab12: pane split'

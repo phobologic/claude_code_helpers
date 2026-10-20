@@ -1,13 +1,15 @@
 import type { EngineInterface, On } from 'claude-code'
 
+import { closeOwnPanes } from './herdr'
 import { isCountedPrompt, role } from './role'
 import type { Role } from './role'
 import { recordSession } from './sessions'
 import { ticketFile, ticketsDir } from './tickets'
 
 // The side session's agent: its rules and the ticket's text in the system prompt (D5, D6), the
-// ticket's changes as notes on the person's messages (D16), and the record of the conversation a
-// click on the ticket resumes (R3, E12). Every hook here acts only in a side session (R4).
+// ticket's changes as notes on the person's messages (D16), the record of the conversation a
+// click on the ticket resumes (R3, E12), and its panes closing when the person leaves it. Every
+// hook here acts only in a side session (R4).
 //
 // The mod registers `prompt.submit` and `session.end` in more than one module (the band does too),
 // and a plugin may register an event only once without a matcher, so each hook here has one (`{}`).
@@ -113,6 +115,14 @@ async function changeNote($: EngineInterface, id: string): Promise<string | unde
   return `Ticket ${id} changed; its current text:\n\n${ticket.text}`
 }
 
+// The side pane's own Claude is leaving (R4): its panes close. A main session, a child `claude`
+// (R4 calls neither the side session) or a session outside herdr closes nothing.
+async function closeOnExit($: EngineInterface): Promise<void> {
+  const known = await role($)
+  if (known.kind !== 'side' || !known.sideTicket || known.herdrPaneId === undefined) return
+  await closeOwnPanes($, known.herdrPaneId)
+}
+
 // This module's hooks, registered by register.tsx.
 export function registerSide(on: On): void {
   // A new session, or this one after an enable or a worker respawn: its first compose may be to
@@ -155,13 +165,18 @@ export function registerSide(on: On): void {
   })
 
   // `/clear` and `/resume` start another conversation in this process: it knows the ticket as the
-  // last compose embedded it (until compose runs for it), and it is the one to record next.
-  on('session.end', {}, ($, e, next) => {
+  // last compose embedded it (until compose runs for it), and it is the one to record next; the
+  // pane stays. When the person leaves (`prompt_input_exit`: `/exit`, ctrl+c, ctrl+d), the side
+  // session closes its herdr pane, and the activity pane below it, once the engine's end step has
+  // run: that close ends this process.
+  on('session.end', {}, async ($, e, next) => {
     if (e.reason === 'clear' || e.reason === 'resume') {
       baseline = composedMtime
       isRecordDue = true
     }
-    return next(e)
+    const ended = await next(e)
+    if (e.reason === 'prompt_input_exit') await closeOnExit($)
+    return ended
   })
 
   // A compaction of the main conversation summarizes the notes away, and the system prompt still
