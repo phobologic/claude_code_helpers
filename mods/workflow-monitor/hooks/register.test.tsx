@@ -487,7 +487,8 @@ test('an offset of +0000 is read once, and later polls do not run date again', a
 
 test('a date that fails leaves times in UTC, and each next poll asks again until one answers', async ($, on) => {
   const time = mock.clock(on, { now: T0 })
-  const seen = engine(on, { exitCode: 1, stdout: '' }, [], ['fails', 'denied', 'garbage\n', '-0700\n'])
+  const ran: string[][] = []
+  const seen = engine(on, { exitCode: 1, stdout: '' }, ran, ['fails', 'denied', 'garbage\n', '-0700\n'])
   on('agent.spawn', () => ({ model: 'm', agentId: 'a1' }))
   await spawn($, 'impl x-9')
   await time.settle()
@@ -497,6 +498,8 @@ test('a date that fails leaves times in UTC, and each next poll asks again until
   expect(seen.dates).toBe(1)
   await repoll($)
   expect(seen.dates).toBe(2)
+  // A date that was refused still leaves the poll to read the run.
+  expect(ran).toHaveLength(2)
   expect(await agentRows($)).toEqual(utc)
   await repoll($)
   expect(seen.dates).toBe(3)
