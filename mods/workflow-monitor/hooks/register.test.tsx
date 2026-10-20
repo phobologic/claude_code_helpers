@@ -490,8 +490,8 @@ test('the session\'s runs are the run ids of its agents, newest first, each once
   expect(sessionRuns([
     { key: 'a', runId: 'wf_1', label: 'impl x-1', startedAt: T0 },
     { key: 'b', runId: 'wf_2', label: 'impl y-1', startedAt: T0 + MIN },
-    { key: 'c', runId: 'wf_1', label: 'review x-1', startedAt: T0 + 2 * MIN },
-  ])).toEqual(['wf_1', 'wf_2'])
+    { key: 'c', runId: 'wf_2', label: 'review y-1', startedAt: T0 + 2 * MIN },
+  ])).toEqual(['wf_2', 'wf_1'])
   expect(sessionRuns([])).toEqual([])
 })
 
@@ -530,16 +530,19 @@ test('a session that launched no run shows the repo\'s newest with one call, as 
 
 // The session's agents may belong to some other workflow, which `--list` does not name, or
 // the session's run may not be readable: then the band shows the repo's newest run.
-for (const [name, answers] of [
-  ['the session\'s run id is not a run-tickets run of this repo', { '--list': { exitCode: 0, stdout: 'wf_other  2030-03-01 16:49  not finished, 1 tickets  [b-1]\n' }, '--json wf_mine': ok(MINE) }],
-  ['the session\'s run can\'t be read', { '--list': { exitCode: 0, stdout: LIST }, '--json wf_mine': { exitCode: 1, stdout: '' } }],
-  ['the run list can\'t be read', { '--list': { exitCode: 2, stdout: LIST }, '--json wf_mine': ok(MINE) }],
+// `calls` is the status calls made: an id the list does not name is never read.
+for (const [name, answers, calls] of [
+  ['the session\'s run id is not a run-tickets run of this repo', { '--list': { exitCode: 0, stdout: 'wf_other  2030-03-01 16:49  not finished, 1 tickets  [b-1]\n' }, '--json wf_mine': ok(MINE) }, ['--json', '--list']],
+  ['the session\'s run can\'t be read', { '--list': { exitCode: 0, stdout: LIST }, '--json wf_mine': { exitCode: 1, stdout: '' } }, ['--json', '--list', '--json wf_mine']],
+  ['the run list can\'t be read', { '--list': { exitCode: 2, stdout: LIST }, '--json wf_mine': ok(MINE) }, ['--json', '--list']],
 ] as const) {
   test(`when ${name}, the band shows the repo's newest run`, async ($, on) => {
     const time = mock.clock(on, { now: SHOWN })
-    statuses(on, { '--json': ok(OTHER), ...answers }, [])
+    const ran: string[][] = []
+    statuses(on, { '--json': ok(OTHER), ...answers }, ran)
     await spawn($, 'wf_mine', 'review a-2 r2')
     await time.settle()
+    expect(ran.map(argv => argv.slice(1).join(' '))).toEqual([...calls])
     const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
     expect((await texts(ui))[0]?.[0]).toBe(OTHER_HEADER)
   })
