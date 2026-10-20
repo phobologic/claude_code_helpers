@@ -436,21 +436,25 @@ export async function exitAgent($: EngineInterface, name: string, paneId: string
   await closePane($, paneId)
 }
 
-// The activity part of the record whose side pane is `paneId`, or undefined when no record names
-// it or its activity part is not whole. The side session does not know the main session's pane the
-// record is kept under, so it looks through every `side:` record. herdr never gives a closed
-// pane's id again, so a record a later launch wrote never names this pane.
-async function activityOver($: EngineInterface, paneId: string): Promise<Activity | undefined> {
+// The whole activity parts of the records whose side pane is `paneId`. The side session does not
+// know the main session's pane the record is kept under, so it looks through every `side:` record.
+// herdr gives no closed pane's id again while it runs, but the store outlives herdr, and a record
+// whose main session ended unclicked stays in it: so every record naming this pane counts, and
+// only herdr's look (E9) says which activity pane is ours.
+async function activitiesOver($: EngineInterface, paneId: string): Promise<Activity[]> {
+  const found: Activity[] = []
   for (const key of await $.store.keys()) {
     if (!key.startsWith('side:')) continue
     const record = recordOf(await $.store.get(key))
-    if (record?.paneId === paneId) return activityOf(record)
+    const activity = record?.paneId === paneId ? activityOf(record) : undefined
+    if (activity !== undefined) found.push(activity)
   }
-  return undefined
+  return found
 }
 
 // The side session's own panes as the person leaves its Claude (`/exit`, ctrl+c, ctrl+d): the
-// run-activity pane below it, while that is ours (E9), then `paneId`, the side session's own pane,
+// run-activity pane below it, while that is ours (E9; a look for each record naming this pane, one
+// in the common case), then `paneId`, the side session's own pane,
 // which ends the process this runs in, so it goes last. The record is only read: the main session
 // may be writing it (a switch), and its next `readSide` drops a record whose side pane is gone. It
 // never throws: a store that cannot be read leaves the activity pane to that `readSide`, and a
@@ -458,9 +462,9 @@ async function activityOver($: EngineInterface, paneId: string): Promise<Activit
 // answer is passed over, so the side pane still closes.
 export async function closeOwnPanes($: EngineInterface, paneId: string): Promise<void> {
   // herdr's runner, and so isOurs and closePane, never throw; only the store can.
-  const activity = await activityOver($, paneId).catch(() => undefined)
-  if (activity !== undefined && (await isOurs($, activity.activityPaneId, activity.activityTerminalId, END_MS)) === 'yes') {
-    await closePane($, activity.activityPaneId, END_MS)
+  const activities = await activitiesOver($, paneId).catch((): Activity[] => [])
+  for (const { activityPaneId, activityTerminalId } of activities) {
+    if ((await isOurs($, activityPaneId, activityTerminalId, END_MS)) === 'yes') await closePane($, activityPaneId, END_MS)
   }
   await closePane($, paneId, END_MS)
 }

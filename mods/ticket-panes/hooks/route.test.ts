@@ -438,7 +438,7 @@ test('an agent list herdr does not give stops the click before anything changes'
     [written(3, '', ''), 'agent list: exit status 3'],
   ]
   for (const [instead, message] of cases) {
-    // Without the list, this click would start the agent again in our pane.
+    // Without the list, this click would close our pane and launch the ticket in a fresh one.
     const f = fake({ store: { [KEY]: AB12 }, panes: { 'w1:p2': { terminalId: 'term-2' } }, instead: { 'agent list': instead } })
     const error = await failure(openSidePane(f.$, 'x-ab12'))
     expect(error.step, message).toBe('agent list')
@@ -450,8 +450,8 @@ test('an agent list herdr does not give stops the click before anything changes'
 
 test('a side agent herdr lists in its pane but agent get missed stops the click before anything changes', async () => {
   const cases: [string, SideRecord, Record<string, unknown>][] = [
-    // Without the stop, the click would start a resume over the working agent, and E13 would close
-    // its pane when that failed.
+    // Without the stop, the click would close the working agent's pane and resume its conversation
+    // in a second Claude.
     ['same ticket, with a recorded conversation', AB12, { [`session:${DIR}:x-ab12`]: { sessionId: 'old-session', cwd: '/repo' } }],
     // Without the stop, the click would close the working agent's pane (D3).
     ['another ticket', CD34, {}],

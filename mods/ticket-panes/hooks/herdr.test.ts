@@ -893,6 +893,16 @@ test('leaving finds this pane\'s record among others, under any main session\'s 
   expect(steps(f)).toEqual(['pane get w1:p3', 'pane close w1:p3', 'pane close w1:p2'])
 })
 
+test('a stale record naming this pane ahead of the live one leaves its pane open and still lets the live activity pane close', async () => {
+  // Left by a main session of an earlier herdr whose pane ids started over: its activity pane id
+  // now shows another terminal.
+  const stale = { ...WITH_ACTIVITY, activityPaneId: 'w1:p7', activityTerminalId: 'term-old' }
+  const f = fake({ store: { 'side:w0:p1': stale, 'side:w4:p1': WITH_ACTIVITY }, panes: { ...OWN_PANES, 'w1:p7': { terminalId: 'term-77' } } })
+  await closeOwnPanes(f.$, 'w1:p2')
+  expect(steps(f)).toEqual(['pane get w1:p7', 'pane get w1:p3', 'pane close w1:p3', 'pane close w1:p2'])
+  expect([...f.panes.keys()]).toEqual(['w1:p7'])
+})
+
 test('AC: an activity pane no longer ours is left open, and the side pane still closes', async () => {
   const f = fake({ store: { [KEY]: WITH_ACTIVITY }, panes: { ...OWN_PANES, 'w1:p3': { terminalId: 'term-8' } } })
   await closeOwnPanes(f.$, 'w1:p2')

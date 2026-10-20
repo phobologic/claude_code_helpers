@@ -79,8 +79,8 @@ export async function openSidePane($: EngineInterface, id: string): Promise<Open
   }
   if (side === undefined) return opened(await launch($, id))
   // readSide read the side agent as gone, but the list shows it in its pane: herdr's `agent get`
-  // failed or missed it. Both steps below for a gone agent would act over a live one (a start over
-  // it, or a close of its pane), so the click stops (D13).
+  // failed or missed it. The next step for a gone agent would close its pane over the live agent,
+  // so the click stops (D13).
   if (!side.sideAgentLive && paneOf(side.agentName) === side.paneId) {
     throw new SidePaneError('agent get', `herdr lists ${side.agentName} in ${side.paneId} but did not show it there`)
   }
