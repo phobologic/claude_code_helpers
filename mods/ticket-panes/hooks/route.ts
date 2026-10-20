@@ -73,7 +73,7 @@ async function closeSide($: EngineInterface, side: Side): Promise<void> {
 // Routes a click on ticket `id` in a main session in herdr (R4), as the steps above say. A side
 // session opens no side pane of its own (D12), so it is refused before any herdr call. Throws a
 // SidePaneError naming the step that failed: here `agent list`, `agent get` or `agent focus`, and
-// from herdr.ts `herdr pane`, `tickets dir`, `uuidgen`, `pane split` or `agent start`.
+// from herdr.ts `herdr pane`, `pane get`, `tickets dir`, `uuidgen`, `pane split` or `agent start`.
 export async function openSidePane($: EngineInterface, id: string): Promise<OpenResult> {
   const { kind } = await role($)
   if (kind === 'side') throw new SidePaneError('side session', 'opens no side pane of its own')

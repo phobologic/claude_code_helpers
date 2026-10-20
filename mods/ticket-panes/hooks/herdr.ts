@@ -396,7 +396,8 @@ async function reusablePane($: EngineInterface, inPane: LaunchOptions['inPane'])
 //   person is told it needs an answer (D15); resolves with `waiting`.
 // - Any other failure of a resume: E13, a new conversation in a fresh pane.
 // - Any other failure: a pane this call split is closed, nothing is recorded, and it throws a
-//   SidePaneError naming the step.
+//   SidePaneError naming the step. After reusablePane's fallback the record's side and activity
+//   panes were already closed and its record dropped, so no side pane is left.
 export async function launch($: EngineInterface, id: string, options: LaunchOptions = {}): Promise<Launched> {
   const from = await mainPane($)
   const dir = await ticketsDir($)
@@ -416,7 +417,9 @@ export async function launch($: EngineInterface, id: string, options: LaunchOpti
     return placed($, id, pane, started)
   }
   if (recorded !== undefined) return startOver($, id, split, name, pane)
-  // The record's own pane stays as it was; only a pane this call split is closed.
+  // Only a pane this call split is closed. A reused pane stays as it was, with its record; after
+  // reusablePane's fallback the record's panes are already closed and the record gone, so no side
+  // pane is left.
   if (reused === undefined) await closePane($, pane.paneId)
   throw new SidePaneError('agent start', started.reason)
 }
