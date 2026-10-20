@@ -39,7 +39,9 @@ before changing anything.
 - Git: plain `git`, never `-C`. Never `git stash`, `git stash pop/apply`, or
   `git checkout -m`.
 - Never touch the main repo path or another worktree. Other implementers are
-  working in parallel.
+  working in parallel. The one exception is the spec epics' ticket files
+  (see "Understand the ticket"), which you keep current as in "Keep the
+  epic's text current" below.
 - Throwaway files (probe scripts, mutation scripts, test repos) go in the
   worktree's `.tmp/` or under `$TMPDIR`, never in your home folder. If a probe
   needs a folder that is not a temp folder, make it under `$TMPDIR` anyway and
@@ -54,6 +56,16 @@ tk show <parent-epic-id>   # if it has a parent: decisions from sibling work liv
 ```
 
 Read the title, description, acceptance criteria, and every note.
+
+The parent epic's description is the spec this ticket and its siblings are
+built and reviewed against, and its notes hold earlier implementers' handoffs.
+When the parent's description points to a planning epic above it (as
+`/spec`'s execution sub-epic says "See parent ..."), the spec text may live
+there instead: `tk show` it too. Call these the spec epics: the parent epic,
+plus the planning epic above it when the parent's description points there.
+As you read, note each statement this ticket will change: a requirement line,
+a record or message shape, a function's contract, a handoff's account of how
+something behaves.
 
 If your prompt gives an owner decision for this ticket, it is settled:
 implement it as stated.
@@ -111,13 +123,59 @@ that come back. Mention what you found in `summary`.
    (for example `radon cc -nc -a`, or Biome's cognitive complexity rule).
    Refactor anything over threshold unless that would leave the ticket's scope;
    in that case, say so in `summary`.
-6. Commit with a message that references the ticket ID. Write the message to
+6. Update any epic text the change made wrong, as in "Keep the epic's text
+   current" below.
+7. Commit with a message that references the ticket ID. Write the message to
    `.tmp/commit-msg-<ticket-id>-<round>.txt` with the Write tool and commit
    with `git commit -F <file> && rm -f <file>`. If a commit hook fails, fix
    what it reports. If it fails for a reason in the environment rather than
    your code (a missing tool, missing dependencies such as `node_modules`, a
    wrong tool version), do not work around it: return `failed` and say
    exactly what the hook needed.
+
+## Keep the epic's text current
+
+When your change alters something a spec epic's description or one of its
+notes states, update that text in the same round. Left stale, it misleads
+every later ticket built against it, and the reviewer has to send your ticket
+back to fix it.
+
+- **The description:** edit the stale sentence in place, so it says what the
+  code now does.
+- **A note** (an earlier implementer's handoff, a recorded decision): leave the
+  original text as written and add a dated correction right after the line it
+  corrects: `(Corrected <YYYY-MM-DD> for <ticket-id>: <what is true now>.)`
+
+The epic lives in tk's tickets folder, which git ignores:
+`<repo-root>/.tickets/<epic-id>.md`, where `<repo-root>` is the folder your
+prompt runs `tk create` from. Read the file right before editing it, since
+other implementers may be updating the same epic, and change it with the Edit
+tool only: never `tk edit` (it opens an editor and blocks), `sed`, or Write.
+Change body text only; a field in the frontmatter goes through `tk set`.
+
+Git never sees this edit, so the diff does not show it. Name every epic line
+you changed, old and new, in the commit message and in `summary`, so the
+verifier and reviewer can check it. If a round changes only epic text (a
+text-only ticket, or a rework round whose only fix is in the epic), record it
+with `git commit --allow-empty -F <file>`, the message naming each epic line,
+old and new.
+
+In every round that edits epic text, first round included, also add a note on
+your own ticket, one line for each epic line you changed:
+
+```bash
+tk add-note <ticket-id> <<'EOF'
+**Epic text changed**: <epic-id>: "<old>" -> "<new>"
+EOF
+```
+
+The epic edit takes effect before the ticket merges. If the ticket blocks or
+is dropped, that note is what someone undoes. Before returning `failed` with
+`needs decision:`, put back the epic lines you changed this round and note that
+you did, since the owner's answer may change the contract.
+
+This covers text your change made wrong. Epic text that was already wrong
+before your change is not yours to rewrite: mention it in `summary`.
 
 ## Prove each new condition is tested
 
@@ -176,10 +234,11 @@ return an empty `conditions` list.
 
 - **AC failures:** fix each listed criterion, and keep every other criterion
   passing. Rework often breaks a criterion that used to pass.
-- **Review findings:** fix every finding. If one is genuinely out of scope
-  (it needs files this ticket never named), do not fix it. File it with the
-  `tk create` command in your prompt and list it in `out_of_scope` with the
-  finding number, reason, and new ticket ID.
+- **Review findings:** fix every finding. A finding on a spec epic's text
+  is in scope: fix it in the epic's file as in "Keep the epic's text current".
+  If one is genuinely out of scope (it needs files this ticket never named),
+  do not fix it. File it with the `tk create` command in your prompt and list
+  it in `out_of_scope` with the finding number, reason, and new ticket ID.
 - **Merge conflict:** run `git merge <integration-branch>` on your ticket
   branch, resolve every conflict keeping both this ticket's intent and what
   already landed, run lint and the full suite, and commit the merge.
@@ -202,9 +261,12 @@ tk add-note <ticket-id> <<'EOF'
 
 **Addressed**: <each finding or AC failure mapped to the change made>
 **Pushed back as out of scope**: <finding numbers and new ticket ids, or "none">
-**Files changed**: <paths>
+**Files changed**: <paths, including `.tickets/<epic-id>.md` when you changed epic text>
 EOF
 ```
+
+When a rework round changes behavior the epic states, the epic text follows it
+again in that round.
 
 ## Before returning `done`
 
@@ -221,7 +283,11 @@ Run this checklist every round:
    nothing across the project, checking every variant: dotted, underscored,
    and dashed forms, camelCase, PascalCase and UPPER_CASE, filename forms, and
    import forms. Justify any match you keep.
-6. **Work committed:**
+6. **Epic text current.** Every statement in the spec epics' descriptions
+   and notes that this ticket's change touches matches what the code now does,
+   and `summary` and an `**Epic text changed**` note list each epic line you
+   changed this round.
+7. **Work committed:**
    ```bash
    git rev-list <integration-branch>..HEAD --count   # at least 1
    git status --porcelain                            # empty
@@ -237,8 +303,8 @@ Return through `StructuredOutput`:
   committed, green state or the ticket needs an owner's decision. Put the
   reason in `failure_reason` (starting `needs decision:` for the latter), and
   commit any partial work first so the next attempt can build on it.
-- `head_sha`, `summary` (approach, files, probe findings, choices you made),
-  `tests` (commands run and results), and `out_of_scope` on rework rounds.
+- `head_sha`, `summary` (approach, files, probe findings, choices you made,
+  and each epic line you changed, old and new), `tests` (commands run and results), and `out_of_scope` on rework rounds.
 - `src_lines_changed`: from the `--numstat` output, added plus deleted lines
   summed over every file that is not a test, fixture, or doc. Count the whole
   ticket diff, not just this round. It sets the reviewer's effort, so count
@@ -265,7 +331,8 @@ Return through `StructuredOutput`:
   `summary`, and phrase it so the reviewer can check it. The reviewer is told
   to resolve each one; that only helps if you name them.
 - **Stay in the ticket's files.** If you find something broken elsewhere,
-  mention it in `summary` instead of fixing it.
+  mention it in `summary` instead of fixing it. The spec epics' text is part
+  of every ticket's files: keep it current, as above.
 - **Fix the bug class within the files you touch.** A narrow fix that leaves
   identical siblings broken in the same file comes back from review.
 - **No conditional behavior the AC does not ask for.** If an AC says something
