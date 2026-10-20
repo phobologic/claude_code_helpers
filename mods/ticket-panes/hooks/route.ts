@@ -52,7 +52,9 @@ function opened(launched: Launched): OpenResult {
 }
 
 // Step 2: the side pane shows the ticket. Its live agent is focused; one that has exited, leaving
-// the pane at its shell, is started again there, which keeps the pane's activity pane.
+// the pane at its shell, is started again there, which keeps the pane's activity pane, while the
+// shell is still in the folder the pane was split in. Else launch closes both panes and splits a
+// fresh one, since a Claude started elsewhere would not be the side session (R4).
 async function reopen($: EngineInterface, side: Side, id: string): Promise<OpenResult> {
   if (!side.sideAgentLive) return opened(await launch($, id, { inPane: side }))
   await focusAgent($, side.agentName)
@@ -71,7 +73,7 @@ async function closeSide($: EngineInterface, side: Side): Promise<void> {
 // Routes a click on ticket `id` in a main session in herdr (R4), as the steps above say. A side
 // session opens no side pane of its own (D12), so it is refused before any herdr call. Throws a
 // SidePaneError naming the step that failed: here `agent list`, `agent get` or `agent focus`, and
-// from herdr.ts `herdr pane`, `tickets dir`, `uuidgen`, `pane split` or `agent start`.
+// from herdr.ts `herdr pane`, `pane get`, `tickets dir`, `uuidgen`, `pane split` or `agent start`.
 export async function openSidePane($: EngineInterface, id: string): Promise<OpenResult> {
   const { kind } = await role($)
   if (kind === 'side') throw new SidePaneError('side session', 'opens no side pane of its own')

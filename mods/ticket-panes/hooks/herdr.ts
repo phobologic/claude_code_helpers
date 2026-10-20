@@ -30,12 +30,14 @@ const SIDE_PANE_SHARE = 0.3
 const SPLIT_RATIO = String(1 - SIDE_PANE_SHARE)
 
 // The side-pane record (E9), kept in `$.store` under `side:<the main session's pane>`: the side
-// pane with the terminal it had when recorded, its agent's name and, while there is one, the
-// run-activity pane below it with its terminal and the ticket it shows.
+// pane with the terminal it had when recorded, the folder it was split in (its TICKET_PANES_CWD;
+// a record written before the launcher kept it has none), its agent's name and, while there is
+// one, the run-activity pane below it with its terminal and the ticket it shows.
 export type SideRecord = {
   ticketId: string
   paneId: string
   paneTerminalId: string
+  paneCwd?: string
   agentName: string
   activityPaneId?: string
   activityTerminalId?: string
@@ -50,8 +52,8 @@ export type Side = SideRecord & { sideAgentLive: boolean }
 export type Launched = { paneId: string; waiting?: boolean }
 
 // `inPane`: start the agent in this pane, the record's side pane at its shell, instead of
-// splitting a new one.
-export type LaunchOptions = { inPane?: Pick<SideRecord, 'paneId' | 'paneTerminalId'> }
+// splitting a new one, while that shell is still in the folder the pane was split in.
+export type LaunchOptions = { inPane?: Pick<SideRecord, 'paneId' | 'paneTerminalId' | 'paneCwd'> }
 
 // Opening the side pane failed at `step` (`pane split`, `agent start`, ...); the message names the
 // step and what herdr said.
@@ -66,6 +68,8 @@ export class SidePaneError extends Error {
 }
 
 type Pane = { paneId: string; terminalId: string }
+// A side pane with the folder it was split in.
+type PaneIn = Pane & { cwd: string }
 type Activity = Required<Pick<SideRecord, 'activityPaneId' | 'activityTerminalId' | 'activityTicketId'>>
 // Where a side pane splits from, the folder it starts in, and its `--env` arguments.
 type Split = { from: string; cwd: string; env: string[] }
@@ -187,16 +191,22 @@ function activityOf(value: unknown): Activity | undefined {
   return picked(value, ACTIVITY_FIELDS) as Activity | undefined
 }
 
-// The record in `value` with only its own fields, or undefined when its side part is not whole.
-// The activity part is kept only whole.
-function recordOf(value: unknown): SideRecord | undefined {
-  const side = picked(value, SIDE_FIELDS) as SideRecord | undefined
-  return side === undefined ? undefined : { ...side, ...activityOf(value) }
+// `{ paneCwd }` when `paneCwd` is a string, else nothing to spread.
+function paneCwdOf(paneCwd: unknown): Pick<SideRecord, 'paneCwd'> {
+  return typeof paneCwd === 'string' ? { paneCwd } : {}
 }
 
-// The record without its activity part.
-function sidePart(record: SideRecord): SideRecord {
-  return { ticketId: record.ticketId, paneId: record.paneId, paneTerminalId: record.paneTerminalId, agentName: record.agentName }
+// The record in `value` with only its own fields, or undefined when its side part is not whole.
+// The activity part is kept only whole, and the pane's folder only as a string.
+function recordOf(value: unknown): SideRecord | undefined {
+  const side = picked(value, SIDE_FIELDS) as SideRecord | undefined
+  return side === undefined ? undefined : { ...side, ...paneCwdOf(field(value, 'paneCwd')), ...activityOf(value) }
+}
+
+// The record without its activity part: what stays when its activity pane goes.
+export function sidePart(record: SideRecord): SideRecord {
+  const { ticketId, paneId, paneTerminalId, agentName } = record
+  return { ticketId, paneId, paneTerminalId, ...paneCwdOf(record.paneCwd), agentName }
 }
 
 // The side-pane record with each pane checked in herdr (E9), or undefined when there is none or its
@@ -305,12 +315,13 @@ async function startAgent($: EngineInterface, name: string, paneId: string, args
 
 // Records `pane` as ticket `id`'s side pane; `isKeepingActivity` keeps the stored activity part,
 // for a launch in the record's own pane.
-async function keepRecord($: EngineInterface, id: string, pane: Pane, name: string, isKeepingActivity: boolean): Promise<void> {
+async function keepRecord($: EngineInterface, id: string, pane: PaneIn, name: string, isKeepingActivity: boolean): Promise<void> {
   await updateSide($, old => ({
     ...(isKeepingActivity ? activityOf(old) : undefined),
     ticketId: id,
     paneId: pane.paneId,
     paneTerminalId: pane.terminalId,
+    paneCwd: pane.cwd,
     agentName: name,
   }))
 }
@@ -348,19 +359,45 @@ async function startOver($: EngineInterface, id: string, split: Split, name: str
     throw new SidePaneError('agent start', started.reason)
   }
   notify($, `${id}: earlier conversation not found; started a new one`)
-  await keepRecord($, id, pane, name, false)
+  await keepRecord($, id, { ...pane, cwd: split.cwd }, name, false)
   return placed($, id, pane, started)
 }
 
+// The folder the pane's shell is in now, as herdr gives it (`foreground_cwd`: at its prompt the
+// shell is the foreground), or undefined when herdr gives none. A look herdr does not answer
+// throws, before anything is closed.
+async function shellFolder($: EngineInterface, paneId: string): Promise<string | undefined> {
+  const ran = await herdr($, ['pane', 'get', paneId])
+  if (!ran.isOk) throw new SidePaneError('pane get', ran.reason)
+  return text(field(ran.result, 'pane'), 'foreground_cwd')
+}
+
+// The record's side pane for an in-pane launch, or undefined when it cannot be reused. `agent
+// start` runs Claude in the folder the pane's shell is in, and R4 counts that Claude the pane's
+// own only when its root is the folder the pane was split in (TICKET_PANES_CWD). So the pane is
+// reused only while its shell is still there, as herdr shows it. Else (a `cd` in the shell, a
+// folder herdr does not show, a record that never kept the pane's folder) the pane goes as E13's
+// does, its activity pane first while ours, and the launch splits a fresh one.
+async function reusablePane($: EngineInterface, inPane: LaunchOptions['inPane']): Promise<PaneIn | undefined> {
+  if (inPane === undefined) return undefined
+  const { paneId, paneTerminalId, paneCwd } = inPane
+  if (paneCwd !== undefined && (await shellFolder($, paneId)) === paneCwd) return { paneId, terminalId: paneTerminalId, cwd: paneCwd }
+  await dropRecord($)
+  await closePane($, paneId)
+  return undefined
+}
+
 // Opens ticket `id`'s side agent (E7, E8, E13): in a new pane split right of the main session's,
-// or with `inPane` in that pane. It resumes the conversation R3 recorded for the ticket, started
-// in its recorded folder when that is still there (else the session root), or starts a new one,
-// and records the pane (E9). It never writes R3.
+// or with `inPane` in that pane while its shell is in the folder the pane was split in (else in a
+// fresh pane, see `reusablePane`). It resumes the conversation R3 recorded for the ticket, a split
+// starting in its recorded folder when that is still there (else the session root), or starts a
+// new one, and records the pane (E9). It never writes R3.
 // - `agent_not_ready` (Claude started on a question): the pane stays and is recorded, and the
 //   person is told it needs an answer (D15); resolves with `waiting`.
 // - Any other failure of a resume: E13, a new conversation in a fresh pane.
 // - Any other failure: a pane this call split is closed, nothing is recorded, and it throws a
-//   SidePaneError naming the step.
+//   SidePaneError naming the step. After reusablePane's fallback the record's side and activity
+//   panes were already closed and its record dropped, so no side pane is left.
 export async function launch($: EngineInterface, id: string, options: LaunchOptions = {}): Promise<Launched> {
   const from = await mainPane($)
   const dir = await ticketsDir($)
@@ -369,18 +406,21 @@ export async function launch($: EngineInterface, id: string, options: LaunchOpti
   const cwd = recorded !== undefined && (await isFolder($, recorded.cwd)) ? recorded.cwd : await $.session.root()
   const split: Split = { from, cwd, env: await paneEnv($, id, dir, cwd) }
   const name = agentName(id)
-  // A new session id comes before any split, so a uuidgen failure leaves nothing to close.
+  // A new session id comes before any split or close, so a uuidgen failure leaves nothing to close
+  // and closes nothing.
   const session = recorded === undefined ? ['--session-id', await newSessionId($)] : ['--resume', recorded.sessionId]
-  const { inPane } = options
-  const pane = inPane === undefined ? await splitPane($, split) : { paneId: inPane.paneId, terminalId: inPane.paneTerminalId }
+  const reused = await reusablePane($, options.inPane)
+  const pane = reused ?? { ...(await splitPane($, split)), cwd }
   const started = await startAgent($, name, pane.paneId, [...session, '-n', `ticket ${id}`])
   if (started.isOk || started.code === NOT_READY) {
-    await keepRecord($, id, pane, name, inPane !== undefined)
+    await keepRecord($, id, pane, name, reused !== undefined)
     return placed($, id, pane, started)
   }
   if (recorded !== undefined) return startOver($, id, split, name, pane)
-  // The record's own pane stays as it was; only a pane this call split is closed.
-  if (inPane === undefined) await closePane($, pane.paneId)
+  // Only a pane this call split is closed. A reused pane stays as it was, with its record; after
+  // reusablePane's fallback the record's panes are already closed and the record gone, so no side
+  // pane is left.
+  if (reused === undefined) await closePane($, pane.paneId)
   throw new SidePaneError('agent start', started.reason)
 }
 
