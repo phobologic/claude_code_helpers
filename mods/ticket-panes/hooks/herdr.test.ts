@@ -878,6 +878,8 @@ test('leaving with no activity pane on record, or no record of this pane, closes
     { [`session:${DIR}:x-ab12`]: WITH_ACTIVITY },
     // An activity part that is not whole.
     { [KEY]: { ...WITH_ACTIVITY, activityTerminalId: undefined } },
+    // A side part that is not whole: no record, as readSide reads it.
+    { [KEY]: { ...WITH_ACTIVITY, agentName: undefined } },
   ]
   for (const store of records) {
     const f = fake({ store, panes: OWN_PANES })
