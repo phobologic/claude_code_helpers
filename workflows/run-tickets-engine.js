@@ -328,6 +328,14 @@ current directory name, and from inside a worktree it would produce a meaningles
 
 const branchOf = t => `ticket/${t.id}`
 
+// Implementers only: the verifier, reviewer and merge prompts share header() and never edit epic text.
+function specEpicException() {
+  return `A second exception to the Read/Edit/Write rule: the spec epics' ticket files, ${A.repoRoot}/.tickets/<epic-id>.md
+(the parent epic, plus the planning epic above it when the parent's description points there). Read and Edit them
+(never Write, sed or \`tk edit\`), body text only, to keep the epic's text current as your agent instructions say.
+`
+}
+
 function implementPrompt(t, slot, work) {
   // The ticket's first implementer prepares the slot. That is usually the 'new' round, but a ticket
   // that went straight to merge meets its first implementer at a conflict or a failed gate.
@@ -351,7 +359,8 @@ The verifier's full note is on the ticket (\`tk show ${t.id}\`). Fix these, keep
     task = `Rework round ${work.round} for ${t.id}: quality review returned REWORK. Fix these in ${branchOf(t)}:
 ${work.findings.map((f, i) => `  ${i + 1}. [${f.priority.toUpperCase()}] ${f.location}: ${f.description} Suggested fix: ${f.fix}`).join('\n')}
 
-If a finding is genuinely out of scope (it would require touching files this ticket never named), do not fix it.
+If a finding is genuinely out of scope (it would require touching files this ticket never named; a spec epic's text is
+never out of scope), do not fix it.
 First check it is not already filed: \`(cd ${A.repoRoot} && tk backlog find <path> <symbol>)\`. If an open ticket covers it,
 add a note there (\`tk add-note <id> "..."\`) and use that id. Otherwise file it:
 \`tk create "<title>" -p <0-2 by priority> --parent ${A.findingsParent} --tags code-review,quality -d "<file:line, description, suggested fix, source ticket ${t.id}>"\`
@@ -372,7 +381,7 @@ Bring the integration branch into your ticket branch and resolve:
 Resolve every conflict preserving both this ticket's intent and what landed on ${A.integrationBranch}, then run lint and the full test suite, and commit the merge.`
   }
 
-  return `${header(slot)}
+  return `${header(slot)}${specEpicException()}
 ${setup}
 
 ${task}${decisionNote(t)}
