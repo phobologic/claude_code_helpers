@@ -548,6 +548,19 @@ for (const [name, answers, calls] of [
   })
 }
 
+test('a run that is gone from the repo leaves the band', async ($, on) => {
+  mock.clock(on, { now: SHOWN })
+  const answers: Record<string, Answer> = { '--json': ok(OTHER) }
+  statuses(on, answers, [])
+  await $.command.run(COMMAND)
+  answers['--json'] = { exitCode: 1, stdout: '' }
+  await $.command.run(COMMAND) // hides
+  await $.command.run(COMMAND) // shows, and reads the run again
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /run-tickets/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /No workflow agents/ })).toBeDefined()
+})
+
 test('when finding the session\'s run fails, the band keeps the run it showed', async ($, on) => {
   const time = mock.clock(on, { now: SHOWN })
   const answers: Record<string, Answer> = { '--json': ok(OTHER), '--list': { exitCode: 0, stdout: LIST }, '--json wf_mine': ok(MINE) }
