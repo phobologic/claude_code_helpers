@@ -20,7 +20,7 @@ import type { AgentRow, RunSummary, TicketRow, Visibility } from '../types'
 
 const TICK_MS = 15_000 // redraws running times
 const BUSY_POLL_TICKS = 2 // read the run's status every 30s while something runs
-const IDLE_POLL_TICKS = 20 // and every 5 minutes otherwise, to notice a run started elsewhere
+const IDLE_POLL_TICKS = 20 // and every 5 minutes otherwise; a session that launched no run notices one started elsewhere
 const VISIBLE_MS = 60_000 // only while the band has drawn within this long
 const KEEP_AGENTS = 300
 
@@ -136,10 +136,11 @@ function status($: EngineInterface, args: string[]) {
   return $.process.run(['run-tickets-status', ...args], { timeoutMs: 60_000 })
 }
 
-// The runs this session's workflow agents belong to, newest first.
+// The runs this session's workflow agents belong to, newest first. An agent whose workflow
+// gave no run id names no run: `--json ''` would read the repo's newest.
 export function sessionRuns(list: readonly AgentRow[]): string[] {
   const ids: string[] = []
-  for (const a of [...list].reverse()) if (!ids.includes(a.runId)) ids.push(a.runId)
+  for (const a of [...list].reverse()) if (a.runId && !ids.includes(a.runId)) ids.push(a.runId)
   return ids
 }
 

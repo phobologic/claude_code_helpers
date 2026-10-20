@@ -493,6 +493,11 @@ test('the session\'s runs are the run ids of its agents, newest first, each once
     { key: 'c', runId: 'wf_2', label: 'review y-1', startedAt: T0 + 2 * MIN },
   ])).toEqual(['wf_2', 'wf_1'])
   expect(sessionRuns([])).toEqual([])
+  // A workflow that gave no run id names no run.
+  expect(sessionRuns([
+    { key: 'a', runId: 'wf_1', label: 'impl x-1', startedAt: T0 },
+    { key: 'b', runId: '', label: 'step', startedAt: T0 + MIN },
+  ])).toEqual(['wf_1'])
 })
 
 test('a run another session launched later never takes the band from this session\'s run', async ($, on) => {
@@ -514,6 +519,52 @@ test('a session whose run is the repo\'s newest reads it with one call, as befor
   await spawn($, 'wf_mine', 'review a-2 r2')
   await time.settle()
   expect(ran).toEqual([['run-tickets-status', '--json']])
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await texts(ui)).map(([text]) => text).slice(0, 2)).toEqual(MINE_ROWS)
+})
+
+test('the band shows the newest of the session\'s runs that the run list names', async ($, on) => {
+  const time = mock.clock(on, { now: SHOWN })
+  const ran: string[][] = []
+  const OLD: Report = { ...MINE, run_id: 'wf_old', integration_branch: 'run/old' }
+  const list = `${LIST}wf_old  2030-03-01 15:00  finished in 30m, merged 2/2  [a-1 a-2]\n`
+  statuses(on, { '--json': ok(OTHER), '--list': { exitCode: 0, stdout: list }, '--json wf_mine': ok(MINE), '--json wf_old': ok(OLD) }, ran)
+  await spawn($, 'wf_old', 'impl a-1')
+  await spawn($, 'wf_mine', 'review a-2 r2')
+  await spawn($, 'wf_script', 'other workflow step')
+  await time.settle()
+  await $.command.run(COMMAND) // hides
+  await $.command.run(COMMAND) // shows, and reads the run again with all three runs known
+  expect(ran.slice(-2).map(argv => argv.slice(1).join(' '))).toEqual(['--list', '--json wf_mine'])
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await texts(ui)).map(([text]) => text).slice(0, 2)).toEqual(MINE_ROWS)
+})
+
+test('a session whose run is the repo\'s newest reads it with one call though a later agent is another workflow\'s', async ($, on) => {
+  const time = mock.clock(on, { now: SHOWN })
+  const ran: string[][] = []
+  statuses(on, { '--json': ok(MINE), '--list': { exitCode: 0, stdout: LIST }, '--json wf_mine': ok(MINE) }, ran)
+  await spawn($, 'wf_mine', 'review a-2 r2')
+  await spawn($, 'wf_script', 'other workflow step')
+  await time.settle()
+  ran.length = 0
+  await $.command.run(COMMAND) // hides
+  await $.command.run(COMMAND) // shows, and reads the run again with both runs known
+  expect(ran).toEqual([['run-tickets-status', '--json']])
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await texts(ui)).map(([text]) => text).slice(0, 2)).toEqual(MINE_ROWS)
+})
+
+test('a later agent whose workflow gave no run id does not take the band from the session\'s run', async ($, on) => {
+  const time = mock.clock(on, { now: SHOWN })
+  const ran: string[][] = []
+  statuses(on, { '--json': ok(OTHER), '--list': { exitCode: 0, stdout: LIST }, '--json wf_mine': ok(MINE), '--json ': ok(OTHER) }, ran)
+  await spawn($, 'wf_mine', 'review a-2 r2')
+  await spawn($, '', 'unnamed workflow step')
+  await time.settle()
+  await $.command.run(COMMAND) // hides
+  await $.command.run(COMMAND) // shows, and reads the run again with both agents known
+  expect(ran.slice(-2).map(argv => argv.slice(1).join(' '))).toEqual(['--list', '--json wf_mine'])
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect((await texts(ui)).map(([text]) => text).slice(0, 2)).toEqual(MINE_ROWS)
 })
