@@ -128,12 +128,13 @@ a session loads it from a folder you own.
   could not be resumed, split the same way) without taking focus, running `claude` on
   the default model under
   the herdr agent name `tp-<id>` and the session name `ticket <id>`.
-  - The same ticket again focuses its agent. If its Claude has exited (`/exit` in the
-    pane), the click starts it again in the same pane, as long as the pane's shell is
-    still in the folder the pane started in. After a `cd` there (or when herdr can't
-    tell the shell's folder), the click closes the side pane and the pane below it,
-    and opens the ticket in a fresh pane, since a Claude started from another folder
-    would not be the side session.
+  - The same ticket again focuses its agent.
+  - Leaving the side Claude (`/exit`, ctrl+c or ctrl+d in the pane) closes the side
+    pane and the run-activity pane below it; `/clear` and `/resume` there keep them.
+    The next click on the ticket opens a fresh side pane that resumes its
+    conversation. A side pane still open on a bare shell (its Claude crashed or was
+    killed, or the close failed) is closed with the pane below it on the next click,
+    which opens the ticket in a fresh pane the same way.
   - Another ticket, while the side agent is idle: the agent is ended and its pane
     closed, and the clicked ticket opens in a fresh pane. Ending it sends ctrl+c, which
     clears anything typed in the side pane and not sent, then `/exit`.

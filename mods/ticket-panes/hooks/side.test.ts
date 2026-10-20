@@ -1,4 +1,4 @@
-import type { On, PromptComposeInput, PromptComposeSection } from 'claude-code'
+import type { On, ProcessRunResult, PromptComposeInput, PromptComposeSection, SessionEndReason, SessionEndResult } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import type { Engine, Plugin } from 'claude-code/testing'
 
@@ -44,13 +44,33 @@ type World = {
   afterRead?: Ticket
   // Every line the plugin logged.
   logs: string[]
+  // The store's values by key, as `$.store.get` and `$.store.keys` read them.
+  stored: Record<string, unknown>
+  // In order: each herdr command the plugin ran (`herdr pane close w1:p2`), the engine's end step
+  // (`end`), and each toast (`toast <text>`).
+  events: string[]
+  // What every herdr command does: answers (`ok`), fails with herdr's `pane_not_found`, or rejects.
+  herdr: 'ok' | 'gone' | 'rejects'
+  // The terminal each pane shows, for `herdr pane get`.
+  terminals: Record<string, string>
 }
 
 // Answers what the plugin asks of the world beneath it. Only the ticket's file exists: any other
 // path, the tickets folders a walk looks for included, is missing. With `kept`, the environment
 // refuses TICKET_PANES_TICKET, so the role is the one `$.state` kept (role.ts's fallback).
 function world(on: On, env: Record<string, string>, kept?: Role): World {
-  const w: World = { ticket: { mtimeMs: 100, text: V1 }, sessionId: 'S1', contexts: [], records: [], storeRefusals: 0, logs: [] }
+  const w: World = {
+    ticket: { mtimeMs: 100, text: V1 },
+    sessionId: 'S1',
+    contexts: [],
+    records: [],
+    storeRefusals: 0,
+    logs: [],
+    stored: {},
+    events: [],
+    herdr: 'ok',
+    terminals: {},
+  }
   if (kept === undefined) {
     mock.env(on, env)
   } else {
@@ -87,13 +107,34 @@ function world(on: On, env: Record<string, string>, kept?: Role): World {
     w.contexts.push(e.context)
     return { text: e.text, context: e.context }
   })
+  on('store.get', ($, e) => ({ value: w.stored[e.key] }))
+  on('store.keys', () => ({ value: Object.keys(w.stored) }))
+  on('process.run', ($, e) => {
+    w.events.push(e.argv.join(' '))
+    if (w.herdr === 'rejects') return { deny: 'process.run: herdr ran past its timeout (faked)' }
+    if (w.herdr === 'gone') return { value: ran(1, '', JSON.stringify({ error: { code: 'pane_not_found', message: 'pane not found' } })) }
+    const [, group, verb, paneId = ''] = e.argv
+    const result = `${group} ${verb}` === 'pane get' ? { pane: { pane_id: paneId, terminal_id: w.terminals[paneId] } } : { type: 'ok' }
+    return { value: ran(0, JSON.stringify({ id: 'cli', result }), '') }
+  })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
-  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+  on('session.end', ($, e) => {
+    w.events.push('end')
+    return { sessionId: e.sessionId }
+  })
   on('ui.log', ($, e) => {
     w.logs.push(e.text)
     return { value: undefined }
   })
+  on('ui.toast', ($, e) => {
+    w.events.push(`toast ${e.text}`)
+    return { value: undefined }
+  })
   return w
+}
+
+function ran(exitCode: number, stdout: string, stderr: string): ProcessRunResult {
+  return { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false }
 }
 
 // A new session starting; an enable or a worker respawn raises it too, after this conversation's
@@ -115,8 +156,8 @@ async function slash($: Engine, name: string): Promise<void> {
   await $.prompt.submit({ text: `/${name}`, command: { name, args: '' }, wait: false, origin: ORIGIN })
 }
 
-async function end($: Engine, reason: 'clear' | 'resume' | 'other', sessionId: string): Promise<void> {
-  await $.session.end({ reason, sessionId, resume: { id: sessionId } })
+async function end($: Engine, reason: SessionEndReason, sessionId: string): Promise<SessionEndResult> {
+  return $.session.end({ reason, sessionId, resume: { id: sessionId } })
 }
 
 function change(w: World, mtimeMs: number, text: string): void {
@@ -711,4 +752,98 @@ test('AC (session 3 of 3): a child `claude -p` in the launch folder right after 
   await promptsAndClear($, w, 'T2')
   expect(SHARED_WRITES).toHaveLength(3)
   expect(SHARED_WRITES.at(-1)).toEqual(PANE_RECORD)
+})
+
+// ---------- leaving the side Claude ----------
+// The side pane is w1:p2 (LAUNCHED's HERDR_PANE_ID). Its record is kept under the main session's
+// pane, w1:p1, with the run-activity pane w1:p3 below it.
+
+const SIDE_RECORD = {
+  ticketId: 'x-ab12',
+  paneId: 'w1:p2',
+  paneTerminalId: 'term-2',
+  agentName: 'tp-x-ab12',
+  activityPaneId: 'w1:p3',
+  activityTerminalId: 'term-3',
+  activityTicketId: 'x-ab12',
+}
+
+// A world whose store holds the side pane's record, with both panes showing their terminals.
+function paned(w: World): World {
+  w.stored = { 'side:w1:p1': SIDE_RECORD }
+  w.terminals = { 'w1:p2': 'term-2', 'w1:p3': 'term-3' }
+  return w
+}
+
+// The herdr commands among the world's events.
+function herdrRuns(w: World): string[] {
+  return w.events.filter(event => event.startsWith('herdr '))
+}
+
+test('AC: /exit in the side pane closes the activity pane below it, then its own pane, after the engine\'s end step', async ($, on) => {
+  const w = paned(world(on, LAUNCHED))
+  await start($)
+  expect(await end($, 'prompt_input_exit', 'S1')).toEqual({ sessionId: 'S1' })
+  expect(w.events).toEqual(['end', 'herdr pane get w1:p3', 'herdr pane close w1:p3', 'herdr pane close w1:p2'])
+})
+
+test('AC: with no activity pane, leaving closes only the side pane', async ($, on) => {
+  const w = world(on, LAUNCHED)
+  w.stored = { 'side:w1:p1': { ...SIDE_RECORD, activityPaneId: undefined } }
+  await end($, 'prompt_input_exit', 'S1')
+  expect(herdrRuns(w)).toEqual(['herdr pane close w1:p2'])
+})
+
+test('AC: /clear, /resume and any other end of a side session close no pane', async ($, on) => {
+  const w = paned(world(on, LAUNCHED))
+  await start($)
+  for (const reason of ['clear', 'resume', 'other', 'logout'] as const) await end($, reason, 'S1')
+  expect(herdrRuns(w)).toEqual([])
+})
+
+test('AC: a main session that ends with prompt_input_exit closes no pane', async ($, on) => {
+  const main = paned(world(on, { TICKETS_DIR: DIR, HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p1' }))
+  await end($, 'prompt_input_exit', 'S1')
+  expect(herdrRuns(main)).toEqual([])
+})
+
+test('a side session outside herdr closes no pane when it is left', async ($, on) => {
+  const w = paned(world(on, SIDE_ENV))
+  await end($, 'prompt_input_exit', 'S1')
+  expect(herdrRuns(w)).toEqual([])
+})
+
+test("AC: a child `claude` in another folder, leaving with the pane's variables, closes no pane", async ($, on) => {
+  rootedAt(on, TEMP)
+  const w = paned(world(on, LAUNCHED))
+  await startChild($, TEMP, true)
+  await end($, 'prompt_input_exit', 'T1')
+  expect(herdrRuns(w)).toEqual([])
+})
+
+test("AC: a child `claude -p` in the launch folder, leaving with the pane's variables, closes no pane", async ($, on) => {
+  drawsNowhere(on)
+  const w = paned(world(on, LAUNCHED))
+  await startChild($, '/repo', false)
+  await end($, 'prompt_input_exit', 'T1')
+  expect(herdrRuns(w)).toEqual([])
+})
+
+test('AC: panes already closed (a switch got there first) or herdr failing: the end still resolves, with no toast', async ($, on) => {
+  const w = paned(world(on, LAUNCHED))
+  for (const herdr of ['gone', 'rejects'] as const) {
+    w.herdr = herdr
+    w.events = []
+    expect(await end($, 'prompt_input_exit', 'S1'), herdr).toEqual({ sessionId: 'S1' })
+    // The activity pane's look fails, so it is not closed on a guess; the side pane's close is
+    // still tried.
+    expect(w.events, herdr).toEqual(['end', 'herdr pane get w1:p3', 'herdr pane close w1:p2'])
+  }
+})
+
+test('a store that cannot be read still closes the side pane, with no toast', async ($, on) => {
+  on('store.keys', {}, () => ({ deny: 'the store is locked (faked)' }))
+  const w = paned(world(on, LAUNCHED))
+  expect(await end($, 'prompt_input_exit', 'S1')).toEqual({ sessionId: 'S1' })
+  expect(w.events).toEqual(['end', 'herdr pane close w1:p2'])
 })
