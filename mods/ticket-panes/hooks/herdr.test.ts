@@ -530,6 +530,18 @@ test('AC: in the recorded pane whose shell has left its launch folder, the panes
   expect(f.seen.toasts).toEqual([])
 })
 
+test('when the fresh pane that replaced a moved shell\'s pane fails to start a new conversation, that pane closes too and nothing is recorded', async () => {
+  const f = fake({
+    store: { [KEY]: RECORD },
+    panes: { 'w1:p2': { ...AT_PROMPT, cwd: '/tmp/elsewhere' } },
+    starts: [{ code: 'pane_not_shell', message: 'not at a shell prompt' }],
+  })
+  expect((await failure(launch(f.$, 'x-ab12', { inPane: RECORD }))).step).toBe('agent start')
+  expect(steps(f)).toEqual(['uuidgen', 'pane get w1:p2', 'pane close w1:p2', 'pane split', `agent start w1:p3 --session-id ${NEW_ID}`, 'pane close w1:p3'])
+  expect([...f.panes.keys()]).toEqual([])
+  expect(f.store.has(KEY)).toBe(false)
+})
+
 test('in the recorded pane, the shell must be in the folder the pane was split in, not only where a fresh split would go', async () => {
   // The recorded conversation's folder is the worktree, but the pane was split in /repo: its shell
   // there is reused, and the agent starts in the pane's own folder.
