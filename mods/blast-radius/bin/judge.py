@@ -18,10 +18,18 @@ The policy goes by where the affected files are, not where the command runs:
 - The session's repository: held only when work would be lost that git can't give
   back: untracked or modified files, ignored files that look like secrets or local
   data, a nested repository's history, commits on no other branch, stashes.
+- Another repository inside it (a clone, a submodule, an extracted archive with its
+  own .git): deleting in it is always held. Delete checks run git only in the session's
+  own worktrees, since git run in another repository reads that repository's config,
+  which can run commands (core.fsmonitor, clean filters) before the person is even
+  asked. git commands that name another repository are still checked by running git
+  there (cc-8res).
 - An agent's scratch worktree (a linked worktree inside the repository folder, other
-  than the one the session runs in), temp folders and Claude's memory folders: free.
-  In a scratch worktree, a git command on branches, stashes or objects is judged like
-  anywhere else, since every worktree shares them (free_checkout).
+  than the one the session runs in), and what temp folders and Claude's memory folders
+  hold: free. A temp or memory folder itself is held like anywhere else.
+  Only a worktree's own files are its alone: branches, stashes, reflogs and objects
+  belong to the whole repository, so git commands on them count where its main
+  checkout is, whichever worktree they run in.
 - Anywhere else: held.
 A folder that doesn't exist yet holds only what the command makes, so an effect there
 is judged by what can still reach existing files: links and moves the command puts
@@ -30,10 +38,12 @@ there, `..`, and git's repository (new_folder, git_new_folder).
 Run it with `python3 -I`, so nothing in the working directory is imported.
 """
 
+import functools
 import glob
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -53,7 +63,19 @@ VENDORED = {
     "DerivedData", "site-packages",
 }
 FIND_ACTIONS = {"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"}
+# Where a write loses nothing: the null device, the terminal and the command's own
+# streams. Any other /dev path (a disk, say) is judged like any file outside the repository.
+SINK = re.compile(r"/dev/(?:null|stdout|stderr|tty|fd/[0-9]+)")
 PLACEHOLDER = re.compile("\x01(\\w+)\x01")
+SEPARATE = "a separate git repository: its work can't be checked"
+# How hooks/parse.ts escapeGlob() marks a quoted glob character: [*], [?] or [[].
+ESCAPED = re.compile(r"\[([*?[])\]")
+# Where files are free to lose (see Ctx.where).
+FREE = ("scratch", "temp")
+# git subcommands that change what every worktree of a repository shares rather than
+# one worktree's files. `worktree remove` isn't one: it is judged by the worktree it
+# removes.
+SHARED = {"stash", "branch", "reflog", "gc", "prune", "filter-branch", "filter-repo"}
 
 # git runs without the caller's repository overrides, and never takes index.lock for
 # a refresh, so a check never collides with an agent's own git command.
@@ -69,13 +91,44 @@ def under(path, root):
     return path == root or path.startswith(root.rstrip("/") + "/")
 
 
+@functools.cache
+def names_in(folder):
+    """The names in `folder` as the file system stores them, and each by its case-folded form."""
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        names = []
+    return frozenset(names), {n.casefold(): n for n in names}
+
+
+def spelled(path):
+    """An absolute, normalized `path` with each name that exists spelled the way its
+    folder lists it. A volume that ignores case opens src for SRC, but realpath keeps the
+    spelling it was given, and every check compares paths as strings."""
+    out = "/"
+    for name in filter(None, path.split("/")):
+        exact, folded = names_in(out)
+        if name not in exact and os.path.lexists(os.path.join(out, name)):
+            name = folded.get(name.casefold(), name)
+        out = os.path.join(out, name)
+    return out
+
+
+def ondisk(path):
+    """os.path.realpath, spelled the way the file system stores each name."""
+    return spelled(os.path.realpath(path))
+
+
 def decode(b):
     return b.decode("utf-8", "surrogateescape")
 
 
 def git(args, cwd, timeout=60):
+    # A check never starts the repository's file monitor, a command its config names.
+    # Clean filters can't be switched off this way, which is why delete checks only run
+    # git in the session's own worktrees (see judge_deletes).
     try:
-        return subprocess.run(["git", *args], cwd=cwd, env=GIT_ENV, capture_output=True, timeout=timeout)
+        return subprocess.run(["git", "-c", "core.fsmonitor=false", *args], cwd=cwd, env=GIT_ENV, capture_output=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired):
         return None
 
@@ -88,7 +141,72 @@ def git_out(args, cwd):
 def toplevel(path):
     d = path if os.path.isdir(path) else os.path.dirname(path)
     t = git_out(["rev-parse", "--show-toplevel"], d)
-    return os.path.realpath(t.strip()) if t and t.strip() else None
+    return ondisk(t.strip()) if t and t.strip() else None
+
+
+def could_stop_git(d):
+    """Whether git, looking for the repository from `d` or a folder inside it, could stop at `d`.
+
+    git stops at a folder holding `.git`, at one that is itself a bare repository (it
+    holds HEAD), at /, and where the folder above is on another file system.
+    """
+    if os.path.lexists(os.path.join(d, ".git")) or os.path.lexists(os.path.join(d, "HEAD")):
+        return True
+    parent = os.path.dirname(d)
+    return parent == d or os.stat(d).st_dev != os.stat(parent).st_dev
+
+
+def owner_of(ctx, d):
+    """The working copy holding the real folder `d`, as `toplevel` finds it.
+
+    A folder where git can't stop has its parent's answer, so git runs once per folder
+    where the answer can change (each repository's top, mostly) rather than once per
+    path. `d` must be a real path, so its parents are the folders git walks.
+    """
+    chain = []
+    while d not in ctx.owners:
+        if could_stop_git(d):
+            ctx.owners[d] = toplevel(d)
+            break
+        chain.append(d)
+        d = os.path.dirname(d)
+    for c in chain:
+        ctx.owners[c] = ctx.owners[d]
+    return ctx.owners[d]
+
+
+def covered(path, roots):
+    """Whether `path` is one of the set `roots` or inside one: one lookup per folder above it."""
+    while path not in roots:
+        parent = os.path.dirname(path)
+        if parent == path:
+            return False
+        path = parent
+    return True
+
+
+def listed_worktrees(top):
+    """The worktrees of the repository `top` belongs to, as git recorded their paths, the
+    main one first; [] when git fails. -z keeps a path that holds a newline whole; git
+    before 2.36 has no -z, and there the listing is read by lines."""
+    listing = git_out(["worktree", "list", "--porcelain", "-z"], top)
+    lines = listing.split("\0") if listing is not None else (git_out(["worktree", "list", "--porcelain"], top) or "").splitlines()
+    return [line[9:] for line in lines if line.startswith("worktree ")]
+
+
+def main_checkout(top):
+    """The main working tree of the repository `top` belongs to, which every one of its
+    worktrees shares branches, stashes and history with."""
+    paths = listed_worktrees(top)
+    if not paths:
+        raise Unresolved(f"git worktree list failed in {top}, so whose branches and history these are is unknown")
+    return ondisk(paths[0])
+
+
+def throwaway(ctx, top):
+    """Whether the whole repository `top` belongs to is a throwaway copy, so its branches,
+    stashes and history go with it."""
+    return ctx.where(main_checkout(top)) in FREE
 
 
 def finding(kind, path, detail):
@@ -105,9 +223,9 @@ def size(n):
 
 class Ctx:
     def __init__(self, req):
-        self.cwd = os.path.realpath(req["cwd"])
+        self.cwd = ondisk(req["cwd"])
         self.home = os.path.expanduser("~")
-        self.home_real = os.path.realpath(self.home)
+        self.home_real = ondisk(self.home)
         tmp = tempfile.gettempdir()
         self.vars = {
             "HOME": self.home,
@@ -118,20 +236,21 @@ class Ctx:
         }
         roots = os.environ.get("BLAST_RADIUS_TEMP_ROOTS")  # tests only
         temp = roots.split(os.pathsep) if roots else ["/tmp", "/var/tmp", tmp, os.environ.get("TMPDIR", "")]
-        self.temp = sorted({os.path.realpath(p) for p in temp if p})
-        self.memory = os.path.realpath(os.path.join(self.home, ".claude", "projects"))
-        self.project = os.path.realpath(req["sessionRoot"])
+        self.temp = sorted({ondisk(p) for p in temp if p})
+        self.memory = ondisk(os.path.join(self.home, ".claude", "projects"))
+        self.project = ondisk(req["sessionRoot"])
         self.top = toplevel(self.project)  # the session's own working copy
         self.main = None
         self.worktrees = []
         if self.top:
-            listing = git_out(["worktree", "list", "--porcelain"], self.top) or ""
-            paths = [os.path.realpath(line[9:]) for line in listing.splitlines() if line.startswith("worktree ")]
+            # git records a worktree's path as it was typed, not as the volume spells it.
+            paths = [ondisk(p) for p in listed_worktrees(self.top)]
             self.main = paths[0] if paths else self.top
             self.worktrees = paths or [self.top]
         # Linked worktrees inside the repository folder are agents' scratch space.
         self.scratch = [w for w in self.worktrees[1:] if under(w, self.main) and w != self.top] if self.main else []
         self.notes = []
+        self.owners = {}  # folder -> the working copy git finds from it (owner_of)
         self.placed = placed(self, req.get("effects", []))
 
     def where(self, rp):
@@ -148,8 +267,10 @@ class Ctx:
             return "nogit"
         if any(under(rp, t) and rp != t for t in self.temp):
             return "temp"
+        # What a project's memory folder holds is free, like a temp folder's contents,
+        # but the folder itself is not: deleting it loses every memory at once.
         rel = rp[len(self.memory) + 1 :].split("/") if under(rp, self.memory) else []
-        if len(rel) >= 2 and rel[1] == "memory":
+        if len(rel) >= 3 and rel[1] == "memory":
             return "temp"
         return "outside"
 
@@ -188,11 +309,18 @@ def base_dir(ctx, d):
 
 def expand(ctx, base, word, must_exist=True):
     w = subst(ctx, word)
+    words = [w]
     if glob.has_magic(w):
         pattern = w if os.path.isabs(w) else os.path.join(glob.escape(base), w)
-        return sorted(glob.glob(pattern))  # like bash: * skips dotfiles
-    p = w if os.path.isabs(w) else os.path.join(base, w)
-    return [p] if not must_exist or os.path.lexists(p) else []
+        found = sorted(glob.glob(pattern))  # like bash: * skips dotfiles
+        if found:
+            return found
+        # Like bash, a pattern that matches nothing is passed on as it is, so `rm -rf
+        # app/[id]` removes the folder named [id]. A quoted glob character arrives as
+        # [*], which can't be told from a typed [*], so both readings are judged.
+        words = sorted({w, ESCAPED.sub(r"\1", w)})
+    paths = [p if os.path.isabs(p) else os.path.join(base, p) for p in words]
+    return [p for p in paths if not must_exist or os.path.lexists(p)]
 
 
 def placed(ctx, effects):
@@ -210,7 +338,7 @@ def placed(ctx, effects):
             continue  # the effect itself holds
         if eff["mode"] == "cp" and not any(os.path.islink(s) for s in srcs):
             continue  # a copy of real files: deleting it loses nothing
-        out += [os.path.realpath(d) for d in dests]
+        out += [ondisk(d) for d in dests]
     return out
 
 
@@ -228,14 +356,17 @@ def resolve_delete(p):
     # rm removes the last name itself, never what a link there points to, unless the
     # path ends in a slash.
     if p.endswith("/") or os.path.basename(p) in ("", ".", ".."):
-        return os.path.realpath(p)
+        return ondisk(p)
     parent, name = os.path.split(p)
-    return os.path.join(os.path.realpath(parent), name)
+    return spelled(os.path.join(os.path.realpath(parent), name))
 
 
 def describe(rp):
     if os.path.islink(rp):
         return "a symlink"
+    mode = os.lstat(rp).st_mode
+    if stat.S_ISBLK(mode) or stat.S_ISCHR(mode):
+        return "a device"  # its size says nothing about what is on it
     if not os.path.isdir(rp):
         return "a file, " + size(os.lstat(rp).st_size)
     files, total, capped = 0, 0, False
@@ -258,9 +389,26 @@ def is_protected(name):
     return name not in NOT_PROTECTED and any(fnmatchcase(name, p) for p in PROTECTED)
 
 
-def tracked(path):
-    out = git_out(["--literal-pathspecs", "ls-files", "-z", "--", os.path.basename(path)], os.path.dirname(path))
-    return bool(out)
+def tracked(ctx, paths):
+    """Which of `paths` are in git's index: one `git ls-files` per worktree holding them.
+
+    Each path is asked of the session's innermost worktree holding it, never of the
+    repository git finds from the file's own folder: git there could find another
+    repository (a folder laid out as a bare repository needs no .git) and run its config.
+    """
+    by_repo = {}
+    for p in paths:
+        by_repo.setdefault(max((w for w in ctx.worktrees if under(p, w)), key=len), set()).add(p)
+    found = set()
+    for repo, ps in by_repo.items():
+        out = git_out(["ls-files", "-z"], repo)
+        # `paths` are spelled as on disk, the index as git recorded them: after a case-only
+        # rename git never saw, src/.env is in a folder named SRC. An entry is respelled
+        # only when it could be one of `paths`, so the whole index isn't.
+        folded = {p.casefold() for p in ps}
+        entries = (os.path.join(repo, e) for e in (out or "").split("\0"))
+        found |= ps & {spelled(f) if f.casefold() in folded else f for f in entries}
+    return found
 
 
 def changes(repo, untracked):
@@ -341,7 +489,7 @@ def judge_deletes(ctx, items):
         elif w == "nogit":
             findings.append(finding("uncommitted", ctx.show(rp), "not in a git repository, so it can't be restored"))
         elif w == "inside":
-            owner = toplevel(os.path.dirname(rp)) or (rp if rp in ctx.worktrees else None)
+            owner = owner_of(ctx, os.path.dirname(rp)) or (rp if rp in ctx.worktrees else None)
             if owner is None:
                 findings.append(finding("uncommitted", ctx.show(rp), "not in git, so it can't be restored"))
             else:
@@ -351,39 +499,64 @@ def judge_deletes(ctx, items):
     return findings
 
 
-def judge_in_repo(ctx, owner, entries):
-    findings = []
-    targets = [rp for rp, _ in entries]
-    lost = {}
-    for path, what in changes(owner, untracked=True):
-        if any(under(path, t) for t in targets):
-            lost[path] = what
+def search(ctx, owner, entries):
+    """Protected files and nested repositories in the deleted `entries`, as walk finds them."""
     protected, nested = [], []
-    for rp, isdir in entries:
+    searched = set()  # folders walked in full: nothing inside them needs a second walk
+    for rp, isdir in sorted(entries):  # a folder sorts before what is inside it
         if VENDORED & set(os.path.relpath(rp, owner).split("/")):
             continue  # installed files: rebuilt, never kept
         if not isdir:
             if is_protected(os.path.basename(rp)):
                 protected.append(rp)
+        elif covered(rp, searched):
+            continue
         elif walk(ctx, rp, protected, nested):
             ctx.notes.append(f"{ctx.show(rp)} is too large to search fully for .env files and nested repositories.")
-    for repo, kind in nested:
-        if kind == "repo":
-            findings.append(finding("history", ctx.show(repo), "a separate git repository: its history would be deleted"))
         else:
-            for path, what in changes(repo, untracked=True):
-                lost[path] = what
-    for path in protected:
-        if path not in lost and not tracked(path):
+            searched.add(rp)
+    return protected, nested
+
+
+def judge_in_repo(ctx, owner, entries):
+    if owner not in ctx.worktrees:
+        # A repository nested in the session's: git status there would run its config.
+        return [finding("history", ctx.show(owner), SEPARATE)]
+    targets = {rp for rp, _ in entries}
+    # git reports a path as its index spells it, which a case-only rename git never
+    # recorded leaves behind (src/a.py in a folder now named SRC), so each is respelled
+    # before it is compared with the targets, which are spelled as on disk.
+    lost = {sp: what for path, what in changes(owner, untracked=True) if covered(sp := spelled(path), targets)}
+    protected, nested = search(ctx, owner, entries)
+    findings = judge_nested(ctx, nested, lost)
+    unsure = [p for p in protected if p not in lost]
+    known = tracked(ctx, unsure)
+    for path in unsure:
+        if path not in known:
             lost[path] = "ignored by git, so it can't be restored"
     findings += [finding("uncommitted", ctx.show(p), what) for p, what in sorted(lost.items())]
     return findings
 
 
+def judge_nested(ctx, nested, lost):
+    """Findings for the repositories walk() found; a session worktree's changes go into `lost`."""
+    findings = []
+    for repo, kind in nested:
+        if kind == "repo":
+            findings.append(finding("history", ctx.show(repo), "a separate git repository: its history would be deleted"))
+        elif repo in ctx.worktrees:
+            for path, what in changes(repo, untracked=True):
+                lost[spelled(path)] = what  # as judge_in_repo spells it
+        else:
+            # Its .git file can point at any git folder, whose config git status would run.
+            findings.append(finding("history", ctx.show(repo), SEPARATE))
+    return findings
+
+
 def judge_overwrite(ctx, p):
-    if p.startswith("/dev/"):
+    rp = ondisk(p)  # a write goes through links to their target
+    if SINK.fullmatch(p) or SINK.fullmatch(rp):  # /dev//null and kin are still the null device
         return []
-    rp = os.path.realpath(p)  # a write goes through links to their target
     if not os.path.exists(rp):
         return []
     w = ctx.where(rp)
@@ -438,17 +611,69 @@ def spec_path(cwd, top, spec):
         return os.path.join(top, spec[2:])
     if spec.startswith(":"):
         return top  # other pathspec magic: count the whole repository
-    return os.path.realpath(os.path.join(cwd, spec))
+    # Where the volume ignores case, git finds the working tree in an absolute pathspec
+    # ignoring case, but matches what is inside it by case: /abs/REPO/src/a.py is
+    # src/a.py, while SRC/a.py matches nothing in src/. So only the working-tree part is
+    # spelled as on disk (`cwd` already is, from git_start). A relative spec that leaves
+    # the working tree and comes back in another case is refused by git.
+    p = os.path.realpath(os.path.join(cwd, spec))
+    if os.path.isabs(spec):
+        head = "/".join(p.split("/")[: top.count("/") + 1])
+        if ondisk(head) == top:
+            p = top + p[len(head) :]
+    return p
 
 
 def discard(ctx, top, cwd, pathspecs):
     """Tracked files with uncommitted changes that a discard of `pathspecs` (None: all) loses."""
+    if ctx.where(top) in FREE:
+        return []  # an agent's scratch checkout, or a throwaway copy
     specs = None if pathspecs is None else [spec_path(cwd, top, p) for p in pathspecs]
     found = []
     for path, what in changes(top, untracked=False):
         if specs is None or any(under(path, s) or (glob.has_magic(s) and fnmatchcase(path, s)) for s in specs):
             found.append(finding("uncommitted", ctx.show(path), f"{what}; the change would be discarded"))
     return found
+
+
+# A subcommand's options that take a value. parse.ts's GIT_VALUED is the same table.
+GIT_VALUED = {
+    "checkout": ("-b", "-B", "--orphan"),
+    "switch": ("-c", "-C", "--orphan"),
+    "restore": ("-s", "--source"),
+    "clean": ("-e", "--exclude"),
+    "branch": ("-u", "--set-upstream-to", "--sort", "--format", "--points-at"),
+}
+
+
+def unbundle(rest, valued=()):
+    """`rest` with short options combined in one word spelled out one per word, as git
+    reads them: -df is -d -f. An option in `valued` takes the rest of its word as its value
+    (-bname is -b name), or else the next word, which is kept as written. So are long
+    options, arguments, and every word from `--` on. parse.ts's unbundle matches it."""
+    out = []
+    i = 0
+    while i < len(rest):
+        a = rest[i]
+        i += 1
+        if a == "--":
+            return out + rest[i - 1 :]
+        takes_next = a in valued
+        if re.match(r"-[^-]", a):
+            for j in range(1, len(a)):
+                out.append("-" + a[j])
+                if "-" + a[j] in valued:
+                    if a[j + 1 :]:
+                        out.append(a[j + 1 :])
+                    else:
+                        takes_next = True
+                    break
+        else:
+            out.append(a)
+        if takes_next:
+            out += rest[i : i + 1]
+            i += 1
+    return out
 
 
 def positionals(rest, valued=()):
@@ -475,13 +700,76 @@ def is_commitish(cwd, name):
     return r is not None and r.returncode == 0
 
 
+def option_value(rest, *names):
+    """The value given to the first of `names` found (-B x, --force-create x or --force-create=x)."""
+    for i, a in enumerate(rest):
+        if a == "--":
+            break
+        if a in names:
+            return rest[i + 1] if i + 1 < len(rest) else None
+        eq = a.split("=", 1)[0]
+        if eq in names:
+            return a[len(eq) + 1 :]
+    return None
+
+
+def lost_commits(name, log):
+    """The finding for the commits branch `name` would lose, as `git log --format='%h %s'` lists them."""
+    commits = [line for line in log.splitlines() if line]
+    if not commits:
+        return []
+    n = len(commits)
+    return [finding("history", name, f"{n} commit{'s' if n != 1 else ''} on no other branch, newest: {commits[0]}")]
+
+
+def checked_out(top):
+    """The branch ref HEAD points to, or "" when it is detached."""
+    r = git(["symbolic-ref", "-q", "HEAD"], top)
+    if r is None or r.returncode not in (0, 1):
+        raise Unresolved("couldn't tell which branch is checked out")
+    return decode(r.stdout).strip()
+
+
+def kept_head(top):
+    """HEAD, for a list of what keeps commits, when it names one. On an unborn branch (after
+    checkout --orphan) it names none and keeps nothing, and git log would fail on it."""
+    return ["HEAD"] if is_commitish(top, "HEAD") else []
+
+
+def moved_branch(top, name, start):
+    """What moving branch `name` to `start` (None: HEAD) loses: commits on it that no other
+    branch, tag, remote, a detached HEAD or its new tip reaches. A new branch loses nothing."""
+    ref = f"refs/heads/{name}"
+    r = git(["rev-parse", "--verify", "-q", ref], top)
+    if r is None:
+        raise Unresolved(f"couldn't look up the branch {name}")
+    if r.returncode != 0:
+        return []  # no such branch yet: it is created, not moved
+    keep = [f"--exclude={name}", "--branches", "--tags", "--remotes"]
+    if checked_out(top) != ref:
+        keep += kept_head(top)  # HEAD stays where it is, so what it reaches is kept
+    tip = git_out(["rev-parse", "--verify", "-q", f"{start or 'HEAD'}^{{commit}}"], top)
+    if tip:
+        keep.append(tip.strip())  # the new tip (git refuses a start point it can't find)
+    r = git(["log", "--format=%h %s", ref, "--not", *keep], top)
+    if r is None or r.returncode != 0:
+        raise Unresolved(f"git log failed for the branch {name}")
+    return lost_commits(name, decode(r.stdout))
+
+
 def git_reset(ctx, top, cwd, rest):
     return discard(ctx, top, cwd, None) if "--hard" in rest else []
 
 
 def git_checkout(ctx, top, cwd, rest):
+    pos, paths, dashdash = positionals(rest, GIT_VALUED["checkout"])
+    reset = option_value(rest, "-B")  # -B makes the branch or, when it exists, moves it
+    moved = moved_branch(top, reset, pos[0] if pos else None) if reset and not throwaway(ctx, top) else []
+    return moved + checkout_discards(ctx, top, cwd, rest, pos, paths, dashdash)
+
+
+def checkout_discards(ctx, top, cwd, rest, pos, paths, dashdash):
     force = any(a in ("-f", "--force") for a in rest)
-    pos, paths, dashdash = positionals(rest, ("-b", "-B", "--orphan"))
     if dashdash:
         if pos and not paths:
             return []
@@ -496,7 +784,14 @@ def git_checkout(ctx, top, cwd, rest):
 
 
 def git_switch(ctx, top, cwd, rest):
-    return discard(ctx, top, cwd, None) if any(a in ("-f", "--force", "--discard-changes") for a in rest) else []
+    findings = []
+    reset = option_value(rest, "-C", "--force-create")  # like checkout -B
+    if reset and not throwaway(ctx, top):
+        pos, _, _ = positionals(rest, ("-C", "--force-create"))
+        findings += moved_branch(top, reset, pos[0] if pos else None)
+    if any(a in ("-f", "--force", "--discard-changes") for a in rest):
+        findings += discard(ctx, top, cwd, None)
+    return findings
 
 
 def git_restore(ctx, top, cwd, rest):
@@ -504,13 +799,13 @@ def git_restore(ctx, top, cwd, rest):
     worktree = any(a in ("-W", "--worktree") for a in rest)
     if staged and not worktree:
         return []  # only unstages: the file keeps its content
-    pos, paths, _ = positionals(rest, ("-s", "--source"))
+    pos, paths, _ = positionals(rest, GIT_VALUED["restore"])
     specs = pos + paths
     return discard(ctx, top, cwd, specs) if specs else []
 
 
 def git_rm(ctx, top, cwd, rest):
-    if "--cached" in rest or not any(a == "--force" or re.match(r"^-[a-z]*f", a) for a in rest):
+    if "--cached" in rest or not any(a in ("-f", "--force") for a in rest):
         return []  # without -f git refuses to drop changes
     pos, paths, _ = positionals(rest)
     return discard(ctx, top, cwd, pos + paths)
@@ -533,22 +828,10 @@ def git_clean(ctx, top, cwd, rest):
             excludes.append(a)
         elif a in ("-n", "--dry-run"):
             dry = True
-        elif a == "--force":
+        elif a in ("-f", "--force"):
             force += 1
-        elif re.match(r"^-[a-zA-Z]+$", a):
-            letters = a[1:]
-            for j, ch in enumerate(letters):
-                if ch == "e":
-                    pattern = letters[j + 1 :]
-                    if not pattern and i + 1 < len(rest):
-                        i += 1
-                        pattern = rest[i]
-                    excludes += ["-e", pattern]
-                    break
-                force += ch == "f"
-                dry |= ch == "n"
-                if ch in "dxX":
-                    flags.append("-" + ch)
+        elif a in ("-d", "-x", "-X"):
+            flags.append(a)
         elif not a.startswith("-"):
             paths.append(a)
         i += 1
@@ -576,52 +859,99 @@ def git_stash(ctx, top, cwd, rest):
     return [finding("history", e.split(":", 1)[0], e.split(":", 1)[-1].strip() + " (a stash, dropped)") for e in entries]
 
 
+# git branch options under which -f moves no branch: they list branches or change only config.
+# Not -v or --verbose: they don't make git branch list, so -fv side main still moves side.
+BRANCH_NO_MOVE = {
+    "-l", "--list", "-a", "--all", "-u", "--set-upstream-to", "--unset-upstream",
+    "--edit-description", "--show-current", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at",
+}
+
+
 def git_branch(ctx, top, cwd, rest):
-    delete = force = remote = False
-    names = []
-    for a in rest:
-        if a in ("-r", "--remotes"):
-            remote = True
-        elif a in ("-d", "--delete"):
-            delete = True
-        elif a in ("-f", "--force"):
-            force = True
-        elif re.match(r"^-[a-zA-Z]+$", a):
-            delete |= "d" in a or "D" in a
-            force |= "f" in a or "D" in a
-            remote |= "r" in a
-        elif not a.startswith("-"):
-            names.append(a)
-    if not (delete and force) or remote:
-        return []  # git branch -d refuses to drop unmerged commits
+    pos, after, _ = positionals(rest, GIT_VALUED["branch"])
+    # git refuses a branch name that starts with -, and the judge's own git log would read one as an option.
+    names = [n for n in pos + after if not n.startswith("-")]
+    flags = {a.split("=", 1)[0] for a in rest if a.startswith("-")}
+    if not flags & {"-f", "--force", "-D", "-M", "-C"} or flags & {"-r", "--remotes"}:
+        return []  # unforced, git refuses to drop commits; a fetch brings remote-tracking ones back
+    if flags & {"-d", "--delete", "-D"}:
+        return deleted_branches(top, names)
+    if flags & BRANCH_NO_MOVE or not names:
+        return []
+    if flags & {"-m", "--move", "-M", "-c", "--copy", "-C"}:
+        # A forced rename or copy replaces the last name with the first, or with the current branch.
+        return moved_branch(top, names[-1], names[0] if len(names) > 1 else None)
+    return moved_branch(top, names[0], names[1] if len(names) > 1 else None)  # -f <branch> [<start>]
+
+
+def deleted_branches(top, names):
     findings = []
+    head = kept_head(top)
     for name in names:
-        others = ["--not", f"--exclude={name}", "--branches", "--tags", "--remotes", "HEAD"]
+        others = ["--not", f"--exclude={name}", "--branches", "--tags", "--remotes", *head]
         r = git(["log", "--format=%h %s", name, *others], top)
         if r is None or r.returncode != 0:
             continue  # no such branch: git refuses
-        commits = [line for line in decode(r.stdout).splitlines() if line]
-        if commits:
-            n = len(commits)
-            findings.append(finding("history", name, f"{n} commit{'s' if n != 1 else ''} on no other branch, newest: {commits[0]}"))
+        findings += lost_commits(name, decode(r.stdout))
     return findings
 
 
 def git_worktree(ctx, top, cwd, rest):
     if not rest or rest[0] != "remove":
         return []
-    pos, _, _ = positionals(rest[1:])
-    if not pos:
+    pos, after, _ = positionals(rest[1:])
+    names = pos + after  # git takes the worktree after -- too
+    if not names:
         return []
-    p = os.path.realpath(os.path.join(cwd, os.path.expanduser(pos[0])))
-    if not os.path.isdir(p) or ctx.where(p) in ("scratch", "temp"):
-        return []
+    force = any(a in ("-f", "--force") for a in rest)
+    # A name git finds no worktree for is refused, so it loses nothing.
+    return [f for p in sorted(removed_worktrees(top, cwd, names[0])) for f in worktree_removal(ctx, p, force)]
+
+
+def removed_worktrees(top, cwd, name):
+    """The worktrees, as on disk, that `git worktree remove <name>` run in `cwd` could take.
+
+    git looks the name up the way its find_worktree does: first as the end of exactly one
+    listed worktree's path, on whole names (`feature` is ../feature, never ../my-feature,
+    and a folder named feature in `cwd` doesn't matter), and only when none or several
+    end in it, as a path from `cwd`. git compares them ignoring case when core.ignorecase
+    is set, which a command can set for itself, so both readings are taken.
+    """
+    listed = listed_worktrees(top)
+    if not listed:
+        raise Unresolved(f"git worktree list failed in {top}, so which worktree it removes is unknown")
+    return {w for fold in (False, True) if (w := worktree_named(listed, cwd, name, fold))}
+
+
+def worktree_named(listed, cwd, name, fold):
+    """The worktree in `listed` that git finds for `name`, as on disk, or None. With
+    `fold`, names match ignoring ASCII case, as git's strcasecmp does."""
+
+    def key(s):
+        b = s.encode("utf-8", "surrogateescape")
+        return b.lower() if fold else b
+
+    ends = [w for w in listed if (b"/" + key(w)).endswith(b"/" + key(name))]
+    if len(ends) == 1:
+        return ondisk(ends[0])
+    p = key(ondisk(os.path.join(cwd, name)))
+    return next((ondisk(w) for w in listed if key(ondisk(w)) == p), None)
+
+
+def worktree_removal(ctx, p, force):
+    """What removing the worktree `p` loses."""
+    if not os.path.isdir(p) or ctx.where(p) in FREE:
+        return []  # a folder already gone leaves git only its own notes on it to drop
+    if p not in ctx.worktrees:
+        # Another repository's worktree (git -C there): git status in it would run its config.
+        return [finding("history", ctx.show(p), SEPARATE)]
     findings = []
-    if any(a in ("-f", "--force") for a in rest):
-        findings += [finding("uncommitted", ctx.show(path), what) for path, what in changes(p, untracked=True)]
+    if force:
+        findings += [finding("uncommitted", ctx.show(spelled(path)), what) for path, what in changes(p, untracked=True)]
     protected = []
     walk(ctx, p, protected, [])
-    findings += [finding("uncommitted", ctx.show(f), "ignored by git, so it can't be restored") for f in protected if not tracked(f)]
+    known = tracked(ctx, protected)
+    findings += [finding("uncommitted", ctx.show(f), "ignored by git, so it can't be restored") for f in protected if f not in known]
     return findings
 
 
@@ -655,24 +985,16 @@ GIT = {
     "worktree": git_worktree, "reflog": git_reflog, "gc": git_gc, "prune": git_prune,
     "filter-branch": git_filter, "filter-repo": git_filter,
 }
-# Commands that discard only files in the checkout they run in. The rest reach the
-# repository's history, which a worktree shares with every other one.
+# Commands on a checkout's files. In a folder that doesn't exist yet and is in no
+# repository, the only files they can reach are ones the command itself makes.
 WORK_TREE = {"reset", "checkout", "switch", "restore", "rm", "clean"}
-
-
-def free_checkout(ctx, top, sub):
-    """Whether git `sub` in the checkout at `top` is free: a throwaway copy in a temp
-    folder (the session's own worktrees never count as temp), or an agent's scratch
-    worktree for a command on its files only, since its branches and stashes are the
-    session repository's."""
-    w = ctx.where(top)
-    return w == "temp" or (w == "scratch" and sub in WORK_TREE)
 
 
 def git_new_folder(ctx, cwd, sub):
     """Git in a folder that doesn't exist yet, so whose files are all ones this command
     makes (git init, git clone, git worktree add). A working-tree command there loses
-    nothing unless the folder is new inside a checkout that already has work."""
+    nothing unless the folder is new inside a repository, whose branches and history it
+    could reach: then it is free only when that whole repository is a throwaway copy."""
     new_folder(ctx, cwd)
     if sub not in GIT:
         return []
@@ -680,13 +1002,13 @@ def git_new_folder(ctx, cwd, sub):
     while not os.path.isdir(known):
         known = os.path.dirname(known)
     top = toplevel(known)
-    if (sub in WORK_TREE) if top is None else free_checkout(ctx, top, sub):
+    if (sub in WORK_TREE) if top is None else throwaway(ctx, top):
         return []
     raise Unresolved(f"git {sub} in {ctx.show(cwd)}, a folder that doesn't exist yet, so it can't be checked")
 
 
-def judge_git(ctx, base, eff):
-    args = [subst(ctx, a) for a in eff["argv"]]
+def git_start(base, args):
+    """The folder git runs in, after its options before the subcommand, and the subcommand's index."""
     cwd = base
     i = 0
     while i < len(args) and args[i].startswith("-"):
@@ -700,18 +1022,28 @@ def judge_git(ctx, base, eff):
             raise Unresolved("git with --git-dir or --work-tree")
         else:
             i += 1
+    return ondisk(cwd), i  # git spells its folder as on disk too
+
+
+def judge_git(ctx, base, eff):
+    args = [subst(ctx, a) for a in eff["argv"]]
+    cwd, i = git_start(base, args)
     if i >= len(args):
         return []
-    cwd = os.path.realpath(cwd)
     if not os.path.isdir(cwd):
         return git_new_folder(ctx, cwd, args[i])
     top = toplevel(cwd)
     if top is None:
         return []  # not a repository: git refuses
-    if free_checkout(ctx, top, args[i]):
-        return []
     handler = GIT.get(args[i])
-    return handler(ctx, top, cwd, args[i + 1 :]) if handler else []
+    if handler is None:
+        return []
+    # Each handler judges a worktree's own files by where they are (discard, git clean's
+    # deletes, the worktree remove takes). Shared state is free only when the whole
+    # repository is a throwaway copy, never because a scratch worktree runs the command.
+    if args[i] in SHARED and throwaway(ctx, top):
+        return []
+    return handler(ctx, top, cwd, unbundle(args[i + 1 :], GIT_VALUED.get(args[i], ())))
 
 
 # ---------- main ----------
@@ -726,7 +1058,7 @@ def judge(ctx, eff):
         if not os.path.isdir(base):
             # Nothing is in it yet, so a relative path that stays inside names only what
             # the command makes itself. Git is judged by the repository around it.
-            new_folder(ctx, os.path.realpath(base))
+            new_folder(ctx, ondisk(base))
             if op == "find":
                 return [finding("unknown", ctx.show(base), "find runs in a folder that doesn't exist yet, so it can't be dry-run")]
             words = eff.get("paths", []) + eff.get("sources", []) + eff.get("dest", [])
@@ -766,7 +1098,7 @@ def alternates(ctx, req):
     out = []
     for c in req.get("altCwds", []):
         try:
-            p = os.path.realpath(base_dir(ctx, c))
+            p = ondisk(base_dir(ctx, c))
         except Unresolved:
             continue
         if p != ctx.cwd and os.path.isdir(p) and p not in [a.cwd for a in out]:

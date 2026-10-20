@@ -62,17 +62,28 @@ a session loads it from a folder you own.
 
 `blast-radius` notes:
 - Two parts. `hooks/parse.ts` reads the command text and lists what it could delete or
-  overwrite (following `cd`, subshells, variables set on the line, `$HOME`, mktemp,
-  heredocs, `$(...)`, `bash -c`, `find -delete`, `find | xargs rm`, and git commands
-  that can discard work). `bin/judge.py` expands globs, resolves links, and asks git
+  overwrite (following `cd`, subshells, variables set on the line and how they split
+  into words, brace expansion, `$'...'`, `$HOME`, mktemp, heredocs, `$(...)`, `bash -c`,
+  `find -delete`, `find | xargs rm`, and git commands that can discard work). `bin/judge.py` expands globs, resolves links, and asks git
   what is at stake. Its own checks: `python3 mods/blast-radius/bin/judge.test.py`.
+- Unquoted variables are split into words the way the session's shell splits them: not
+  at all when `CLAUDE_CODE_SHELL` (or, when that names neither bash nor zsh, `SHELL`)
+  names zsh, so `F="a b"; rm $F` removes the one path `a b`; at spaces, tabs and
+  newlines otherwise, as bash does. A `CLAUDE_CODE_SHELL` naming neither is ignored, as
+  Claude Code ignores it. After a zsh `setopt`, `unsetopt`, `emulate`, `set -o`/`-y` or
+  write to `options[...]` that may turn splitting on, later unquoted variables are
+  unknown and held. Other
+  zsh-only syntax is not modeled.
 - It judges by where the files are, not where the command runs. A linked worktree
   inside the repository folder (`.worktrees/*`, `.claude/worktrees/*`) is an agent's
   scratch space, so `/run-tickets` agents undoing their test mutations with
-  `git checkout -- <file>` are never asked about. Git commands there on branches,
-  stashes or objects (`branch -D`, `stash drop`, `gc --prune=now`) are still judged,
-  since every worktree shares them. The worktree the session itself runs in, and
-  worktrees kept outside the repository folder, get full protection.
+  `git checkout -- <file>` are never asked about. The worktree the session itself runs
+  in, and worktrees kept outside the repository folder, get full protection. Branches,
+  stashes, reflogs and objects belong to the whole repository, so `git branch -D`,
+  `git checkout -B`, `git stash clear` and the like are judged the same from a scratch
+  worktree as from the main checkout, and `git worktree remove` by the worktree it
+  removes, found the way git finds it: by the end of its path (`git worktree remove
+  feature` for `../feature`), and only then as a path.
 - A folder that doesn't exist yet (`mkdir -p x && cd x && ...`) holds only what the
   command makes, so what runs there passes. It still holds when the command links or
   moves files there, a path climbs out with `..`, or a git command could reach work or
@@ -81,6 +92,14 @@ a session loads it from a folder you own.
 - Ignored files are free to delete except `.env*` (not `.env.example` and kin),
   `*.db`, `*.sqlite` and `*.sqlite3`. Folders like `node_modules` and `.venv` are never
   searched.
+- When it checks a delete or `git worktree remove`, git only runs in the session's own
+  repository and its worktrees. git run in another one (a clone or submodule inside the
+  project, or an archive extracted with its own `.git`) would read that repository's
+  config, which can run commands (`core.fsmonitor`, clean filters) before you are even
+  asked. So deleting anything inside another repository, or `git worktree remove` of
+  another repository's worktree (run there, with `git -C`), is always held.
+  git commands that name another repository are still checked by running git there (see
+  cc-8res).
 - What it can't expand (`xargs rm`, `rm "$VAR"` with a variable from an earlier call,
   `sh -c "$CMD"`, inline Python or Node that deletes files) is held, since it could be
   anything. What it can't see at all runs: scripts (`make clean`, `./cleanup.sh`),
