@@ -813,6 +813,26 @@ test('a side session outside herdr closes no pane when it is left', async ($, on
   expect(herdrRuns(w)).toEqual([])
 })
 
+// The kind decides, and a side role names its ticket, as for the hooks above: a kept role in a
+// herdr pane with one but not the other closes nothing.
+test('a kept role of kind main that names a ticket closes no pane when it is left', async ($, on) => {
+  const main = paned(world(on, LAUNCHED, { kind: 'main', sideTicket: 'x-ab12', herdrPaneId: 'w1:p2' }))
+  await end($, 'prompt_input_exit', 'S1')
+  expect(herdrRuns(main)).toEqual([])
+})
+
+test('a kept role of kind side that names no ticket closes no pane when it is left', async ($, on) => {
+  const side = paned(world(on, LAUNCHED, { kind: 'side', herdrPaneId: 'w1:p2' }))
+  await end($, 'prompt_input_exit', 'S1')
+  expect(herdrRuns(side)).toEqual([])
+})
+
+test('a kept side role in a herdr pane is the side session: leaving closes its panes', async ($, on) => {
+  const side = paned(world(on, LAUNCHED, { kind: 'side', sideTicket: 'x-ab12', herdrPaneId: 'w1:p2' }))
+  await end($, 'prompt_input_exit', 'S1')
+  expect(herdrRuns(side)).toEqual(['herdr pane get w1:p3', 'herdr pane close w1:p3', 'herdr pane close w1:p2'])
+})
+
 test("AC: a child `claude` in another folder, leaving with the pane's variables, closes no pane", async ($, on) => {
   rootedAt(on, TEMP)
   const w = paned(world(on, LAUNCHED))

@@ -457,13 +457,10 @@ async function activityOver($: EngineInterface, paneId: string): Promise<Activit
 // close of a pane already gone (a switch's `exitAgent` got there first) or a look herdr does not
 // answer is passed over, so the side pane still closes.
 export async function closeOwnPanes($: EngineInterface, paneId: string): Promise<void> {
-  try {
-    const activity = await activityOver($, paneId)
-    if (activity !== undefined && (await isOurs($, activity.activityPaneId, activity.activityTerminalId, END_MS)) === 'yes') {
-      await closePane($, activity.activityPaneId, END_MS)
-    }
-  } catch {
-    // The store could not be read: the activity pane stays for the main session's readSide.
+  // herdr's runner, and so isOurs and closePane, never throw; only the store can.
+  const activity = await activityOver($, paneId).catch(() => undefined)
+  if (activity !== undefined && (await isOurs($, activity.activityPaneId, activity.activityTerminalId, END_MS)) === 'yes') {
+    await closePane($, activity.activityPaneId, END_MS)
   }
   await closePane($, paneId, END_MS)
 }
