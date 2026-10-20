@@ -4,8 +4,9 @@ import type { EngineInterface, Register, RenderElement } from 'claude-code'
 import type { AgentRow, RunSummary, TicketRow, Visibility } from '../types'
 
 // A band above the prompt with two parts:
-// - the newest /run-tickets run of the session's repo, from `run-tickets-status --json`:
-//   its progress and every ticket not merged yet, with when its current step started;
+// - a /run-tickets run of the session's repo, from `run-tickets-status --json`: the newest
+//   one this session launched, else the repo's newest; its progress and every ticket not
+//   merged yet, with when its current step started;
 // - the agents a workflow script started in this session: how many ran, and each one
 //   still running with its start time and how long it has run, unless a ticket row above
 //   already shows that agent.
@@ -21,7 +22,7 @@ import type { AgentRow, RunSummary, TicketRow, Visibility } from '../types'
 
 const TICK_MS = 15_000 // redraws running times
 const BUSY_POLL_TICKS = 2 // read the run's status every 30s while something runs
-const IDLE_POLL_TICKS = 20 // and every 5 minutes otherwise, to notice a run started elsewhere
+const IDLE_POLL_TICKS = 20 // and every 5 minutes otherwise; a session that launched no run notices one started elsewhere
 const VISIBLE_MS = 60_000 // only while the band has drawn within this long
 const KEEP_AGENTS = 300
 
@@ -150,20 +151,51 @@ export function summarize(report: Report, checkedAt: number): RunSummary {
   }
 }
 
+function status($: EngineInterface, args: string[]) {
+  return $.process.run(['run-tickets-status', ...args], { timeoutMs: 60_000 })
+}
+
+// The runs this session's workflow agents belong to, newest first. An agent whose workflow
+// gave no run id names no run: `--json ''` would read the repo's newest.
+export function sessionRuns(list: readonly AgentRow[]): string[] {
+  const ids: string[] = []
+  for (const a of [...list].reverse()) if (a.runId && !ids.includes(a.runId)) ids.push(a.runId)
+  return ids
+}
+
+// The newest of the session's runs that `--list` names (a run-tickets run of this repo,
+// not some other workflow's), or undefined when none is or it can't be read.
+async function ownRun($: EngineInterface, mine: readonly string[]): Promise<Report | undefined> {
+  const listed = await status($, ['--list'])
+  if (listed.exitCode !== 0) return undefined
+  const ids = new Set(listed.stdout.split('\n').map(line => line.trim().split(/\s+/)[0]))
+  const id = mine.find(r => ids.has(r))
+  if (id === undefined) return undefined
+  const out = await status($, ['--json', id])
+  return out.exitCode === 0 ? (JSON.parse(out.stdout) as Report) : undefined
+}
+
+// The run to show: the newest run this session launched, so another session's run
+// started later in the same repo never takes the band; else the repo's newest run.
+// null when the repo has no run.
+async function readReport($: EngineInterface): Promise<Report | null> {
+  const out = await status($, ['--json'])
+  if (out.exitCode !== 0) return null // no run in this repo, or not a repo at all
+  const newest = JSON.parse(out.stdout) as Report
+  const mine = sessionRuns(await read($, agents))
+  if (!mine.length || mine.includes(newest.run_id)) return newest
+  return (await ownRun($, mine)) ?? newest
+}
+
 async function poll($: EngineInterface): Promise<void> {
   if (polling) return
   polling = true
   try {
     // A draw can't write state, so an offset still unread is read here, once a poll.
     if ((await read($, offset)) === null) await readOffset($)
-    const out = await $.process.run(['run-tickets-status', '--json'], { timeoutMs: 60_000 })
+    const report = await readReport($)
     const checkedAt = await $.clock.now()
-    if (out.exitCode !== 0) {
-      // No run in this repo, or not a repo at all.
-      await update($, run, () => null)
-      return
-    }
-    const summary = summarize(JSON.parse(out.stdout) as Report, checkedAt)
+    const summary = report && summarize(report, checkedAt)
     await update($, run, () => summary)
   } catch {
     // Not installed, too slow this time, or output it could not read: keep the last summary.
