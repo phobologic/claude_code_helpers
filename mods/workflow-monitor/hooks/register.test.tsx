@@ -463,7 +463,7 @@ async function agentRows($: Engine): Promise<unknown[]> {
   return rows
 }
 
-// No session start raised: a module registered afresh, as after a reload or a /clear.
+// No session start raised, as after a /clear: the offset is still unread when the first poll runs.
 test('with no session start the next poll reads the offset, and agent rows show local time', async ($, on) => {
   const time = mock.clock(on, { now: T0 })
   const seen = engine(on, { exitCode: 1, stdout: '' }, [], ['-0700\n'])
