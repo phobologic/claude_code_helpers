@@ -43,7 +43,7 @@ declare module 'claude-code' {
       agents: AgentRow[]
       run: RunSummary | null
       tick: number
-      utcOffsetMinutes: number
+      utcOffsetMinutes: number | null // null until `date +%z` has answered
       visibility: Visibility
     }
   }

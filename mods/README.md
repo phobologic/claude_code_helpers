@@ -46,7 +46,8 @@ a session loads it from a folder you own.
 - It gives way to a survey, which uses the same band. It keeps what the hooks beneath
   it draw in the band, under its own rows, so both show.
 - Hooks modules have no `Date`, so local times come from the UTC offset `date +%z`
-  gives at session start.
+  gives at session start. When that never ran or failed (a `/clear` raises no session
+  start), the next poll reads it, and times show in UTC until then.
 - The session's runs are the run ids its workflow agents carry. One of them is shown
   only when `run-tickets-status --list` names it, so another workflow's agents never
   pick the run. Once the session has launched a run, the band stays on it after it

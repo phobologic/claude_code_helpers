@@ -97,17 +97,31 @@ const COMMAND = {
   presentation: { isFullscreen: true, columns: 160 },
 } as const
 
-// Stands in for the engine: draws its own band beneath the mod's, and answers
-// run-tickets-status with `status`.
-function engine(on: On, status: { exitCode: number; stdout: string }, ran: string[][]) {
+// What `/bin/date +%z` answers: its output, `fails` for a date that exits 1 and prints
+// nothing, or `denied` for one that never ran (the call rejects).
+type DateAnswer = string | 'fails' | 'denied'
+
+// Stands in for the engine: draws its own band beneath the mod's, answers
+// run-tickets-status with `status`, and `/bin/date` with each of `dates` in turn, the
+// last from then on. `ran` gets every command but `date`; the result counts the dates.
+function engine(on: On, status: { exitCode: number; stdout: string }, ran: string[][], dates: DateAnswer[] = ['+0000\n']) {
+  const seen = { dates: 0 }
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine band</Text>
   })
   on('process.run', ($, e) => {
+    const rest = { stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
+    if (e.argv[0] === '/bin/date') {
+      const answer = dates[Math.min(seen.dates, dates.length - 1)]
+      seen.dates += 1
+      if (answer === 'denied') return { deny: 'not allowed' }
+      return { value: answer === 'fails' ? { ...rest, exitCode: 1, stdout: '' } : { ...rest, exitCode: 0, stdout: answer ?? '' } }
+    }
     ran.push([...e.argv])
-    return { value: { ...status, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    return { value: { ...status, ...rest } }
   })
+  return seen
 }
 
 test('the band draws nothing until shown, and the command toggles it', async ($, on) => {
@@ -623,4 +637,91 @@ test('when finding the session\'s run fails, the band keeps the run it showed', 
   await $.command.run(COMMAND) // shows, and reads the run again
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect((await texts(ui)).map(([text]) => text).slice(0, 2)).toEqual(MINE_ROWS)
+})
+
+// ---------- the UTC offset ----------
+
+// Hides the band and shows it again, which polls once.
+async function repoll($: Engine): Promise<void> {
+  await $.command.run(COMMAND)
+  await $.command.run(COMMAND)
+}
+
+// The band's rows above the band beneath it.
+async function agentRows($: Engine): Promise<unknown[]> {
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const rows = (await texts(ui)).map(([text]) => text).filter(t => t !== 'engine band')
+  await ui.unmount()
+  return rows
+}
+
+// No session start raised, as after a /clear: the offset is still unread when the first poll runs.
+test('with no session start the next poll reads the offset, and agent rows show local time', async ($, on) => {
+  const time = mock.clock(on, { now: T0 })
+  const seen = engine(on, { exitCode: 1, stdout: '' }, [], ['-0700\n'])
+  on('agent.spawn', () => ({ model: 'm', agentId: 'a1' }))
+  await spawn($, 'wf_test-1', 'impl x-9')
+  await time.settle()
+  expect(seen.dates).toBe(1)
+  expect(await agentRows($)).toEqual(['agents  1 running, 0 finished', '  16:50  impl x-9  running 0s'])
+})
+
+test('an offset of +0000 is read once, and later polls do not run date again', async ($, on) => {
+  mock.clock(on, { now: T0 })
+  const ran: string[][] = []
+  const seen = engine(on, { exitCode: 1, stdout: '' }, ran, ['+0000\n'])
+  await $.command.run(COMMAND)
+  await repoll($)
+  await repoll($)
+  expect(ran).toHaveLength(3)
+  expect(seen.dates).toBe(1)
+})
+
+test('a date that fails leaves times in UTC, and each next poll asks again until one answers', async ($, on) => {
+  const time = mock.clock(on, { now: T0 })
+  const ran: string[][] = []
+  const seen = engine(on, { exitCode: 1, stdout: '' }, ran, ['fails', 'denied', 'garbage\n', '-0700\n'])
+  on('agent.spawn', () => ({ model: 'm', agentId: 'a1' }))
+  await spawn($, 'wf_test-1', 'impl x-9')
+  await time.settle()
+  const utc = ['agents  1 running, 0 finished', '  23:50  impl x-9  running 0s']
+  expect(await agentRows($)).toEqual(utc)
+  // A draw never runs date: only a poll does.
+  expect(seen.dates).toBe(1)
+  await repoll($)
+  expect(seen.dates).toBe(2)
+  // A date that was refused still leaves the poll to read the run.
+  expect(ran).toHaveLength(2)
+  expect(await agentRows($)).toEqual(utc)
+  await repoll($)
+  expect(seen.dates).toBe(3)
+  expect(await agentRows($)).toEqual(utc)
+  await repoll($)
+  expect(seen.dates).toBe(4)
+  expect(await agentRows($)).toEqual(['agents  1 running, 0 finished', '  16:50  impl x-9  running 0s'])
+  await repoll($)
+  expect(seen.dates).toBe(4)
+})
+
+test('session start reads the offset, and a /clear has the next poll read it again', async ($, on) => {
+  const time = mock.clock(on, { now: T0 })
+  const seen = engine(on, { exitCode: 1, stdout: '' }, [], ['-0700\n', '+0530\n'])
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('agent.spawn', () => ({ model: 'm', agentId: 'a1' }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  expect(seen.dates).toBe(1)
+  await spawn($, 'wf_test-1', 'impl x-9')
+  await time.settle()
+  expect(seen.dates).toBe(1)
+  expect(await agentRows($)).toEqual(['agents  1 running, 0 finished', '  16:50  impl x-9  running 0s'])
+  // Only a /clear goes on in this process with no session start to read the offset.
+  await $.session.end({ reason: 'other', sessionId: 's1', resume: { id: 's1' } })
+  await repoll($)
+  expect(seen.dates).toBe(1)
+  await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } })
+  await repoll($)
+  expect(seen.dates).toBe(2)
+  expect(await agentRows($)).toEqual(['agents  1 running, 0 finished', '  05:20  impl x-9  running 0s'])
 })
