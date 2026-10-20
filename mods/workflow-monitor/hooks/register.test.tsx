@@ -1,8 +1,8 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
-import type { Mounted, Plugin } from 'claude-code/testing'
+import type { Engine, Mounted, Plugin } from 'claude-code/testing'
 
-import { agentLines, clock, duration, parseOffset, runLines, summarize, ticketLine } from './register'
+import { agentLines, clock, duration, parseOffset, runLines, sessionRuns, summarize, ticketLine } from './register'
 import type { Report } from './register'
 
 const MIN = 60_000
@@ -422,4 +422,138 @@ test('with ticket-panes loaded the band still shows the session\'s running agent
     'engine band',
   ])
   expect(await ui.findAll({ type: 'Button' })).toHaveLength(2)
+})
+
+// ---------- the session's own run ----------
+
+// This session launched wf_mine; another session launched wf_other in the same repo
+// later, so it is the repo's newest.
+const MINE: Report = {
+  run_id: 'wf_mine',
+  state: 'running',
+  integration_branch: 'run/mine',
+  duration_seconds: 600,
+  merge_halted: null,
+  tickets: [
+    { id: 'a-1', status: 'merged abc123', outcome: 'merged', steps: [{ step: 'merge', round: 1, started: '2030-03-01T16:40:00-07:00' }] },
+    { id: 'a-2', status: 'reviewing (round 2)', outcome: null, timing: { running_for: 180 },
+      steps: [{ step: 'review', round: 2, started: '2030-03-01T16:47:00-07:00' }] },
+  ],
+}
+const OTHER: Report = {
+  run_id: 'wf_other',
+  state: 'running',
+  integration_branch: 'run/other',
+  duration_seconds: 60,
+  merge_halted: null,
+  tickets: [{ id: 'b-1', status: 'implementing', outcome: null, timing: { running_for: 60 },
+    steps: [{ step: 'impl', round: 1, started: '2030-03-01T16:49:00-07:00' }] }],
+}
+const LIST = 'wf_other  2030-03-01 16:49  not finished, 1 tickets  [b-1]\n'
+  + 'wf_mine  2030-03-01 16:40  not finished, 2 tickets  [a-1 a-2]\n'
+const MINE_ROWS = [
+  'run-tickets wf_mine  running 10m  merged 1/2  run/mine',
+  '  a-2  reviewing (round 2)  started 16:47  running 3m00s',
+]
+const OTHER_HEADER = 'run-tickets wf_other  running 1m00s  merged 0/1  run/other'
+
+type Answer = { exitCode: number; stdout: string } | 'deny'
+const ok = (report: Report): Answer => ({ exitCode: 0, stdout: JSON.stringify(report) })
+
+// Stands in for the engine as `engine` does, but answers run-tickets-status by its
+// arguments (`--json`, `--list`, `--json <run-id>`); an argv it was not given exits 1,
+// and 'deny' fails the call, as a timeout does.
+function statuses(on: On, answers: Record<string, Answer>, ran: string[][]) {
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine band</Text>
+  })
+  on('process.run', ($, e) => {
+    ran.push([...e.argv])
+    const answer = answers[e.argv.slice(1).join(' ')] ?? { exitCode: 1, stdout: '' }
+    if (answer === 'deny') return { deny: 'timed out' }
+    return { value: { ...answer, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('agent.spawn', () => ({ model: 'm', agentId: 'a1' }))
+}
+
+// One of this session's workflow agents starting: the first shows the band and reads the run.
+async function spawn($: Engine, runId: string, description: string) {
+  await $.agent.spawn({
+    tool_use_id: `t-${description}`, prompt: 'go', description, subagentType: 'general-purpose',
+    provider: { plugin: 'engine', tier: 'core' }, parentModel: 'm', background: true, fork: false,
+    workflow: { runId, agentIndex: 1 },
+  })
+}
+
+test('the session\'s runs are the run ids of its agents, newest first, each once', () => {
+  expect(sessionRuns([
+    { key: 'a', runId: 'wf_1', label: 'impl x-1', startedAt: T0 },
+    { key: 'b', runId: 'wf_2', label: 'impl y-1', startedAt: T0 + MIN },
+    { key: 'c', runId: 'wf_1', label: 'review x-1', startedAt: T0 + 2 * MIN },
+  ])).toEqual(['wf_1', 'wf_2'])
+  expect(sessionRuns([])).toEqual([])
+})
+
+test('a run another session launched later never takes the band from this session\'s run', async ($, on) => {
+  const time = mock.clock(on, { now: SHOWN })
+  const ran: string[][] = []
+  statuses(on, { '--json': ok(OTHER), '--list': { exitCode: 0, stdout: LIST }, '--json wf_mine': ok(MINE) }, ran)
+  await spawn($, 'wf_mine', 'review a-2 r2')
+  await time.settle()
+  expect(ran).toEqual([['run-tickets-status', '--json'], ['run-tickets-status', '--list'], ['run-tickets-status', '--json', 'wf_mine']])
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  // The agent's own ticket row shows it, so the agent section only counts it.
+  expect((await texts(ui)).map(([text]) => text)).toEqual([...MINE_ROWS, 'agents  1 running, 0 finished', 'engine band'])
+})
+
+test('a session whose run is the repo\'s newest reads it with one call, as before', async ($, on) => {
+  const time = mock.clock(on, { now: SHOWN })
+  const ran: string[][] = []
+  statuses(on, { '--json': ok(MINE), '--list': { exitCode: 0, stdout: LIST }, '--json wf_mine': ok(MINE) }, ran)
+  await spawn($, 'wf_mine', 'review a-2 r2')
+  await time.settle()
+  expect(ran).toEqual([['run-tickets-status', '--json']])
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await texts(ui)).map(([text]) => text).slice(0, 2)).toEqual(MINE_ROWS)
+})
+
+test('a session that launched no run shows the repo\'s newest with one call, as before', async ($, on) => {
+  mock.clock(on, { now: SHOWN })
+  const ran: string[][] = []
+  statuses(on, { '--json': ok(OTHER), '--list': { exitCode: 0, stdout: LIST }, '--json wf_mine': ok(MINE) }, ran)
+  await $.command.run(COMMAND)
+  expect(ran).toEqual([['run-tickets-status', '--json']])
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await texts(ui))[0]?.[0]).toBe(OTHER_HEADER)
+})
+
+// The session's agents may belong to some other workflow, which `--list` does not name, or
+// the session's run may not be readable: then the band shows the repo's newest run.
+for (const [name, answers] of [
+  ['the session\'s run id is not a run-tickets run of this repo', { '--list': { exitCode: 0, stdout: 'wf_other  2030-03-01 16:49  not finished, 1 tickets  [b-1]\n' }, '--json wf_mine': ok(MINE) }],
+  ['the session\'s run can\'t be read', { '--list': { exitCode: 0, stdout: LIST }, '--json wf_mine': { exitCode: 1, stdout: '' } }],
+  ['the run list can\'t be read', { '--list': { exitCode: 2, stdout: LIST }, '--json wf_mine': ok(MINE) }],
+] as const) {
+  test(`when ${name}, the band shows the repo's newest run`, async ($, on) => {
+    const time = mock.clock(on, { now: SHOWN })
+    statuses(on, { '--json': ok(OTHER), ...answers }, [])
+    await spawn($, 'wf_mine', 'review a-2 r2')
+    await time.settle()
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    expect((await texts(ui))[0]?.[0]).toBe(OTHER_HEADER)
+  })
+}
+
+test('when finding the session\'s run fails, the band keeps the run it showed', async ($, on) => {
+  const time = mock.clock(on, { now: SHOWN })
+  const answers: Record<string, Answer> = { '--json': ok(OTHER), '--list': { exitCode: 0, stdout: LIST }, '--json wf_mine': ok(MINE) }
+  statuses(on, answers, [])
+  await spawn($, 'wf_mine', 'review a-2 r2')
+  await time.settle()
+  answers['--list'] = 'deny'
+  await $.command.run(COMMAND) // hides
+  await $.command.run(COMMAND) // shows, and reads the run again
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await texts(ui)).map(([text]) => text).slice(0, 2)).toEqual(MINE_ROWS)
 })
