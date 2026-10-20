@@ -1,7 +1,7 @@
 import type { EngineInterface, On } from 'claude-code'
 
-import { closePane, field, herdr, readSide, text, updateSide } from './herdr'
-import type { Side, SideRecord } from './herdr'
+import { closePane, field, herdr, readSide, sidePart, text, updateSide } from './herdr'
+import type { Side } from './herdr'
 import { notify } from './notify'
 import type { Role } from './role'
 import { unfinishedRunFor } from './runs'
@@ -81,11 +81,6 @@ async function isWatching($: EngineInterface, paneId: string, id: string, runId:
     const argv = field(entry, 'argv')
     return Array.isArray(argv) && holdsInOrder(argv, words)
   })
-}
-
-// The record's side part: what stays when its activity pane goes.
-function sidePart(side: SideRecord): SideRecord {
-  return { ticketId: side.ticketId, paneId: side.paneId, paneTerminalId: side.paneTerminalId, agentName: side.agentName }
 }
 
 // Opens ticket `id`'s activity pane for run `runId` below the side pane, and records it. `pane run`

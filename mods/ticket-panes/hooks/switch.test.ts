@@ -212,9 +212,9 @@ function launchSteps(paneId: string): string[] {
   return ['uuidgen', 'pane split', `agent start tp-x-cd34 ${paneId} --session-id`]
 }
 
-// The record launch writes for x-cd34 in `paneId`.
+// The record launch writes for x-cd34 in `paneId`, split in the session root.
 function cd34Record(paneId: string, terminalId: string) {
-  return { ticketId: 'x-cd34', paneId, paneTerminalId: terminalId, agentName: 'tp-x-cd34' }
+  return { ticketId: 'x-cd34', paneId, paneTerminalId: terminalId, paneCwd: '/repo', agentName: 'tp-x-cd34' }
 }
 
 // ---------- an idle side agent ----------

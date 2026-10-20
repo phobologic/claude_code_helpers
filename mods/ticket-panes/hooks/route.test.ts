@@ -22,16 +22,17 @@ const ENV: Record<string, string> = { HERDR_ENV: '1', HERDR_PANE_ID: MAIN, TICKE
 const UUID = '0A1B2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D'
 const NEW_ID = UUID.toLowerCase()
 
-const AB12: SideRecord = { ticketId: 'x-ab12', paneId: 'w1:p2', paneTerminalId: 'term-2', agentName: 'tp-x-ab12' }
+const AB12: SideRecord = { ticketId: 'x-ab12', paneId: 'w1:p2', paneTerminalId: 'term-2', paneCwd: '/repo', agentName: 'tp-x-ab12' }
 const AB12_ACTIVITY: SideRecord = { ...AB12, activityPaneId: 'w1:p3', activityTerminalId: 'term-3', activityTicketId: 'x-ab12' }
-const CD34: SideRecord = { ticketId: 'x-cd34', paneId: 'w1:p2', paneTerminalId: 'term-2', agentName: 'tp-x-cd34' }
+const CD34: SideRecord = { ticketId: 'x-cd34', paneId: 'w1:p2', paneTerminalId: 'term-2', paneCwd: '/repo', agentName: 'tp-x-cd34' }
 
 // Foreground processes as herdr lists them: a shell, and Claude's native install.
 const SHELL = { argv: ['-zsh'], argv0: '-zsh', cmdline: '-zsh', name: 'zsh', pid: 100 }
 const NATIVE_CLAUDE = { argv: ['claude'], argv0: 'claude', cmdline: 'claude', name: '2.1.302', pid: 101 }
 
 type FakeAgent = { name?: string; status: string }
-type FakePane = { terminalId: string; agent?: FakeAgent }
+// `cwd`: the folder herdr shows the pane's foreground in (`foreground_cwd`), when it shows one.
+type FakePane = { terminalId: string; cwd?: string; agent?: FakeAgent }
 // What a faked command does instead of its work: answers this, or rejects with it.
 type Instead = ProcessRunResult | { rejects: unknown }
 type World = {
@@ -43,6 +44,10 @@ type World = {
   // Commands answered otherwise, by `<group> <verb>` or `<group> <verb> <last argument>`.
   instead?: Record<string, Instead>
 }
+
+// The record's side pane with its agent exited: its shell at the prompt, in the folder the pane
+// was split in.
+const AT_PROMPT: FakePane = { terminalId: 'term-2', cwd: '/repo' }
 
 // A stand-in for an agent of another main session: its side agent for x-ab12, in its own pane.
 const THEIRS: FakePane = { terminalId: 'term-35', agent: { name: 'tp-x-ab12', status: 'idle' } }
@@ -74,7 +79,12 @@ function fake(world: World = {}) {
   const used = new Set(panes.keys())
   let made = 1
 
-  const info = (id: string, pane: FakePane) => ({ pane_id: id, terminal_id: pane.terminalId, agent_status: pane.agent?.status ?? 'unknown' })
+  const info = (id: string, pane: FakePane) => ({
+    pane_id: id,
+    terminal_id: pane.terminalId,
+    agent_status: pane.agent?.status ?? 'unknown',
+    ...(pane.cwd === undefined ? {} : { foreground_cwd: pane.cwd }),
+  })
   const agentNamed = (name: string | undefined) => [...panes].find(([, pane]) => name !== undefined && pane.agent?.name === name)
   // As herdr lists agents: an unnamed one has no `name`.
   const listed = () =>
@@ -96,7 +106,8 @@ function fake(world: World = {}) {
           made += 1
         } while (used.has(`w1:p${made}`))
         const id = `w1:p${made}`
-        const pane = { terminalId: `term-${made}` }
+        // The new pane's shell starts in the folder the split names.
+        const pane = { terminalId: `term-${made}`, cwd: rest[rest.indexOf('--cwd') + 1] }
         used.add(id)
         panes.set(id, pane)
         return answer({ pane: info(id, pane), type: 'pane_info' })
@@ -279,7 +290,8 @@ test('AC: with the record showing the ticket and its agent live, a click focuses
 })
 
 test('AC: with the record\'s pane ours and its agent exited, a click starts the agent again in that pane and returns opened', async () => {
-  const f = fake({ store: { [KEY]: AB12_ACTIVITY }, panes: { 'w1:p2': { terminalId: 'term-2' }, 'w1:p3': { terminalId: 'term-3' } } })
+  // The pane's shell is still in the folder the pane was split in.
+  const f = fake({ store: { [KEY]: AB12_ACTIVITY }, panes: { 'w1:p2': AT_PROMPT, 'w1:p3': { terminalId: 'term-3' } } })
   expect(await openSidePane(f.$, 'x-ab12')).toStrictEqual({ kind: 'opened', paneId: 'w1:p2' })
   expect(steps(f)).toEqual([
     'pane get w1:p2',
@@ -287,15 +299,31 @@ test('AC: with the record\'s pane ours and its agent exited, a click starts the 
     'agent get tp-x-ab12',
     'agent list',
     'uuidgen',
+    'pane get w1:p2',
     `agent start w1:p2 tp-x-ab12 --session-id ${NEW_ID}`,
   ])
   // No split: the record keeps its side pane and its activity pane.
   expect(f.store.get(KEY)).toStrictEqual(AB12_ACTIVITY)
   expect([...f.panes.keys()]).toEqual(['w1:p2', 'w1:p3'])
   // Claude starting there on a question is still opened, and says it waits.
-  const asks = fake({ store: { [KEY]: AB12 }, panes: { 'w1:p2': { terminalId: 'term-2' } }, starts: [{ code: 'agent_not_ready' }] })
+  const asks = fake({ store: { [KEY]: AB12 }, panes: { 'w1:p2': AT_PROMPT }, starts: [{ code: 'agent_not_ready' }] })
   expect(await openSidePane(asks.$, 'x-ab12')).toStrictEqual({ kind: 'opened', paneId: 'w1:p2', waiting: true })
   expect(changes(asks)).toEqual(['uuidgen', `agent start w1:p2 tp-x-ab12 --session-id ${NEW_ID}`])
+})
+
+test('AC: with the record\'s agent exited and its shell moved out of the launch folder, a click splits a fresh pane in that folder', async () => {
+  // `/exit`, then `cd` in the side pane: an agent started at that prompt would run in /tmp/elsewhere
+  // while the pane's TICKET_PANES_CWD says /repo, and R4 would make it a main session.
+  const f = fake({ store: { [KEY]: AB12_ACTIVITY }, panes: { 'w1:p2': { ...AT_PROMPT, cwd: '/tmp/elsewhere' }, 'w1:p3': { terminalId: 'term-3' } } })
+  expect(await openSidePane(f.$, 'x-ab12')).toStrictEqual({ kind: 'opened', paneId: 'w1:p4' })
+  expect(changes(f)).toEqual(['uuidgen', 'pane close w1:p3', 'pane close w1:p2', 'pane split x-ab12', `agent start w1:p4 tp-x-ab12 --session-id ${NEW_ID}`])
+  const split = f.seen.runs.find(argv => argv[2] === 'split') ?? []
+  expect(split[split.indexOf('--cwd') + 1]).toBe('/repo')
+  expect(split).toContain('TICKET_PANES_CWD=/repo')
+  // The agent starts in the fresh pane's shell, in the launch folder.
+  expect(f.panes.get('w1:p4')).toStrictEqual({ terminalId: 'term-4', cwd: '/repo', agent: { name: 'tp-x-ab12', status: 'idle' } })
+  expect([...f.panes.keys()]).toEqual(['w1:p4'])
+  expect(f.store.get(KEY)).toStrictEqual({ ...AB12, paneId: 'w1:p4', paneTerminalId: 'term-4' })
 })
 
 test('a focus herdr refuses rejects with a SidePaneError naming agent focus', async () => {
@@ -329,7 +357,7 @@ test('AC: with the record showing another ticket whose agent exited, a click clo
   // Each call has a time of its own: 10 s, and 45 s for launch's agent start.
   expect(f.seen.timeouts).toEqual([...Array(8).fill(10_000), 45_000])
   expect([...f.panes.keys()]).toEqual(['w1:p4'])
-  expect(f.store.get(KEY)).toStrictEqual({ ticketId: 'x-cd34', paneId: 'w1:p4', paneTerminalId: 'term-4', agentName: 'tp-x-cd34' })
+  expect(f.store.get(KEY)).toStrictEqual({ ticketId: 'x-cd34', paneId: 'w1:p4', paneTerminalId: 'term-4', paneCwd: '/repo', agentName: 'tp-x-cd34' })
   // With no activity pane, only the side pane closes.
   const plain = fake({ store: { [KEY]: AB12 }, panes: { 'w1:p2': { terminalId: 'term-2' } } })
   expect(await openSidePane(plain.$, 'x-cd34')).toStrictEqual({ kind: 'opened', paneId: 'w1:p3' })

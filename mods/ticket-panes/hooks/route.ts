@@ -52,7 +52,9 @@ function opened(launched: Launched): OpenResult {
 }
 
 // Step 2: the side pane shows the ticket. Its live agent is focused; one that has exited, leaving
-// the pane at its shell, is started again there, which keeps the pane's activity pane.
+// the pane at its shell, is started again there, which keeps the pane's activity pane, while the
+// shell is still in the folder the pane was split in. Else launch closes both panes and splits a
+// fresh one, since a Claude started elsewhere would not be the side session (R4).
 async function reopen($: EngineInterface, side: Side, id: string): Promise<OpenResult> {
   if (!side.sideAgentLive) return opened(await launch($, id, { inPane: side }))
   await focusAgent($, side.agentName)

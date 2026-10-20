@@ -23,7 +23,7 @@ const NEW_ID = UUID.toLowerCase()
 const STARTED_OVER = 'x-ab12: earlier conversation not found; started a new one'
 const NEEDS_ANSWER = 'x-ab12 needs an answer in the side pane'
 
-const RECORD: SideRecord = { ticketId: 'x-ab12', paneId: 'w1:p2', paneTerminalId: 'term-2', agentName: 'tp-x-ab12' }
+const RECORD: SideRecord = { ticketId: 'x-ab12', paneId: 'w1:p2', paneTerminalId: 'term-2', paneCwd: '/repo', agentName: 'tp-x-ab12' }
 const WITH_ACTIVITY: SideRecord = { ...RECORD, activityPaneId: 'w1:p3', activityTerminalId: 'term-3', activityTicketId: 'x-ab12' }
 
 // Foreground processes as herdr lists them: a shell, and Claude's native install, which runs as a
@@ -34,7 +34,8 @@ const NATIVE_CLAUDE = { argv: ['claude'], argv0: 'claude', cmdline: 'claude', na
 // What a faked command does instead of its work: herdr's error, or a call that never answers in
 // time (`$.process.run` rejects).
 type Failure = { code: string; message?: string } | 'rejects'
-type FakePane = { terminalId: string; agent?: { name: string; status: string } }
+// `cwd`: the folder herdr shows the pane's foreground in (`foreground_cwd`), when it shows one.
+type FakePane = { terminalId: string; cwd?: string; agent?: { name: string; status: string } }
 type World = {
   env?: Record<string, string>
   root?: string
@@ -56,6 +57,10 @@ type World = {
 
 const BOOM: Failure = { code: 'server_error', message: 'herdr failed (faked)' }
 
+// RECORD's side pane with its agent exited: its shell at the prompt, in the folder the pane was
+// split in.
+const AT_PROMPT: FakePane = { terminalId: 'term-2', cwd: '/repo' }
+
 function answer(result: unknown): ProcessRunResult {
   return { exitCode: 0, stdout: JSON.stringify({ id: 'cli', result }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
 }
@@ -76,7 +81,12 @@ function fake(world: World = {}) {
   let made = 1
 
   const failureFor = (label: string, last: string | undefined): Failure | undefined => world.fails?.[`${label} ${last}`] ?? world.fails?.[label]
-  const paneInfo = (id: string, pane: FakePane) => ({ pane_id: id, terminal_id: pane.terminalId, agent_status: pane.agent?.status ?? 'unknown' })
+  const paneInfo = (id: string, pane: FakePane) => ({
+    pane_id: id,
+    terminal_id: pane.terminalId,
+    agent_status: pane.agent?.status ?? 'unknown',
+    ...(pane.cwd === undefined ? {} : { foreground_cwd: pane.cwd }),
+  })
   const agentNamed = (name: string | undefined) => [...panes].find(([, pane]) => pane.agent?.name === name)
 
   const herdr = (args: string[]): ProcessRunResult => {
@@ -95,7 +105,8 @@ function fake(world: World = {}) {
           made += 1
         } while (used.has(`w1:p${made}`))
         const id = `w1:p${made}`
-        const pane = { terminalId: `term-${made}` }
+        // The new pane's shell starts in the folder the split names.
+        const pane = { terminalId: `term-${made}`, cwd: rest[rest.indexOf('--cwd') + 1] }
         used.add(id)
         panes.set(id, pane)
         return answer(world.splitResult ?? { pane: paneInfo(id, pane), type: 'pane_info' })
@@ -284,7 +295,8 @@ test('AC: with a recorded conversation whose folder is there, the split starts i
   // `agent start` has no folder of its own.
   expect(f.seen.runs[1]).not.toContain('--cwd')
   expect(f.store.get(`session:${DIR}:x-ab12`)).toStrictEqual({ sessionId: 'S1', cwd: WORKTREE })
-  expect(f.store.get(KEY)).toStrictEqual(RECORD)
+  // The record keeps the folder the pane was split in.
+  expect(f.store.get(KEY)).toStrictEqual({ ...RECORD, paneCwd: WORKTREE })
 })
 
 test('a recorded conversation whose folder is gone, or is no folder, is resumed from the session root', async () => {
@@ -321,7 +333,7 @@ test('AC: a resume that fails other than agent_not_ready closes its pane and sta
     // The fresh pane splits as the first did.
     expect(f.seen.runs[4]).toEqual(splitArgv(WORKTREE))
     expect(f.seen.toasts).toEqual([STARTED_OVER])
-    expect(f.store.get(KEY)).toStrictEqual({ ...RECORD, paneId: 'w1:p3', paneTerminalId: 'term-3' })
+    expect(f.store.get(KEY)).toStrictEqual({ ...RECORD, paneId: 'w1:p3', paneTerminalId: 'term-3', paneCwd: WORKTREE })
     expect([...f.panes.keys()]).toEqual(['w1:p3'])
   }
 })
@@ -333,7 +345,7 @@ test('AC: agent_not_ready keeps the pane, records it and says the side pane need
     expect(await launch(f.$, 'x-ab12')).toStrictEqual({ paneId: 'w1:p2', waiting: true })
     expect(steps(f).filter(s => s.startsWith('pane close')), String(isResuming)).toEqual([])
     expect(steps(f)).toHaveLength(isResuming ? 2 : 3)
-    expect(f.store.get(KEY)).toStrictEqual(RECORD)
+    expect(f.store.get(KEY)).toStrictEqual({ ...RECORD, paneCwd: isResuming ? WORKTREE : '/repo' })
     expect(f.seen.toasts).toEqual([NEEDS_ANSWER])
   }
 })
@@ -377,7 +389,7 @@ test('a new conversation that starts on a question after a failed resume says bo
   await resumable(f)
   expect(await launch(f.$, 'x-ab12')).toStrictEqual({ paneId: 'w1:p3', waiting: true })
   expect(f.seen.toasts).toEqual([STARTED_OVER, NEEDS_ANSWER])
-  expect(f.store.get(KEY)).toStrictEqual({ ...RECORD, paneId: 'w1:p3', paneTerminalId: 'term-3' })
+  expect(f.store.get(KEY)).toStrictEqual({ ...RECORD, paneId: 'w1:p3', paneTerminalId: 'term-3', paneCwd: WORKTREE })
 })
 
 test('AC: every side-pane split leaves the main pane 0.7, so the side pane is 30% of its width: first open, switch and E13 retry', async () => {
@@ -398,7 +410,7 @@ test('AC: every side-pane split leaves the main pane 0.7, so the side pane is 30
   await launch(retry.$, 'x-ab12')
   expect(splitRatios(retry)).toEqual(['0.7', '0.7'])
   // Retried in the recorded pane, the fresh split is the only one, at the same width.
-  const inPane = fake({ folders: [WORKTREE], store: { [KEY]: RECORD }, panes: { 'w1:p2': { terminalId: 'term-2' } }, starts: [{ code: 'agent_exited' }] })
+  const inPane = fake({ folders: [WORKTREE], store: { [KEY]: RECORD }, panes: { 'w1:p2': AT_PROMPT }, starts: [{ code: 'agent_exited' }] })
   await resumable(inPane)
   await launch(inPane.$, 'x-ab12', { inPane: RECORD })
   expect(splitRatios(inPane)).toEqual(['0.7'])
@@ -475,16 +487,94 @@ test('launch needs the main session\'s herdr pane and a tickets dir', async () =
 })
 
 test('AC: launch in the recorded pane starts there with no split, and the record keeps its activity fields', async () => {
-  const panes = { 'w1:p2': { terminalId: 'term-2' }, 'w1:p3': { terminalId: 'term-3' } }
+  const panes = { 'w1:p2': AT_PROMPT, 'w1:p3': { terminalId: 'term-3' } }
   const f = fake({ store: { [KEY]: WITH_ACTIVITY }, panes })
   const side: Side = { ...WITH_ACTIVITY, sideAgentLive: false }
   expect(await launch(f.$, 'x-ab12', { inPane: side })).toStrictEqual({ paneId: 'w1:p2' })
-  expect(steps(f)).toEqual(['uuidgen', `agent start w1:p2 --session-id ${NEW_ID}`])
+  // The pane's shell is looked at first: it is in the folder the pane was split in.
+  expect(steps(f)).toEqual(['uuidgen', 'pane get w1:p2', `agent start w1:p2 --session-id ${NEW_ID}`])
   expect(f.store.get(KEY)).toStrictEqual(WITH_ACTIVITY)
   // A launch in a new pane keeps no activity part: that pane belonged under the old one.
   const fresh = fake({ store: { [KEY]: WITH_ACTIVITY }, panes })
   expect(await launch(fresh.$, 'x-ab12')).toStrictEqual({ paneId: 'w1:p4' })
   expect(fresh.store.get(KEY)).toStrictEqual({ ...RECORD, paneId: 'w1:p4', paneTerminalId: 'term-4' })
+})
+
+// The folder the started agent's pane shell is in: where `agent start` ran Claude.
+function startedIn(f: ReturnType<typeof fake>): string | undefined {
+  return [...f.panes.values()].find(pane => pane.agent?.name === 'tp-x-ab12')?.cwd
+}
+
+test('AC: in the recorded pane whose shell has left its launch folder, the panes close and a fresh one splits in the launch folder', async () => {
+  // `cd` in the side pane's shell after `/exit`: an agent started there would run in /tmp/elsewhere,
+  // while the pane's TICKET_PANES_CWD says /repo, and R4 would call it a main session.
+  const panes = { 'w1:p2': { ...AT_PROMPT, cwd: '/tmp/elsewhere' }, 'w1:p3': { terminalId: 'term-3' } }
+  const f = fake({ store: { [KEY]: WITH_ACTIVITY }, panes })
+  const side: Side = { ...WITH_ACTIVITY, sideAgentLive: false }
+  expect(await launch(f.$, 'x-ab12', { inPane: side })).toStrictEqual({ paneId: 'w1:p4' })
+  expect(steps(f)).toEqual([
+    'uuidgen',
+    'pane get w1:p2',
+    'pane get w1:p3',
+    'pane close w1:p3',
+    'pane close w1:p2',
+    'pane split',
+    `agent start w1:p4 --session-id ${NEW_ID}`,
+  ])
+  // The fresh pane splits in the launch folder and is told it as TICKET_PANES_CWD, so the agent
+  // starts where R4 counts it the pane's own.
+  expect(f.seen.runs[5]).toEqual(splitArgv('/repo'))
+  expect(startedIn(f)).toBe('/repo')
+  expect([...f.panes.keys()]).toEqual(['w1:p4'])
+  expect(f.store.get(KEY)).toStrictEqual({ ...RECORD, paneId: 'w1:p4', paneTerminalId: 'term-4' })
+  expect(f.seen.toasts).toEqual([])
+})
+
+test('in the recorded pane, the shell must be in the folder the pane was split in, not only where a fresh split would go', async () => {
+  // The recorded conversation's folder is the worktree, but the pane was split in /repo: its shell
+  // there is reused, and the agent starts in the pane's own folder.
+  const kept = fake({ folders: [WORKTREE], store: { [KEY]: RECORD }, panes: { 'w1:p2': AT_PROMPT } })
+  await resumable(kept)
+  expect(await launch(kept.$, 'x-ab12', { inPane: RECORD })).toStrictEqual({ paneId: 'w1:p2' })
+  expect(steps(kept)).toEqual(['pane get w1:p2', 'agent start w1:p2 --resume S1'])
+  expect(startedIn(kept)).toBe('/repo')
+  expect(kept.store.get(KEY)).toStrictEqual(RECORD)
+  // A shell moved into the worktree is not the pane's launch folder: a fresh pane splits there.
+  const moved = fake({ folders: [WORKTREE], store: { [KEY]: RECORD }, panes: { 'w1:p2': { ...AT_PROMPT, cwd: WORKTREE } } })
+  await resumable(moved)
+  expect(await launch(moved.$, 'x-ab12', { inPane: RECORD })).toStrictEqual({ paneId: 'w1:p3' })
+  expect(steps(moved)).toEqual(['pane get w1:p2', 'pane close w1:p2', 'pane split', 'agent start w1:p3 --resume S1'])
+  expect(moved.seen.runs[2]).toEqual(splitArgv(WORKTREE))
+  expect(startedIn(moved)).toBe(WORKTREE)
+  expect(moved.store.get(KEY)).toStrictEqual({ ...RECORD, paneId: 'w1:p3', paneTerminalId: 'term-3', paneCwd: WORKTREE })
+})
+
+test('a recorded pane whose folder herdr does not show, or a record that never kept it, gives way to a fresh split', async () => {
+  // herdr leaves out foreground_cwd when it cannot resolve it.
+  const unshown = fake({ store: { [KEY]: RECORD }, panes: { 'w1:p2': { terminalId: 'term-2' } } })
+  expect(await launch(unshown.$, 'x-ab12', { inPane: RECORD })).toStrictEqual({ paneId: 'w1:p3' })
+  expect(steps(unshown)).toEqual(['uuidgen', 'pane get w1:p2', 'pane close w1:p2', 'pane split', `agent start w1:p3 --session-id ${NEW_ID}`])
+  expect(unshown.store.get(KEY)).toStrictEqual({ ...RECORD, paneId: 'w1:p3', paneTerminalId: 'term-3' })
+  // A record written before the launcher kept the pane's folder: nothing to compare, so herdr is
+  // not asked, and the pane goes even with its shell in the session root.
+  const { paneCwd: _, ...legacy } = RECORD
+  const old = fake({ store: { [KEY]: legacy }, panes: { 'w1:p2': AT_PROMPT } })
+  expect(await launch(old.$, 'x-ab12', { inPane: legacy })).toStrictEqual({ paneId: 'w1:p3' })
+  expect(steps(old)).toEqual(['uuidgen', 'pane close w1:p2', 'pane split', `agent start w1:p3 --session-id ${NEW_ID}`])
+  expect(old.store.get(KEY)).toStrictEqual({ ...RECORD, paneId: 'w1:p3', paneTerminalId: 'term-3' })
+})
+
+test('a look at the recorded pane\'s shell that herdr does not answer throws pane get, with nothing closed or recorded', async () => {
+  for (const failed of ['rejects', BOOM] as const) {
+    const f = fake({ store: { [KEY]: WITH_ACTIVITY }, panes: { 'w1:p2': AT_PROMPT, 'w1:p3': { terminalId: 'term-3' } }, fails: { 'pane get w1:p2': failed } })
+    const error = await failure(launch(f.$, 'x-ab12', { inPane: WITH_ACTIVITY }))
+    expect(error.step, JSON.stringify(failed)).toBe('pane get')
+    expect(error.message).toBe(failed === 'rejects' ? 'pane get: process.run: herdr pane get ran past its timeout' : 'pane get: herdr failed (faked)')
+    expect(steps(f)).toEqual(['uuidgen', 'pane get w1:p2'])
+    expect(f.store.get(KEY)).toStrictEqual(WITH_ACTIVITY)
+    expect(f.seen.writes).toEqual([])
+    expect([...f.panes.keys()]).toEqual(['w1:p2', 'w1:p3'])
+  }
 })
 
 test('a launch over another ticket\'s record records the launched ticket and drops the old activity part', async () => {
@@ -495,9 +585,9 @@ test('a launch over another ticket\'s record records the launched ticket and dro
 })
 
 test('in the recorded pane, a new conversation that fails leaves that pane and its record as they were', async () => {
-  const f = fake({ store: { [KEY]: WITH_ACTIVITY }, panes: { 'w1:p2': { terminalId: 'term-2' } }, starts: [BOOM] })
+  const f = fake({ store: { [KEY]: WITH_ACTIVITY }, panes: { 'w1:p2': AT_PROMPT }, starts: [BOOM] })
   expect((await failure(launch(f.$, 'x-ab12', { inPane: WITH_ACTIVITY }))).step).toBe('agent start')
-  expect(steps(f)).toEqual(['uuidgen', `agent start w1:p2 --session-id ${NEW_ID}`])
+  expect(steps(f)).toEqual(['uuidgen', 'pane get w1:p2', `agent start w1:p2 --session-id ${NEW_ID}`])
   expect(f.store.get(KEY)).toStrictEqual(WITH_ACTIVITY)
   expect(f.panes.has('w1:p2')).toBe(true)
 })
@@ -506,12 +596,13 @@ test('AC: before the E13 retry closes the side pane, the recorded activity pane 
   const f = fake({
     folders: [WORKTREE],
     store: { [KEY]: WITH_ACTIVITY },
-    panes: { 'w1:p2': { terminalId: 'term-2' }, 'w1:p3': { terminalId: 'term-3' } },
+    panes: { 'w1:p2': AT_PROMPT, 'w1:p3': { terminalId: 'term-3' } },
     starts: [{ code: 'agent_exited' }],
   })
   await resumable(f)
   expect(await launch(f.$, 'x-ab12', { inPane: WITH_ACTIVITY })).toStrictEqual({ paneId: 'w1:p4' })
   expect(steps(f)).toEqual([
+    'pane get w1:p2',
     'agent start w1:p2 --resume S1',
     'pane get w1:p3',
     'pane close w1:p3',
@@ -520,20 +611,20 @@ test('AC: before the E13 retry closes the side pane, the recorded activity pane 
     'pane split',
     `agent start w1:p4 --session-id ${NEW_ID}`,
   ])
-  expect(f.store.get(KEY)).toStrictEqual({ ...RECORD, paneId: 'w1:p4', paneTerminalId: 'term-4' })
+  expect(f.store.get(KEY)).toStrictEqual({ ...RECORD, paneId: 'w1:p4', paneTerminalId: 'term-4', paneCwd: WORKTREE })
   expect(f.seen.toasts).toEqual([STARTED_OVER])
   // An activity pane that is no longer ours is left open; its fields are cleared all the same.
   const other = fake({
     folders: [WORKTREE],
     store: { [KEY]: WITH_ACTIVITY },
-    panes: { 'w1:p2': { terminalId: 'term-2' }, 'w1:p3': { terminalId: 'term-8' } },
+    panes: { 'w1:p2': AT_PROMPT, 'w1:p3': { terminalId: 'term-8' } },
     starts: [{ code: 'agent_exited' }],
   })
   await resumable(other)
   await launch(other.$, 'x-ab12', { inPane: WITH_ACTIVITY })
-  expect(steps(other).slice(0, 3)).toEqual(['agent start w1:p2 --resume S1', 'pane get w1:p3', 'pane close w1:p2'])
+  expect(steps(other).slice(1, 4)).toEqual(['agent start w1:p2 --resume S1', 'pane get w1:p3', 'pane close w1:p2'])
   expect(other.panes.has('w1:p3')).toBe(true)
-  expect(other.store.get(KEY)).toStrictEqual({ ...RECORD, paneId: 'w1:p4', paneTerminalId: 'term-4' })
+  expect(other.store.get(KEY)).toStrictEqual({ ...RECORD, paneId: 'w1:p4', paneTerminalId: 'term-4', paneCwd: WORKTREE })
 })
 
 test('before the E13 retry, an activity pane look herdr does not answer leaves that pane open and the retry goes on', async () => {
@@ -541,15 +632,15 @@ test('before the E13 retry, an activity pane look herdr does not answer leaves t
     const f = fake({
       folders: [WORKTREE],
       store: { [KEY]: WITH_ACTIVITY },
-      panes: { 'w1:p2': { terminalId: 'term-2' }, 'w1:p3': { terminalId: 'term-3' } },
+      panes: { 'w1:p2': AT_PROMPT, 'w1:p3': { terminalId: 'term-3' } },
       starts: [{ code: 'agent_exited' }],
       fails: { 'pane get w1:p3': failed },
     })
     await resumable(f)
     expect(await launch(f.$, 'x-ab12', { inPane: WITH_ACTIVITY }), JSON.stringify(failed)).toStrictEqual({ paneId: 'w1:p4' })
-    expect(steps(f).slice(0, 3)).toEqual(['agent start w1:p2 --resume S1', 'pane get w1:p3', 'pane close w1:p2'])
+    expect(steps(f).slice(1, 4)).toEqual(['agent start w1:p2 --resume S1', 'pane get w1:p3', 'pane close w1:p2'])
     expect(f.panes.has('w1:p3')).toBe(true)
-    expect(f.store.get(KEY)).toStrictEqual({ ...RECORD, paneId: 'w1:p4', paneTerminalId: 'term-4' })
+    expect(f.store.get(KEY)).toStrictEqual({ ...RECORD, paneId: 'w1:p4', paneTerminalId: 'term-4', paneCwd: WORKTREE })
     expect(f.seen.toasts).toEqual([STARTED_OVER])
   }
 })
@@ -558,13 +649,13 @@ test('when the E13 retry cannot split a fresh pane, the record of the closed one
   const f = fake({
     folders: [WORKTREE],
     store: { [KEY]: RECORD },
-    panes: { 'w1:p2': { terminalId: 'term-2' } },
+    panes: { 'w1:p2': AT_PROMPT },
     starts: [{ code: 'agent_exited' }],
     fails: { 'pane split': { code: 'no_room', message: 'no room' } },
   })
   await resumable(f)
   expect((await failure(launch(f.$, 'x-ab12', { inPane: RECORD }))).step).toBe('pane split')
-  expect(steps(f)).toEqual(['agent start w1:p2 --resume S1', 'pane close w1:p2', 'uuidgen', 'pane split'])
+  expect(steps(f)).toEqual(['pane get w1:p2', 'agent start w1:p2 --resume S1', 'pane close w1:p2', 'uuidgen', 'pane split'])
   expect(f.store.has(KEY)).toBe(false)
   expect(f.seen.toasts).toEqual([])
 })
@@ -726,6 +817,20 @@ test('an activity part is taken only whole', async () => {
     })
     expect(given, key).toStrictEqual(RECORD)
     expect(f.store.get(KEY)).toStrictEqual(RECORD)
+  }
+})
+
+test('the pane\'s folder is kept only as a string, and the record stands without it', async () => {
+  const { paneCwd: _, ...legacy } = WITH_ACTIVITY
+  for (const junk of [7, null, { path: '/repo' }]) {
+    const f = fake({ store: { [KEY]: { ...WITH_ACTIVITY, paneCwd: junk } } })
+    let given: SideRecord | undefined
+    await updateSide(f.$, old => {
+      given = old
+      return old
+    })
+    expect(given, JSON.stringify(junk)).toStrictEqual(legacy)
+    expect(f.store.get(KEY)).toStrictEqual(legacy)
   }
 })
 
