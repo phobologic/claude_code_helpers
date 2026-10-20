@@ -444,6 +444,29 @@ for (const gates of [[], ['npm test']]) {
   check('the verifier gets the implementer\'s verification notes', promptOf(calls, 'ac').includes('npm run e2e -- settings'))
 }
 
+// Implementers may Read/Edit the spec epics' files outside the worktree; no other agent is told so.
+{
+  const { calls } = await run({ ...base, slots: ['s1'], tickets: [T('EP', [], ['e.ts'])] }, (kind, id, round) => {
+    if (kind === 'impl') return implDone(`h${round}`)
+    if (kind === 'review' && round === 1) {
+      return { result: { verdict: 'REWORK', reviewed_sha: 'h1', prior_findings: [], filed: [], implementer_flags: [], test_audit: [], risks_checked: [{}, {}],
+        findings: [{ priority: 'medium', location: 'epic text', description: 'the epic still describes the old shape', fix: 'update it' }] } }
+    }
+    return {}
+  })
+  const exception = p => p.includes('A second exception to the Read/Edit/Write rule') && p.includes('/r/.tickets/<epic-id>.md')
+    && p.includes('the planning epic above it when the parent\'s description points there') && p.includes('never Write, sed or `tk edit`')
+  const first = promptOf(calls, 'impl', 1)
+  const rework = promptOf(calls, 'impl', 2)
+  check('a first-round implementer may Read/Edit the spec epics\' files', exception(first), first)
+  check('a rework implementer may too', rework.includes('quality review returned REWORK') && exception(rework), rework)
+  check('the rework out-of-scope rule keeps a spec epic\'s text in scope', rework.includes('a spec epic\'s text is\nnever out of scope'), rework)
+  for (const kind of ['ac', 'review', 'merge']) {
+    const p = promptOf(calls, kind)
+    check(`the ${kind} prompt has no spec-epic exception`, p !== '' && !p.includes('second exception') && !p.includes('.tickets/'), p)
+  }
+}
+
 // Criteria a person must check are carried into the ticket's result.
 {
   const { out } = await run({ ...base, slots: ['s1'], tickets: [T('V', [], ['v'])] }, kind =>
