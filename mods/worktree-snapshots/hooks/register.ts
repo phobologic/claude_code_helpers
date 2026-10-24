@@ -3,8 +3,8 @@ import type { EngineInterface, Register } from 'claude-code'
 // Worktree snapshots: before each Bash command, bin/snapshot.py saves the session's git
 // checkout (tracked files as they are on disk, and untracked files that are not ignored)
 // as a reflog entry on refs/snapshots/bash, so work a command destroys can be restored
-// with `git restore --source=refs/snapshots/bash@{N} -- <path>`. Entries expire after a
-// week. A snapshot that fails never stops the command; the first failure in a session
+// with `git restore --source=refs/snapshots/bash@{N} -- <path>`. Entries expire after 3
+// days. A snapshot that fails never stops the command; the first failure in a session
 // is shown as a toast.
 
 export const TIMEOUT_MS = 30_000

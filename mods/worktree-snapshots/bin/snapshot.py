@@ -27,8 +27,8 @@ import subprocess
 import sys
 import tempfile
 
-MAX_UNTRACKED = 10 * 1024 * 1024
-KEEP = "7.days"
+MAX_UNTRACKED = 1024 * 1024
+KEEP = "3.days"
 REASON_MAX = 200
 IDENTITY = {
     "GIT_AUTHOR_NAME": "worktree-snapshots",

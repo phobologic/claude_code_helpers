@@ -84,12 +84,16 @@ class SnapshotTest(unittest.TestCase):
         snap(self.repo)
         self.assertEqual(files(self.repo), [".gitignore", "other.txt"])
 
-    def test_large_untracked_files_are_skipped(self):
+    def test_untracked_files_over_1_mb_are_skipped(self):
         with open(os.path.join(self.repo, "big.bin"), "wb") as f:
-            f.truncate(10 * 1024 * 1024 + 1)
+            f.truncate(1024 * 1024 + 1)
+        with open(os.path.join(self.repo, "edge.bin"), "wb") as f:
+            f.truncate(1024 * 1024)
         write(os.path.join(self.repo, "small.txt"))
         snap(self.repo)
-        self.assertEqual(files(self.repo), [".gitignore", "small.txt", "tracked.txt"])
+        self.assertEqual(
+            files(self.repo), [".gitignore", "edge.bin", "small.txt", "tracked.txt"]
+        )
 
     def test_nothing_is_written_when_files_match_head(self):
         self.assertEqual(snap(self.repo).returncode, 0)
