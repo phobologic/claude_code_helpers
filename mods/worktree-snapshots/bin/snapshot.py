@@ -123,29 +123,20 @@ def main(argv: list[str]) -> int:
         ref = snapshot_ref(top)
         tree = tree_of_files(top, gitdir)
         head = verify("HEAD^{commit}", top)
-        unchanged = tree in (verify("HEAD^{tree}", top), verify(f"{ref}^{{tree}}", top))
-        if not unchanged:
-            parent = ["-p", head] if head else []
-            message = f"before: {reason}" if reason else "snapshot"
-            commit = git(
-                "commit-tree",
-                tree,
-                *parent,
-                "-m",
-                message,
-                cwd=top,
-                env={**os.environ, **IDENTITY},
-            )
-            git("update-ref", "--create-reflog", "-m", message, ref, commit, cwd=top)
-        if verify(ref, top):
-            git(
-                "reflog",
-                "expire",
-                f"--expire={KEEP}",
-                f"--expire-unreachable={KEEP}",
-                ref,
-                cwd=top,
-            )
+        if tree in (verify("HEAD^{tree}", top), verify(f"{ref}^{{tree}}", top)):
+            return 0
+        parent = ["-p", head] if head else []
+        message = f"before: {reason}" if reason else "snapshot"
+        commit = git(
+            "commit-tree",
+            tree,
+            *parent,
+            "-m",
+            message,
+            cwd=top,
+            env={**os.environ, **IDENTITY},
+        )
+        git("update-ref", "--create-reflog", "-m", message, ref, commit, cwd=top)
     except subprocess.CalledProcessError as error:
         detail = (error.stderr or b"").decode("utf-8", "replace").strip().splitlines()
         print(
@@ -153,6 +144,21 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return 1
+    # Expiring only after a write keeps read-only commands off the ref's lock. The
+    # snapshot is already saved, so a parallel run holding the lock is no failure: the
+    # next write expires the entries instead.
+    subprocess.run(
+        [
+            "git",
+            "reflog",
+            "expire",
+            f"--expire={KEEP}",
+            f"--expire-unreachable={KEEP}",
+            ref,
+        ],
+        cwd=top,
+        capture_output=True,
+    )
     return 0
 
 

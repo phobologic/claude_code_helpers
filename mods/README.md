@@ -77,8 +77,8 @@ a session loads it from a folder you own.
 - Nothing is written when the files match `HEAD` or the newest snapshot, so read-only
   commands cost a few git calls and no storage. Commits that a command like
   `git reset --hard HEAD~3` drops are in `HEAD`'s own reflog already.
-- Storage stays bounded: snapshots are not chained to each other, and every run expires
-  reflog entries older than 7 days, so older snapshots become unreachable and git's
+- Storage stays bounded: snapshots are not chained to each other, and each new snapshot
+  expires reflog entries older than 7 days, so older snapshots become unreachable and git's
   `gc` removes their objects (after `gc.pruneExpire`, two weeks by default). One
   expired snapshot outlives the rest: the oldest kept entry still names it as the
   ref's previous value, and gc keeps both. The refs are never pushed, since `git push`

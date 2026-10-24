@@ -143,6 +143,20 @@ class SnapshotTest(unittest.TestCase):
         ]
         self.assertEqual(present, [False, True])
 
+    def test_parallel_runs_all_succeed(self):
+        write(os.path.join(self.repo, "a.txt"), "work")
+        runs = [
+            subprocess.Popen(
+                [sys.executable, "-I", SCRIPT, f"run {i}"],
+                cwd=self.repo,
+                stderr=subprocess.PIPE,
+            )
+            for i in range(4)
+        ]
+        results = [(run.wait(), run.stderr.read().decode()) for run in runs]
+        self.assertEqual(results, [(0, "")] * 4)
+        self.assertEqual(files(self.repo), [".gitignore", "a.txt", "tracked.txt"])
+
     def test_a_file_can_be_restored_from_a_snapshot(self):
         write(os.path.join(self.repo, "work.txt"), "precious")
         snap(self.repo)
