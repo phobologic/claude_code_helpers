@@ -3,7 +3,7 @@
 Global rules for machines set up for software development, linked to
 `~/.claude/rules/dev.md` by this repo's `install.sh`. The base rules every
 machine gets are the global `~/.claude/CLAUDE.md`, which lives in the private
-myhome repo.
+base-config repo.
 
 ## Testing
 

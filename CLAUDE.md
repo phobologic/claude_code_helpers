@@ -10,12 +10,12 @@ auto-formatting, tool rules for deployment and database conventions, and the dev
 (`CLAUDE.dev.md`, linked to `~/.claude/rules/dev.md`). Its `install.sh` runs only on
 machines used for software development.
 
-The base config every machine gets lives in the private `myhome` repo's
+The base config every machine gets lives in a private base-config repo's
 `.claude_global/`, linked by that repo's `install.sh`: `settings.json`, the global
 `~/.claude/CLAUDE.md`, and the hook scripts `settings.json` turns on. A rule that applies
-to any use of Claude Code goes in myhome's `CLAUDE.md`; one that only matters when writing
+to any use of Claude Code goes in the base-config repo's `CLAUDE.md`; one that only matters when writing
 software goes in `CLAUDE.dev.md`. Keep each rule in exactly one of them. Settings must stay
-in myhome because this repo is public, the settings hold private context (auto mode's
+in the base-config repo because this repo is public, the settings hold private context (auto mode's
 description of private repos), and Claude Code edits the file in place.
 
 ## Repository Structure
@@ -36,7 +36,7 @@ install.sh      Sets up the ~/.claude/ dev symlinks from scratch
 
 ## Installation
 
-Run myhome's `install.sh` first for the base config, then this repo's `./install.sh`:
+Run the base-config repo's `install.sh` first for the base config, then this repo's `./install.sh`:
 - `~/.claude/rules/dev.md` → `CLAUDE.dev.md`
 - `~/.claude/tk.md` → `tk.md`
 - `~/.claude/skills/` → `skills/`
@@ -153,7 +153,7 @@ The workflow test runs the real script with fake agents and checks scheduling (c
 
 ## Important Notes
 
-- **This repo is public on GitHub.** Keep other projects out of it: no names, paths, ticket IDs, code or data from them in files, test fixtures, or commit messages. Describe what a run or project showed in general terms instead. Private Claude config (`~/.claude/settings.json`) stays in the private `myhome` repo (see Repository Purpose)
+- **This repo is public on GitHub.** Keep other projects out of it: no names, paths, ticket IDs, code or data from them in files, test fixtures, or commit messages. Describe what a run or project showed in general terms instead. Private Claude config (`~/.claude/settings.json`) stays in the private base-config repo (see Repository Purpose)
 - `CLAUDE.dev.md` is symlinked to `~/.claude/rules/dev.md`. It can't be named `CLAUDE.md` here, because then it would be loaded twice when working in this repo
 - `~/.claude/settings.json`, the global `~/.claude/CLAUDE.md` and the hook scripts are not in this repo (see Repository Purpose); there is no user-level `~/.claude/settings.local.json`
 - Local settings should be in `settings.local.json` (gitignored)

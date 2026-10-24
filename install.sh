@@ -38,7 +38,7 @@ remove_obsolete "$CLAUDE/agent-teams.md" "$DOTFILES/agent-teams.md" "folded into
 
 # This repo is the development toolkit. The base config every machine gets
 # (~/.claude/settings.json, the global CLAUDE.md, and the hooks) is linked by the
-# private myhome repo's install.sh, so this script leaves those paths alone.
+# private base-config repo's install.sh, so this script leaves those paths alone.
 link "$DOTFILES/tk.md"                "$CLAUDE/tk.md"
 link "$DOTFILES/skills"               "$CLAUDE/skills"
 link "$DOTFILES/agents"               "$CLAUDE/agents"
@@ -58,7 +58,7 @@ link "$DOTFILES/languages/go/rules/CLAUDE.md"     "$CLAUDE/rules/go.md"
 link "$DOTFILES/languages/python/rules/CLAUDE.md" "$CLAUDE/rules/python.md"
 link "$DOTFILES/languages/js/rules/CLAUDE.md"     "$CLAUDE/rules/js.md"
 
-# Ensure tk's ticket dir is globally gitignored (myhome's install adds .tmp/)
+# Ensure tk's ticket dir is globally gitignored (the base-config repo's install adds .tmp/)
 GIT_IGNORE="${XDG_CONFIG_HOME:-$HOME/.config}/git/ignore"
 mkdir -p "$(dirname "$GIT_IGNORE")"
 for entry in '.tickets/'; do
