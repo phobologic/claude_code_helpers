@@ -7,7 +7,7 @@ marketplace, `claude-mods`, like `languages/`.
 | Mod | What it does |
 |---|---|
 | `workflow-monitor` | A live band above the prompt, full width, under the transcript. It shows a `/run-tickets` run of the session's repo (from `run-tickets-status --json`): the newest one the session launched, so a run another session starts later in the same repo does not take its place, or else the repo's newest. It shows its progress and each ticket not merged yet, with when its current step started. Below that, a count of the agents workflow scripts started in the session, and each one still running with its start time and how long it has run. Shows on the first workflow agent of a session. `/workflow-monitor` shows or hides it, and once hidden it stays hidden for the session until shown again. When it is taller than its room (at most half the terminal) it scrolls; its `[-]` mark collapses it. While `ticket-panes` is loaded, each of those tickets' ids is a button that opens the ticket, as a reply's ticket button does. It draws its rows above what the hooks beneath it draw (another mod's band, such as `ticket-panes`' ticket band in a side pane), not in its place, so both show. |
-| `worktree-snapshots` | Before each Bash command, saves the session's git checkout (tracked files as they are on disk, and untracked files that are not ignored) as a snapshot, so work a command destroys can be restored. Snapshots are kept for 3 days, then git cleans them up. It never asks anything and never stops a command. |
+| `worktree-snapshots` | Before each Bash command, saves the session's git checkout (tracked files as they are on disk, and untracked files that are not ignored) as a snapshot, so work a command destroys can be restored. Snapshots are kept for 3 days, then git cleans them up. It never asks anything and never stops a command. The `snapshots` skill (`/worktree-snapshots:snapshots`) lists, inspects and restores them. |
 | `ticket-panes` | Makes tk tickets clickable. A reply that mentions tickets gets a dim `tickets:` row under it, a button per ticket. In a session running in herdr, a button opens a Claude agent for that ticket in a side pane to the right, with the ticket drawn in a band above its prompt and, while a `/run-tickets` run is working on the ticket, the run's live status for it in a pane below. Outside herdr, and inside a side pane, a button opens a read-only ticket pane in Claude Code instead. |
 
 ## Install
@@ -63,12 +63,33 @@ a session loads it from a folder you own.
 `worktree-snapshots` notes:
 - Each snapshot is a commit whose parent is `HEAD`, on `refs/snapshots/bash` for the
   main worktree or `refs/snapshots/bash-<name>` for a linked one. Each one is a reflog
-  entry whose message is the command it ran before. To find and restore:
+  entry whose message is the command it ran before. To find and restore, ask Claude
+  (the mod's `snapshots` skill, `/worktree-snapshots:snapshots`) or run `bin/snapctl.py`
+  from the checkout that lost the work:
+  ```
+  python3 -I <mod>/bin/snapctl.py list                # recent entries: id, age, command, what differs from now
+  python3 -I <mod>/bin/snapctl.py show <entry>        # the files gone, changed or new since that entry
+  python3 -I <mod>/bin/snapctl.py diff <entry> [path] # snapshot against the disk now
+  python3 -I <mod>/bin/snapctl.py restore <entry> <path ...>
+  ```
+  An entry is the files just before the command beside it. `<entry>` is a position
+  (0 is the newest) or the id `list` prints; use the id once anything else has run,
+  because every Bash command can save a new entry and move the positions. `restore`
+  writes back only the named files that are gone or differ, never deletes anything,
+  refuses `.` or no paths, and saves the current state as a snapshot first, so an
+  overwritten edit comes back by restoring from entry 0. Plain git does the same:
   ```
   git reflog refs/snapshots/bash                      # newest first: "before: <command>"
   git show --stat 'refs/snapshots/bash@{2}'           # what differed from HEAD then
   git restore --source='refs/snapshots/bash@{2}' -- path/to/file
   ```
+- To skip the approval prompt for the read-only subcommands, add allow rules to your own
+  settings with the exact path to the mod, such as
+  `Bash(python3 -I /path/to/mods/worktree-snapshots/bin/snapctl.py list *)` (and `show`,
+  `diff`). Claude Code rejects a `*` before the command, so the path cannot be a wildcard.
+  Leave `restore` out so it always asks. The skill has no `allowed-tools` of its own: any
+  `allowed-tools` line made a plugin skill load with no instructions in a headless
+  (`claude -p`) run.
 - What it saves: tracked files as they are on disk, deletions included, and untracked
   files that are not ignored and are at most 1 MB (bigger ones are mostly generated,
   and one that changes on every command would add a copy per snapshot). Ignored files (`.env`, local
@@ -88,7 +109,7 @@ a session loads it from a folder you own.
   command `cd`s into. A `/run-tickets` agent working in its own worktree is not covered.
 - A snapshot that fails or times out (30 seconds) never stops the command; the first
   failure in a session shows as a toast. Needs `python3` and `git` (2.26 or later) on
-  the session's `PATH`. Its own checks: `python3 mods/worktree-snapshots/bin/snapshot.test.py`.
+  the session's `PATH`. Its own checks: `python3 mods/worktree-snapshots/bin/snapshot.test.py` and `snapctl.test.py`.
 
 `ticket-panes` notes:
 - Clicks need Claude Code's fullscreen layout: the buttons are pressed with a click,
