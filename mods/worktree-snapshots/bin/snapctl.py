@@ -5,6 +5,8 @@ Usage:
   snapctl.py list [-n COUNT]
   snapctl.py show <entry>
   snapctl.py diff <entry> [path ...]
+  snapctl.py cat <entry> <path>
+  snapctl.py grep [-n COUNT] [-i] [-F] <pattern> [path ...]
   snapctl.py restore <entry> <path ...>
 
 An entry is the checkout as it was just before the command shown next to it. <entry> is
@@ -12,7 +14,9 @@ a position in `list` (0 is the newest) or the id `list` prints. Prefer the id on
 anything else has run: each Bash command can save a new snapshot, which moves every
 position by one.
 
-`show` and `diff` compare the entry with the files on disk now. `restore` writes only
+`show` and `diff` compare the entry with the files on disk now. `cat` prints a file as an
+entry held it, and `grep` searches the newest entries' content (a match that is identical
+in several entries is listed once, with their positions). `restore` writes only
 the named paths back, and only files that are gone or differ; it never deletes a file.
 It saves the current state as a snapshot first, so a restore can be undone.
 
@@ -155,6 +159,25 @@ def repo_paths(top: str, paths: list[str]) -> list[str]:
     return rels
 
 
+def not_in_entry(rel: str, entry: Entry) -> Fail:
+    """Return the error for a path an entry does not hold, with the likely reason."""
+    return Fail(
+        f"{rel} is not in entry {entry.position} ({entry.id}). If it matched HEAD "
+        "when the snapshot was taken it was left out; use `git restore -- <path>`"
+    )
+
+
+def span(positions: list[int]) -> str:
+    """Return sorted positions as ranges: [0, 1, 2, 5] becomes '0-2,5'."""
+    runs: list[list[int]] = []
+    for position in sorted(positions):
+        if runs and position == runs[-1][1] + 1:
+            runs[-1][1] = position
+        else:
+            runs.append([position, position])
+    return ",".join(str(a) if a == b else f"{a}-{b}" for a, b in runs)
+
+
 def cmd_list(top: str, ref: str, count: int) -> None:
     """Print the newest `count` snapshots and what each differs from the files now."""
     entries = load_entries(top, ref)
@@ -209,6 +232,85 @@ def cmd_diff(top: str, ref: str, token: str, paths: list[str]) -> None:
     subprocess.run(["git", *args], cwd=top, check=True)
 
 
+def cmd_cat(top: str, ref: str, token: str, path: str) -> None:
+    """Print one file as it was in a snapshot. Nothing on disk changes."""
+    entry = pick(load_entries(top, ref), token)
+    rel = repo_paths(top, [path])[0]
+    if rel == ".":
+        raise Fail("cat needs a file, not the whole checkout")
+    listed = run_git("ls-tree", "-r", "--name-only", "-z", entry.tree, "--", rel, cwd=top)
+    names = [name for name in listed.split("\0") if name]
+    if not names:
+        raise not_in_entry(rel, entry)
+    if names != [rel]:
+        raise Fail(f"{rel} is a folder in entry {entry.position} ({entry.id}); name a file")
+    sys.stdout.flush()
+    subprocess.run(["git", "cat-file", "blob", f"{entry.tree}:{rel}"], cwd=top, check=True)
+
+
+def cmd_grep(
+    top: str,
+    ref: str,
+    pattern: str,
+    count: int,
+    ignore_case: bool,
+    fixed: bool,
+    paths: list[str],
+) -> None:
+    """Search the newest `count` snapshots, listing each distinct match once with its entries."""
+    entries = load_entries(top, ref)[:count]
+    if not entries:
+        print("no snapshots yet for this worktree")
+        return
+    rels = [p for p in repo_paths(top, paths) if p != "."]
+    by_tree: dict[str, list[Entry]] = {}
+    for entry in entries:
+        by_tree.setdefault(entry.tree, []).append(entry)
+    args = ["grep", "-n", "-I", "-z", "--no-color", "-F" if fixed else "-E"]
+    if ignore_case:
+        args.append("-i")
+    args += ["-e", pattern, *by_tree]
+    if rels:
+        args += ["--", *rels]
+    run = subprocess.run(
+        ["git", "--no-pager", "--literal-pathspecs", *args], cwd=top, capture_output=True
+    )
+    if run.returncode not in (0, 1):
+        detail = run.stderr.decode("utf-8", "replace").strip().splitlines()
+        raise Fail(detail[0] if detail else f"git grep exited {run.returncode}")
+    found: dict[tuple[str, str], dict] = {}
+    for line in run.stdout.decode("utf-8", "surrogateescape").split("\n"):
+        if not line:
+            continue
+        name, number, text = line.split("\0", 2)
+        tree, path = name.split(":", 1)
+        hit = found.setdefault((path, text), {"line": number, "entries": []})
+        hit["entries"] += by_tree[tree]
+    newest = entries[0]
+    oldest = entries[-1]
+    print(
+        f"searched entries 0-{oldest.position} for {pattern!r} "
+        f"(newest {age(newest.when)}, oldest {age(oldest.when)})"
+    )
+    if not found:
+        print("no matches; use -n to search further back")
+        return
+    ordered = sorted(
+        found.items(), key=lambda item: (min(e.position for e in item[1]["entries"]), item[0])
+    )
+    for (path, text), hit in ordered[:SHOW_MAX]:
+        holders = sorted(hit["entries"], key=lambda e: e.position)
+        shown = text if len(text) <= 160 else text[:157] + "..."
+        print(f"{path}:{hit['line']}: {shown}")
+        print(
+            f"    entries {span([e.position for e in holders])} "
+            f"(newest {holders[0].id}, oldest {holders[-1].id})"
+        )
+    if len(ordered) > SHOW_MAX:
+        print(f"... and {len(ordered) - SHOW_MAX} more matches")
+    print("\nRead a whole file from an entry with `cat <id> <path>`.")
+
+
 def cmd_restore(top: str, ref: str, token: str, paths: list[str]) -> None:
     """Write the named paths back from a snapshot, after saving the current state."""
     entries = load_entries(top, ref)
@@ -221,10 +323,7 @@ def cmd_restore(top: str, ref: str, token: str, paths: list[str]) -> None:
     for rel in rels:
         listed = run_git("ls-tree", "-r", "--name-only", entry.tree, "--", rel, cwd=top)
         if not listed.strip():
-            raise Fail(
-                f"{rel} is not in entry {entry.position} ({entry.id}). If it matched HEAD "
-                "when the snapshot was taken it was left out; use `git restore -- <path>`"
-            )
+            raise not_in_entry(rel, entry)
     plan = [(s, p) for s, p in changes(top, entry.tree, current_tree(top), rels) if s in "DM"]
     if not plan:
         print(f"nothing to restore: those paths already match entry {entry.position} ({entry.id})")
@@ -263,6 +362,15 @@ def parser() -> argparse.ArgumentParser:
     diff = sub.add_parser("diff", help="the diff from a snapshot to now")
     diff.add_argument("entry")
     diff.add_argument("paths", nargs="*")
+    cat = sub.add_parser("cat", help="print one file as it was in a snapshot")
+    cat.add_argument("entry")
+    cat.add_argument("path")
+    grep = sub.add_parser("grep", help="search the content of recent snapshots")
+    grep.add_argument("pattern")
+    grep.add_argument("paths", nargs="*")
+    grep.add_argument("-n", type=int, default=DEFAULT_COUNT, dest="count")
+    grep.add_argument("-i", action="store_true", dest="ignore_case")
+    grep.add_argument("-F", action="store_true", dest="fixed", help="match the pattern as plain text")
     restore = sub.add_parser("restore", help="write named paths back from a snapshot")
     restore.add_argument("entry")
     restore.add_argument("paths", nargs="*")
@@ -285,6 +393,12 @@ def main(argv: list[str]) -> int:
             cmd_show(top, ref, args.entry)
         elif args.command == "diff":
             cmd_diff(top, ref, args.entry, args.paths)
+        elif args.command == "cat":
+            cmd_cat(top, ref, args.entry, args.path)
+        elif args.command == "grep":
+            cmd_grep(
+                top, ref, args.pattern, args.count, args.ignore_case, args.fixed, args.paths
+            )
         else:
             cmd_restore(top, ref, args.entry, args.paths)
     except Fail as error:

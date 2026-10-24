@@ -108,6 +108,77 @@ class SnapctlTest(unittest.TestCase):
         self.assertIn("+three", out)
         self.assertNotIn("draft.txt", out)
 
+    def test_cat_prints_the_file_as_the_entry_held_it_and_changes_nothing(self):
+        entry = self.lose_work()
+        write(self.path("notes/draft.txt"), "rewritten")
+        run = ctl(self.repo, "cat", entry, "notes/draft.txt")
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(run.stdout, "keep me")
+        self.assertEqual(read(self.path("notes/draft.txt")), "rewritten")
+        self.assertFalse(os.path.exists(self.path("tracked.txt")))
+
+    def test_cat_refuses_a_missing_path_a_folder_and_the_whole_checkout(self):
+        self.lose_work()
+        self.assertIn("missing.txt is not in entry 0", ctl(self.repo, "cat", "0", "missing.txt").stderr)
+        self.assertIn("is a folder", ctl(self.repo, "cat", "0", "notes").stderr)
+        run = ctl(self.repo, "cat", "0", ".")
+        self.assertEqual(run.returncode, 1)
+        self.assertIn("cat needs a file", run.stderr)
+
+    def make_history(self):
+        """Three snapshots: needle v1, the same plus another file, then needle v2."""
+        write(self.path("notes.txt"), "alpha\nneedle v1\n")
+        snap(self.repo, "first")
+        write(self.path("other.txt"), "something else")
+        snap(self.repo, "second")
+        write(self.path("notes.txt"), "alpha\nneedle v2\n")
+        snap(self.repo, "third")
+
+    def test_grep_lists_each_distinct_match_once_with_the_entries_holding_it(self):
+        self.make_history()
+        out = ctl(self.repo, "grep", "needle").stdout
+        self.assertEqual(out.count("needle v1"), 1, out)
+        self.assertRegex(out, r"notes\.txt:2: needle v2\n\s+entries 0 ")
+        self.assertRegex(out, r"notes\.txt:2: needle v1\n\s+entries 1-2 ")
+
+    def test_grep_limits_how_many_entries_it_searches(self):
+        self.make_history()
+        out = ctl(self.repo, "grep", "needle", "-n", "1").stdout
+        self.assertIn("needle v2", out)
+        self.assertNotIn("needle v1", out)
+
+    def test_grep_says_so_when_nothing_matches(self):
+        self.make_history()
+        run = ctl(self.repo, "grep", "absent-string")
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn("no matches", run.stdout)
+
+    def test_grep_is_a_regex_unless_fixed_and_case_sensitive_unless_asked(self):
+        write(self.path("notes.txt"), "a.c\nabc\nABC\n")
+        snap(self.repo)
+        regex = ctl(self.repo, "grep", "a.c").stdout
+        self.assertIn(":1: a.c", regex)
+        self.assertIn(":2: abc", regex)
+        fixed = ctl(self.repo, "grep", "-F", "a.c").stdout
+        self.assertIn(":1: a.c", fixed)
+        self.assertNotIn(":2: abc", fixed)
+        self.assertNotIn(":3: ABC", ctl(self.repo, "grep", "abc").stdout)
+        self.assertIn(":3: ABC", ctl(self.repo, "grep", "-i", "abc").stdout)
+
+    def test_grep_can_be_limited_to_paths_and_resolves_them_from_a_subfolder(self):
+        write(self.path("notes/one.txt"), "needle in notes")
+        write(self.path("top.txt"), "needle at top")
+        snap(self.repo)
+        out = ctl(self.path("notes"), "grep", "needle", "one.txt").stdout
+        self.assertIn("notes/one.txt:1: needle in notes", out)
+        self.assertNotIn("top.txt", out)
+
+    def test_grep_reads_file_names_with_colons_and_regex_characters(self):
+        write(self.path("we:ird [1].txt"), "needle here")
+        snap(self.repo)
+        out = ctl(self.repo, "grep", "needle").stdout
+        self.assertIn("we:ird [1].txt:1: needle here", out)
+
     def test_restore_brings_back_deleted_tracked_and_untracked_files(self):
         self.lose_work()
         write(self.path("other.txt"), "untouched")

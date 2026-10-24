@@ -13,8 +13,12 @@ snapshot ref. Entries expire after 3 days. `snapctl.py` reads them:
 python3 -I ${CLAUDE_PLUGIN_ROOT}/bin/snapctl.py list [-n COUNT]
 python3 -I ${CLAUDE_PLUGIN_ROOT}/bin/snapctl.py show <entry>
 python3 -I ${CLAUDE_PLUGIN_ROOT}/bin/snapctl.py diff <entry> [path ...]
+python3 -I ${CLAUDE_PLUGIN_ROOT}/bin/snapctl.py cat <entry> <path>
+python3 -I ${CLAUDE_PLUGIN_ROOT}/bin/snapctl.py grep [-n COUNT] [-i] [-F] <pattern> [path ...]
 python3 -I ${CLAUDE_PLUGIN_ROOT}/bin/snapctl.py restore <entry> <path ...>
 ```
+
+Only `restore` writes anything. The rest only read, so use them freely to look.
 
 Run it from inside the checkout that lost the work; each linked worktree has its own
 entries.
@@ -31,6 +35,19 @@ entries.
   Committed content comes back with `git restore -- <path>`; nothing is lost.
 - Use the **id** `list` prints, not the position, once anything else has run. Every
   Bash command, including this tool's, can save a new entry and shift each position by one.
+
+## Looking without restoring
+
+- "What did this file say before?" is `cat <entry> <path>`, which prints it as that entry
+  held it. "Which snapshot had this text?" is `grep <pattern>`, a regex (`-F` for plain
+  text, `-i` to ignore case) over the newest 15 entries (`-n` for more), optionally limited
+  to paths. A match that is the same in several entries is listed once with the entries
+  that hold it, so a range like `3-9` means it was there for all of them and changed or
+  vanished after. Read the entry ids from that output and `cat` or `diff` them.
+- Neither compares with the disk; `show` and `diff` do. Use `cat`/`grep` to find content,
+  and `diff` to see what changed since.
+- Searches see only what a snapshot holds (tracked files and not-ignored untracked files
+  of at most 1 MB), and skip binary files.
 
 ## Recovering
 

@@ -70,11 +70,15 @@ a session loads it from a folder you own.
   python3 -I <mod>/bin/snapctl.py list                # recent entries: id, age, command, what differs from now
   python3 -I <mod>/bin/snapctl.py show <entry>        # the files gone, changed or new since that entry
   python3 -I <mod>/bin/snapctl.py diff <entry> [path] # snapshot against the disk now
+  python3 -I <mod>/bin/snapctl.py cat <entry> <path>  # one file as that entry held it
+  python3 -I <mod>/bin/snapctl.py grep [-n N] [-i] [-F] <pattern> [path ...]
   python3 -I <mod>/bin/snapctl.py restore <entry> <path ...>
   ```
   An entry is the files just before the command beside it. `<entry>` is a position
   (0 is the newest) or the id `list` prints; use the id once anything else has run,
-  because every Bash command can save a new entry and move the positions. `restore`
+  because every Bash command can save a new entry and move the positions. `grep`
+  searches the newest 15 entries' content (regex; `-F` plain text, `-i` any case) and
+  lists a match that is identical across entries once, with their positions. `restore`
   writes back only the named files that are gone or differ, never deletes anything,
   refuses `.` or no paths, and saves the current state as a snapshot first, so an
   overwritten edit comes back by restoring from entry 0. Plain git does the same:
@@ -86,7 +90,7 @@ a session loads it from a folder you own.
 - To skip the approval prompt for the read-only subcommands, add allow rules to your own
   settings with the exact path to the mod, such as
   `Bash(python3 -I /path/to/mods/worktree-snapshots/bin/snapctl.py list *)` (and `show`,
-  `diff`). Claude Code rejects a `*` before the command, so the path cannot be a wildcard.
+  `diff`, `cat`, `grep`). Claude Code rejects a `*` before the command, so the path cannot be a wildcard.
   Leave `restore` out so it always asks. The skill has no `allowed-tools` of its own: any
   `allowed-tools` line made a plugin skill load with no instructions in a headless
   (`claude -p`) run.
