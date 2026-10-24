@@ -12,6 +12,8 @@ ticket runner, language plugins, tool rules, and working style rules for `~/.cla
 | `agents/` | Sub-agents: spec-critic (plan review for `/spec`), run-tickets workflow (ticket-implementer, ticket-verifier, ticket-reviewer), and design-sprint (design-designer, design-evaluator) |
 | `languages/` | Per-language Claude Code plugins (Go, Python, JS/SvelteKit) — auto-formatting hooks + coding rules |
 | `plugins/` | General-purpose Claude Code plugins — workflow automation and tool integrations |
+| `mods/` | Claude Code mods (`workflow-monitor`, `ticket-panes`, `worktree-snapshots`): hooks modules that change Claude Code's own interface or behaviour, installed from their own marketplace. See [`mods/README.md`](mods/README.md) |
+| `optional_rules/` | Shared opt-in rules, wired into a project with `/load-shared-rule` |
 | `tools/` | Per-tool rule files (Railway, SQLAlchemy) — loaded via `.claude/rules/` symlinks |
 | `bin/` | Utility scripts: tk plugins (`tk-show-multi`, `tk-epic-status`, `tk-triage`, `tk-set`, `tk-backlog`) and `git-auto-commit.sh` |
 | `tests/` | Dependency-free tests for the `run-tickets-engine` workflow script (run in Node with fake agents), `bin/run-tickets-plan`, `bin/run-tickets-setup` and `bin/run-tickets-finish`, `bin/run-tickets-gates`, and `bin/wrap-epic-plan` |
@@ -32,6 +34,7 @@ This creates:
 - `~/.claude/skills/` → `skills/`
 - `~/.claude/agents/` → `agents/`
 - `~/.claude/workflows/` → `workflows/` *(saved workflow scripts, runnable as `/<name>`)*
+- `~/.claude/optional_rules/` → `optional_rules/` *(opt-in rules for `/load-shared-rule`)*
 - `~/.claude/rules/go.md` → `languages/go/rules/CLAUDE.md` *(path-scoped to `*.go` files)*
 - `~/.claude/rules/python.md` → `languages/python/rules/CLAUDE.md` *(path-scoped to `*.py` files)*
 - `~/.claude/rules/js.md` → `languages/js/rules/CLAUDE.md` *(path-scoped to `*.ts`/`*.js`/`*.svelte` files)*
@@ -398,11 +401,6 @@ per-project via `.claude/rules/` symlinks. Use the global skills to set them up:
 ```
 
 Claude will create the symlink automatically. See [`tools/README.md`](tools/README.md) for details.
-
-## Migrating from v1
-
-If you set up projects with the old `setup.sh`, see
-[`docs/migration-v1-to-v2.md`](docs/migration-v1-to-v2.md).
 
 ## Resources
 

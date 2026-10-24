@@ -261,7 +261,7 @@ function gatesFor(prompt, files) {
 const scopedGates = [
   'npm run lint',
   { command: 'claude plugin validate mods/sample-mod', paths: ['mods/**'] },
-  { command: 'python3 mods/blast-radius/bin/judge.test.py', paths: ['mods/blast-radius/**'] },
+  { command: 'python3 mods/judge-mod/bin/judge.test.py', paths: ['mods/judge-mod/**'] },
   { command: 'python3 tests/run-tickets-scripts.test.py', paths: ['bin/**', 'workflows/**', 'tests/**'] },
 ]
 

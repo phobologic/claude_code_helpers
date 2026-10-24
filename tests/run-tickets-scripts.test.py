@@ -914,7 +914,7 @@ loader.exec_module(gates_mod)
 SAMPLE_GATES = [
     "make lint",
     {"command": "mods-check", "paths": ["mods/**"]},
-    {"command": "judge-test", "paths": ["mods/blast-radius/**"]},
+    {"command": "judge-test", "paths": ["mods/sample-mod/**"]},
     {"command": "suite", "paths": ["bin/**", "workflows/", "tests/*.py"]},
 ]
 
@@ -924,8 +924,8 @@ def chosen(files, gates=SAMPLE_GATES):
 
 
 check("gates: a file matching two scoped gates runs both, in gate order, after the unscoped one",
-      chosen(["mods/blast-radius/bin/judge.py"]) == ["make lint", "mods-check", "judge-test"],
-      chosen(["mods/blast-radius/bin/judge.py"]))
+      chosen(["mods/sample-mod/bin/judge.py"]) == ["make lint", "mods-check", "judge-test"],
+      chosen(["mods/sample-mod/bin/judge.py"]))
 check("gates: a file matching no scoped gate runs only the unscoped one", chosen(["README.md"]) == ["make lint"],
       chosen(["README.md"]))
 check("gates: no changed files still runs the unscoped one", chosen([]) == ["make lint"])
@@ -935,7 +935,7 @@ check("gates: a trailing slash covers everything under the folder", chosen(["wor
 check("gates: * stays within one folder", chosen(["tests/t.py"]) == ["make lint", "suite"]
       and chosen(["tests/sub/t.py"]) == ["make lint"], chosen(["tests/sub/t.py"]))
 check("gates: a folder prefix is not a match for a sibling with a longer name",
-      chosen(["mods/blast-radius-two/x"]) == ["make lint", "mods-check"], chosen(["mods/blast-radius-two/x"]))
+      chosen(["mods/sample-mod-two/x"]) == ["make lint", "mods-check"], chosen(["mods/sample-mod-two/x"]))
 check("gates: mods/** does not match a top-level file named mods", chosen(["modsfile"]) == ["make lint"])
 check("gates: a glob must match the whole path, not just its start", chosen(["tests/t.pyc"]) == ["make lint"],
       chosen(["tests/t.pyc"]))
