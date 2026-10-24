@@ -7,7 +7,6 @@ marketplace, `claude-mods`, like `languages/`.
 | Mod | What it does |
 |---|---|
 | `workflow-monitor` | A live band above the prompt, full width, under the transcript. It shows a `/run-tickets` run of the session's repo (from `run-tickets-status --json`): the newest one the session launched, so a run another session starts later in the same repo does not take its place, or else the repo's newest. It shows its progress and each ticket not merged yet, with when its current step started. Below that, a count of the agents workflow scripts started in the session, and each one still running with its start time and how long it has run. Shows on the first workflow agent of a session. `/workflow-monitor` shows or hides it, and once hidden it stays hidden for the session until shown again. When it is taller than its room (at most half the terminal) it scrolls; its `[-]` mark collapses it. While `ticket-panes` is loaded, each of those tickets' ids is a button that opens the ticket, as a reply's ticket button does. It draws its rows above what the hooks beneath it draw (another mod's band, such as `ticket-panes`' ticket band in a side pane), not in its place, so both show. |
-| `blast-radius` | Holds a Bash command or Write that could destroy something and asks you first, in Claude Code's own question dialog: deleting or overwriting anything outside the repository, touching `.git` or the repository folder, or losing work git can't give back (untracked or modified files, an ignored `.env` or database, a nested repository, unmerged commits, stashes). Everything else inside the repository runs as normal, and so does anything in an agent's scratch worktree or a temp folder. Any answer but "Run it" refuses the command. |
 | `ticket-panes` | Makes tk tickets clickable. A reply that mentions tickets gets a dim `tickets:` row under it, a button per ticket. In a session running in herdr, a button opens a Claude agent for that ticket in a side pane to the right, with the ticket drawn in a band above its prompt and, while a `/run-tickets` run is working on the ticket, the run's live status for it in a pane below. Outside herdr, and inside a side pane, a button opens a read-only ticket pane in Claude Code instead. |
 
 ## Install
@@ -17,7 +16,6 @@ Once per machine, then once per mod. The user scope loads it in every session:
 ```
 claude plugin marketplace add ~/git/claude_code/mods
 claude plugin install workflow-monitor@claude-mods --scope user
-claude plugin install blast-radius@claude-mods --scope user
 claude plugin install ticket-panes@claude-mods --scope user
 ```
 
@@ -59,75 +57,6 @@ a session loads it from a folder you own.
   reload, and draws the rows as plain text when it is not. A `ticket-panes` enabled
   later turns the ids into buttons after `/reload-plugins`. Clicks need the
   fullscreen layout, as for `ticket-panes`' own buttons.
-
-`blast-radius` notes:
-- Two parts. `hooks/parse.ts` reads the command text and lists what it could delete or
-  overwrite (following `cd`, subshells, variables set on the line and how they split
-  into words, brace expansion, `$'...'`, `$HOME`, mktemp, heredocs, `$(...)`, `bash -c`,
-  `find -delete`, `find | xargs rm`, and git commands that can discard work). `bin/judge.py` expands globs, resolves links, and asks git
-  what is at stake. Its own checks: `python3 mods/blast-radius/bin/judge.test.py`.
-- Unquoted variables are split into words the way the session's shell splits them: not
-  at all when `CLAUDE_CODE_SHELL` (or, when that names neither bash nor zsh, `SHELL`)
-  names zsh, so `F="a b"; rm $F` removes the one path `a b`; at spaces, tabs and
-  newlines otherwise, as bash does. A `CLAUDE_CODE_SHELL` naming neither is ignored, as
-  Claude Code ignores it. After a zsh `setopt`, `unsetopt`, `emulate`, `set -o`/`-y` or
-  write to `options[...]` that may turn splitting on, later unquoted variables are
-  unknown and held. Other
-  zsh-only syntax is not modeled.
-- It judges by where the files are, not where the command runs. A linked worktree
-  inside the repository folder (`.worktrees/*`, `.claude/worktrees/*`) is an agent's
-  scratch space, so `/run-tickets` agents undoing their test mutations with
-  `git checkout -- <file>` are never asked about. The worktree the session itself runs
-  in, and worktrees kept outside the repository folder, get full protection. Branches,
-  stashes, reflogs and objects belong to the whole repository, so `git branch -D`,
-  `git checkout -B`, `git stash clear` and the like are judged the same from a scratch
-  worktree as from the main checkout, and `git worktree remove` by the worktree it
-  removes, found the way git finds it: by the end of its path (`git worktree remove
-  feature` for `../feature`), and only then as a path.
-- A folder that doesn't exist yet (`mkdir -p x && cd x && ...`) holds only what the
-  command makes, so what runs there passes. It still holds when the command links or
-  moves files there, a path climbs out with `..`, or a git command could reach work or
-  history that exists now (a new subfolder of a checkout, `git branch -D` in a worktree
-  the command adds).
-- Ignored files are free to delete except `.env*` (not `.env.example` and kin),
-  `*.db`, `*.sqlite` and `*.sqlite3`. Folders like `node_modules` and `.venv` are never
-  searched.
-- When it checks a delete or `git worktree remove`, git only runs in the session's own
-  repository and its worktrees. git run in another one (a clone or submodule inside the
-  project, or an archive extracted with its own `.git`) would read that repository's
-  config, which can run commands (`core.fsmonitor`, clean filters) before you are even
-  asked. So deleting anything inside another repository, or `git worktree remove` of
-  another repository's worktree (run there, with `git -C`), is always held.
-  git commands that name another repository are still checked by running git there (see
-  cc-8res).
-- What it can't expand (`xargs rm`, `rm "$VAR"` with a variable from an earlier call,
-  `sh -c "$CMD"`, inline Python or Node that deletes files) is held, since it could be
-  anything. What it can't see at all runs: scripts (`make clean`, `./cleanup.sh`),
-  `sed -i`, inline code that writes files, archive extraction. It is a safety net, not
-  a sandbox; Claude Code's Bash sandbox is the hard limit on writes outside the repo.
-- The Edit tool is never held. Write is held only when it replaces an existing file
-  outside the repository or in `.git`.
-- Subagents and workflow agents are checked like the session, and the question names the
-  agent. A held agent waits for your answer while the others keep running; questions
-  come one at a time. If the dialog times out, is dismissed, or the turn is interrupted,
-  the command is refused. Under `claude -p` there is no one to ask, so every held
-  command is refused.
-- Claude Code follows the session's own shell folder but not a subagent's. A subagent's
-  starting folder comes from its spawn or Claude Code's SubagentStart event (a worktree
-  of its own included), and its relative paths are also measured from its last `cd`;
-  one whose starting folder is unknown is measured from the session's root too. Any of
-  them holding holds the command, and a finding only another folder has says which
-  (`(if it runs in ...)`). After a `cd` it can't follow (`cd "$VAR"`, `cd -`), that
-  subagent's relative paths are held until it `cd`s somewhere known. A reload of the
-  mod mid-session forgets the subagents already running, so those are measured as if
-  their folder were unknown.
-  `/run-tickets` agents start every command with `cd <worktree> && `, so they are
-  always measured in the right place.
-- Needs `python3` and `git` on the session's `PATH`. If the judge can't run, a command
-  with effects is held with the reason.
-- The idea is from the Blast Radius mod in anthropics/claude-code-playground, which
-  holds by command name; this one holds by where the files are and whether git can
-  restore them.
 
 `ticket-panes` notes:
 - Clicks need Claude Code's fullscreen layout: the buttons are pressed with a click,
