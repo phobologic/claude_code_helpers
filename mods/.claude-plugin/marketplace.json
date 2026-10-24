@@ -16,6 +16,11 @@
       "name": "ticket-panes",
       "source": "./ticket-panes",
       "description": "Clickable tk tickets: a button row under replies that mention them opens a Claude agent for the ticket in a herdr side pane, or a read-only ticket pane"
+    },
+    {
+      "name": "worktree-snapshots",
+      "source": "./worktree-snapshots",
+      "description": "Before each Bash command, saves the checkout's tracked and untracked files to refs/snapshots/bash so destroyed work can be restored"
     }
   ]
 }

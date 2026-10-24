@@ -7,6 +7,7 @@ marketplace, `claude-mods`, like `languages/`.
 | Mod | What it does |
 |---|---|
 | `workflow-monitor` | A live band above the prompt, full width, under the transcript. It shows a `/run-tickets` run of the session's repo (from `run-tickets-status --json`): the newest one the session launched, so a run another session starts later in the same repo does not take its place, or else the repo's newest. It shows its progress and each ticket not merged yet, with when its current step started. Below that, a count of the agents workflow scripts started in the session, and each one still running with its start time and how long it has run. Shows on the first workflow agent of a session. `/workflow-monitor` shows or hides it, and once hidden it stays hidden for the session until shown again. When it is taller than its room (at most half the terminal) it scrolls; its `[-]` mark collapses it. While `ticket-panes` is loaded, each of those tickets' ids is a button that opens the ticket, as a reply's ticket button does. It draws its rows above what the hooks beneath it draw (another mod's band, such as `ticket-panes`' ticket band in a side pane), not in its place, so both show. |
+| `worktree-snapshots` | Before each Bash command, saves the session's git checkout (tracked files as they are on disk, and untracked files that are not ignored) as a snapshot, so work a command destroys can be restored. Snapshots are kept for a week, then git cleans them up. It never asks anything and never stops a command. |
 | `ticket-panes` | Makes tk tickets clickable. A reply that mentions tickets gets a dim `tickets:` row under it, a button per ticket. In a session running in herdr, a button opens a Claude agent for that ticket in a side pane to the right, with the ticket drawn in a band above its prompt and, while a `/run-tickets` run is working on the ticket, the run's live status for it in a pane below. Outside herdr, and inside a side pane, a button opens a read-only ticket pane in Claude Code instead. |
 
 ## Install
@@ -17,6 +18,7 @@ Once per machine, then once per mod. The user scope loads it in every session:
 claude plugin marketplace add ~/git/claude_code/mods
 claude plugin install workflow-monitor@claude-mods --scope user
 claude plugin install ticket-panes@claude-mods --scope user
+claude plugin install worktree-snapshots@claude-mods --scope user
 ```
 
 `--scope project` instead installs it for one repo only. `/plugin` lists, disables and
@@ -57,6 +59,35 @@ a session loads it from a folder you own.
   reload, and draws the rows as plain text when it is not. A `ticket-panes` enabled
   later turns the ids into buttons after `/reload-plugins`. Clicks need the
   fullscreen layout, as for `ticket-panes`' own buttons.
+
+`worktree-snapshots` notes:
+- Each snapshot is a commit whose parent is `HEAD`, on `refs/snapshots/bash` for the
+  main worktree or `refs/snapshots/bash-<name>` for a linked one. Each one is a reflog
+  entry whose message is the command it ran before. To find and restore:
+  ```
+  git reflog refs/snapshots/bash                      # newest first: "before: <command>"
+  git show --stat 'refs/snapshots/bash@{2}'           # what differed from HEAD then
+  git restore --source='refs/snapshots/bash@{2}' -- path/to/file
+  ```
+- What it saves: tracked files as they are on disk, deletions included, and untracked
+  files that are not ignored and are at most 10 MB. Ignored files (`.env`, local
+  databases, `node_modules`, build output) are not saved. Staged-but-different index
+  contents are not saved either: a snapshot is built in a temporary index, so it never
+  changes what you have staged.
+- Nothing is written when the files match `HEAD` or the newest snapshot, so read-only
+  commands cost a few git calls and no storage. Commits that a command like
+  `git reset --hard HEAD~3` drops are in `HEAD`'s own reflog already.
+- Storage stays bounded: snapshots are not chained to each other, and every run expires
+  reflog entries older than 7 days, so older snapshots become unreachable and git's
+  `gc` removes their objects (after `gc.pruneExpire`, two weeks by default). One
+  expired snapshot outlives the rest: the oldest kept entry still names it as the
+  ref's previous value, and gc keeps both. The refs are never pushed, since `git push`
+  sends only branches and tags.
+- It snapshots the checkout the session is in (`$.session.cwd()`), not a folder a
+  command `cd`s into. A `/run-tickets` agent working in its own worktree is not covered.
+- A snapshot that fails or times out (30 seconds) never stops the command; the first
+  failure in a session shows as a toast. Needs `python3` and `git` (2.26 or later) on
+  the session's `PATH`. Its own checks: `python3 mods/worktree-snapshots/bin/snapshot.test.py`.
 
 `ticket-panes` notes:
 - Clicks need Claude Code's fullscreen layout: the buttons are pressed with a click,
