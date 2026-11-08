@@ -194,10 +194,14 @@ is language-agnostic and may have been installed by another setup skill).
 set -euo pipefail
 
 # Dispatcher: runs all scripts in pre-commit.d/, fails if any fail.
-HOOK_DIR="$(dirname "$0")/pre-commit.d"
+# Ask git where hooks live (honors core.hooksPath and linked worktrees) instead
+# of trusting $0, which breaks when the dispatcher is run through a symlink.
+HOOK_DIR="$(git rev-parse --git-path hooks)/pre-commit.d"
 
+# A missing directory means the gate is misconfigured; never skip checks silently.
 if [[ ! -d "$HOOK_DIR" ]]; then
-  exit 0
+  echo "pre-commit: $HOOK_DIR not found, refusing to skip checks silently" >&2
+  exit 1
 fi
 
 exit_code=0
@@ -267,10 +271,14 @@ dispatcher shape as pre-commit — a language-agnostic runner for `pre-push.d/`.
 set -euo pipefail
 
 # Dispatcher: runs all scripts in pre-push.d/, fails if any fail.
-HOOK_DIR="$(dirname "$0")/pre-push.d"
+# Ask git where hooks live (honors core.hooksPath and linked worktrees) instead
+# of trusting $0, which breaks when the dispatcher is run through a symlink.
+HOOK_DIR="$(git rev-parse --git-path hooks)/pre-push.d"
 
+# A missing directory means the gate is misconfigured; never skip checks silently.
 if [[ ! -d "$HOOK_DIR" ]]; then
-  exit 0
+  echo "pre-push: $HOOK_DIR not found, refusing to skip checks silently" >&2
+  exit 1
 fi
 
 exit_code=0
