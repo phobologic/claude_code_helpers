@@ -413,7 +413,7 @@ test('a compose another plugin asks for leaves the note to come', { plugins: [ME
   const w = world(on, SIDE_ENV)
   await compose($)
   change(w, 200, V2)
-  await $.prompt.suggest({ text: 'run the tests' })
+  await $.prompt.suggest({ text: 'run the tests', origin: { kind: 'suggestion' } })
   await say($)
   expect(w.contexts).toEqual([[note(V2)]])
 })

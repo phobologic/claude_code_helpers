@@ -88,7 +88,7 @@ test('agent lines leave out running agents a ticket row already shows', () => {
 
 const BAND = {
   plugin: 'workflow-monitor', component: 'AbovePrompt',
-  props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 120, scroll: { offset: 0, bodyRows: 19 }, view: {} },
+  props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 20, bodyColumns: 120, scroll: { offset: 0, bodyRows: 19 }, view: {} },
 } as const
 
 // /workflow-monitor typed at the prompt.
@@ -215,6 +215,17 @@ function ticketPanes(on: On, { isAvailable = true, failsOpen = false } = {}) {
 }
 
 // Every Text the band drew, top to bottom, with whether it is dim.
+type Drawn = { type: string; props?: Record<string, unknown>; children: Drawn[]; part?: { plugin: string } }
+
+// This mod's row in the band: the engine stacks one row per plugin, and a lone row is the band.
+function ownRow(drawn: unknown): Drawn {
+  const tree = drawn as Drawn
+  if (tree.part?.plugin === 'workflow-monitor') return tree
+  const row = tree.children?.find(c => c.part?.plugin === 'workflow-monitor')
+  if (!row) throw new Error('no workflow-monitor row in the band')
+  return row
+}
+
 async function texts<P extends 'terminal' | 'desktop'>(ui: Mounted<P, 'AbovePrompt'>) {
   return (await ui.findAll({ type: 'Text' })).map(t => [t.text, t.props.dimColor === true])
 }
@@ -272,7 +283,7 @@ test('a button row is one indented row', { plugins: [TICKET_PANES] }, async ($, 
   ticketPanes(on)
   await $.command.run(COMMAND)
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  const kids = ((await ui.drawn()) as { children: unknown[] }).children
+  const kids = ownRow(await ui.drawn()).children
   expect(kids[1]).toMatchObject({ type: 'Box', props: { flexDirection: 'row', paddingLeft: 2 } })
   expect(kids[2]).toMatchObject({ type: 'Box', props: { flexDirection: 'row', paddingLeft: 2 } })
 })
@@ -294,10 +305,9 @@ test('with ticket-panes loaded the run header still says why merges stopped', { 
   expect(await ui.findAll({ type: 'Button' })).toHaveLength(2)
 })
 
-// With no other mod's band, what the hooks beneath answer is the engine's own band.
-test('with no band beneath, the band draws above the engine\'s own', { plugins: [TICKET_PANES] }, async ($, on) => {
+// With no other mod's band, the band is this mod's row alone.
+test('with no band beneath, the band draws its own rows alone', { plugins: [TICKET_PANES] }, async ($, on) => {
   mock.clock(on, { now: SHOWN })
-  on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine', ref: 0 }))
   on('process.run', () => ({
     value: { exitCode: 0, stdout: JSON.stringify(REPORT), stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
   }))
@@ -306,8 +316,7 @@ test('with no band beneath, the band draws above the engine\'s own', { plugins: 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...BAND, surface })
     const drawn = await ui.drawn()
-    expect(drawn.type).toBe('Box')
-    expect((drawn as { children: unknown[] }).children.at(-1)).toEqual({ type: 'engine', ref: 0 })
+    expect(drawn).toMatchObject({ type: 'Box', part: { plugin: 'workflow-monitor' } })
     expect(await ui.findAll({ type: 'Button' })).toHaveLength(2)
     expect((await texts(ui))[0]?.[0]).toBe('run-tickets wf_test-1  running 10m  merged 1/3  epic/x-1')
     await ui.unmount()

@@ -22,7 +22,7 @@ const BENEATH = 'band beneath'
 const BAND = {
   plugin: 'ticket-panes',
   component: 'AbovePrompt',
-  props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 120, scroll: { offset: 0, bodyRows: 19 }, view: {} },
+  props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 20, bodyColumns: 120, scroll: { offset: 0, bodyRows: 19 }, view: {} },
 } as const
 const SURFACES = ['terminal', 'desktop'] as const
 const ORIGIN = { kind: 'composer' } as const
@@ -187,10 +187,11 @@ test('AC: a new side session draws the ticket compact before any prompt, above t
   await start($)
   for (const surface of SURFACES) {
     const ui = await mount($, surface)
+    // The engine stacks one row per plugin: this mod's ticket, then the row beneath.
     const drawn = (await ui.drawn()) as Drawn
     expect(drawn).toMatchObject({ type: 'Box', props: { flexDirection: 'column' } })
     expect(drawn.children).toHaveLength(2)
-    expect(drawn.children?.[0]).toMatchObject({ type: 'Box', props: { borderStyle: 'round' } })
+    expect(drawn.children?.[0]).toMatchObject({ type: 'Box', props: { borderStyle: 'round' }, part: { plugin: 'ticket-panes' } })
     expect(drawn.children?.[1]).toMatchObject({ type: 'Text', children: [BENEATH] })
     expect(await texts(ui)).toEqual(['x-ab12', 'open · task · P2', 'Widen the widget', '0 notes', BENEATH])
     expect((await ui.find({ type: 'Markdown', key: VIEW_KEYS.description }))?.text).toBe('The first text.')

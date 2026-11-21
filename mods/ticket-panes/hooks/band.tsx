@@ -92,19 +92,16 @@ export function registerBand(on: On): void {
     const mode = await read($, MODE)
     await read($, VERSION)
     const ticket = await readTicket($, id, { fresh: true })
-    const { Box } = $.ui.resolve(e)
+    // This is the mod's own row; the engine stacks the other mods' rows around it.
     return (
-      <Box flexDirection="column">
-        <TicketView
-          elements={$.ui.resolve(e)}
-          ticket={ticket}
-          mode={mode}
-          showToggles
-          onExpand={() => update($, MODE, () => 'expanded')}
-          onCompact={() => update($, MODE, () => 'compact')}
-        />
-        {await next(e)}
-      </Box>
+      <TicketView
+        elements={$.ui.resolve(e)}
+        ticket={ticket}
+        mode={mode}
+        showToggles
+        onExpand={() => update($, MODE, () => 'expanded')}
+        onCompact={() => update($, MODE, () => 'compact')}
+      />
     )
   })
 

@@ -348,9 +348,9 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // The band yields to a survey, and draws nothing until shown. Shown, it draws above
-  // what the hooks beneath draw (another mod's band), so both show. The engine scrolls a
-  // tree taller than its room, so every line is drawn.
+  // The band yields to a survey, and draws nothing until shown. Shown, it draws this mod's
+  // own row; the engine stacks the other mods' rows with it, so both show. The engine
+  // scrolls a tree taller than its room, so every line is drawn.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey || (await read($, visibility)) !== 'shown') return next(e)
     const { Box, Button, Text } = $.ui.resolve(e)
@@ -387,11 +387,6 @@ export const register: Register = on => {
     if (list.length) rows.push(...agentLines(list, now, offsetMinutes, new Set(summary?.open.map(t => t.id))).map(textRow))
     if (!rows.length) rows.push(textRow({ text: 'No workflow agents in this session yet.', isDim: true }))
 
-    return (
-      <Box flexDirection="column">
-        {rows}
-        {await next(e)}
-      </Box>
-    )
+    return <Box flexDirection="column">{rows}</Box>
   })
 }

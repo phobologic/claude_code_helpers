@@ -11,8 +11,9 @@ import { ticketsIn } from './links'
 // block, which the hook draws first.
 
 const DIR = '/repo/.tickets'
-// What the hooks beneath draw for a reply block: the engine's own row.
-const ENGINE_ROW = { type: 'engine', ref: 0 }
+// What the hooks beneath draw for a reply block: the engine's own row, which the test kit answers
+// itself and numbers as it goes.
+const ENGINE_ROW = { type: 'engine', ref: expect.any(Number) }
 const OTHER_SURFACES = ['desktop', 'vscode', 'mobile'] as const
 // Eleven ticket ids, x-a001 to x-a011.
 const ELEVEN = Array.from({ length: 11 }, (_, i) => `x-a${String(i + 1).padStart(3, '0')}`)
@@ -44,7 +45,6 @@ function world(on: On, tickets: string[]): World {
     w.logs.push(e.text)
     return { value: undefined }
   })
-  on('ui.render', { component: 'AssistantMessage' }, () => ENGINE_ROW)
   return w
 }
 
@@ -287,7 +287,6 @@ test('with no TICKETS_DIR the draw finds the tickets dir above the session root'
     if (e.path === `${DIR}/x-ab12.md`) return { value: { kind: 'file', size: 10, mtimeMs: 100, isLink: false } }
     return { deny: `ENOENT: no such file or directory, stat '${e.path}'` }
   })
-  on('ui.render', { component: 'AssistantMessage' }, () => ENGINE_ROW)
   const ui = await mount($, 'see x-ab12, not x-cd34')
   expect(await rowParts(ui)).toEqual(['text tickets: (dim)', ...buttons(['x-ab12'])])
 })
