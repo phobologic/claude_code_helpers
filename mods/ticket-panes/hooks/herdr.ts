@@ -280,9 +280,20 @@ async function isFolder($: EngineInterface, path: string): Promise<boolean> {
 // E8: what the side pane's shell, and so its Claude, starts with. An empty value counts as unset.
 // TICKET_PANES_CWD is the folder the pane starts in: the root of the pane's own Claude. role.ts
 // (R4) uses it, with whether a session draws anywhere, to tell that Claude apart from any `claude`
-// a hook or tool starts from the pane, which inherits these variables.
+// a hook or tool starts from the pane, which inherits these variables. CLAUDE_SIDE_SESSION is the
+// shared convention for any session another tool opens beside the main one: it names the opener,
+// and mods with whole-repo prompts (project-nudge) stay quiet where it is set.
 async function paneEnv($: EngineInterface, id: string, dir: string, cwd: string): Promise<string[]> {
-  const env = ['--env', `TICKET_PANES_TICKET=${id}`, '--env', `TICKETS_DIR=${dir}`, '--env', `TICKET_PANES_CWD=${cwd}`]
+  const env = [
+    '--env',
+    `TICKET_PANES_TICKET=${id}`,
+    '--env',
+    `TICKETS_DIR=${dir}`,
+    '--env',
+    `TICKET_PANES_CWD=${cwd}`,
+    '--env',
+    'CLAUDE_SIDE_SESSION=ticket-panes',
+  ]
   const pluginDirs = await $.env.get('CLAUDE_CODE_PLUGIN_DIRS')
   if (pluginDirs) env.push('--env', `CLAUDE_CODE_PLUGIN_DIRS=${pluginDirs}`)
   return env

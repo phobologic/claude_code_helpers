@@ -9,6 +9,7 @@ marketplace, `claude-mods`, like `languages/`.
 | `workflow-monitor` | A live band above the prompt, full width, under the transcript. It shows a `/run-tickets` run of the session's repo (from `run-tickets-status --json`): the newest one the session launched, so a run another session starts later in the same repo does not take its place, or else the repo's newest. It shows its progress and each ticket not merged yet, with when its current step started. Below that, a count of the agents workflow scripts started in the session, and each one still running with its start time and how long it has run. Shows on the first workflow agent of a session. `/workflow-monitor` shows or hides it, and once hidden it stays hidden for the session until shown again. When it is taller than its room (at most half the terminal) it scrolls; its `[-]` mark collapses it. While `ticket-panes` is loaded, each of those tickets' ids is a button that opens the ticket, as a reply's ticket button does. It draws its rows above what the hooks beneath it draw (another mod's band, such as `ticket-panes`' ticket band in a side pane), not in its place, so both show. |
 | `worktree-snapshots` | Before each Bash command, saves the session's git checkout (tracked files as they are on disk, and untracked files that are not ignored) as a snapshot, so work a command destroys can be restored. Snapshots are kept for 3 days, then git cleans them up. It never asks anything and never stops a command. The `snapshots` skill (`/worktree-snapshots:snapshots`) lists, inspects and restores them. |
 | `ticket-panes` | Makes tk tickets clickable. A reply that mentions tickets gets a dim `tickets:` row under it, a button per ticket. In a session running in herdr, a button opens a Claude agent for that ticket in a side pane to the right, with the ticket drawn in a band above its prompt and, while a `/run-tickets` run is working on the ticket, the run's live status for it in a pane below. Outside herdr, and inside a side pane, a button opens a read-only ticket pane in Claude Code instead. |
+| `project-nudge` | A band above the prompt that says what to do next in this repo, from the repo's own `.claude/nudge/run` script: a title, a few lines, and a Load button that fills the prompt with the next command. The first time, it asks before running the script, and it asks again whenever the script or a file it relies on changes. The `nudge-setup` skill (`/project-nudge:nudge-setup`) writes the script for a repo. |
 
 ## Install
 
@@ -19,6 +20,7 @@ claude plugin marketplace add ~/git/claude_code/mods
 claude plugin install workflow-monitor@claude-mods --scope user
 claude plugin install ticket-panes@claude-mods --scope user
 claude plugin install worktree-snapshots@claude-mods --scope user
+claude plugin install project-nudge@claude-mods --scope user
 ```
 
 `--scope project` instead installs it for one repo only. `/plugin` lists, disables and
@@ -236,7 +238,9 @@ a session loads it from a folder you own.
   activity pane and the guard's run lookup, and `tk` for the guard's backlog lookup;
   and `/usr/bin/uuidgen` for new conversations. A side pane starts with
   `TICKET_PANES_TICKET`, `TICKETS_DIR` and `TICKET_PANES_CWD` (the folder it starts
-  in) set, and `CLAUDE_CODE_PLUGIN_DIRS` passed on when the session has it.
+  in) set, `CLAUDE_SIDE_SESSION=ticket-panes` (the shared side-session marker, which
+  keeps `project-nudge` quiet there), and `CLAUDE_CODE_PLUGIN_DIRS` passed on when the
+  session has it.
 - Only the side pane's own Claude is a side session: one with `TICKET_PANES_TICKET`
   set that draws somewhere (a REPL, not a `claude -p` or SDK run) and whose root is the
   folder `TICKET_PANES_CWD` names (or that has none). Processes it starts inherit both
@@ -249,3 +253,38 @@ a session loads it from a folder you own.
   `$.ticketPanes.available({})` answers true while the mod is loaded. Call both in a
   try/catch with no `dependencies` entry, which would stop the caller loading without
   this mod; workflow-monitor's `hooks/ticket-panes.d.ts` declares their types.
+
+`project-nudge` notes:
+- A repo opts in by committing `.claude/nudge/run` (an executable that prints one JSON
+  object, `{"version": 1, "nudge": null}` or a nudge with a title, lines and an
+  optional command) and `.claude/nudge/trust` (the repo files `run` relies on, one
+  per line). The bundled skill, `/project-nudge:nudge-setup`, surveys a repo and
+  writes both; it holds the full contract.
+- Nothing runs until you answer the band for that checkout. Allow pins the git blob
+  hash of `run`, `trust` and each file it lists, as shown on the band, in
+  `~/.claude/project-nudge.json`; when the files changed after the band appeared,
+  Allow saves nothing and the band asks again. Any later change to a pinned file
+  stops the script and brings back a "nudge changed" band. Answers are per checkout
+  path, so a linked worktree asks for itself.
+- Pinned files must be regular files inside the repo: a symbolic link is refused,
+  because git hashes a link's target path rather than what it points at.
+- The pin covers only what `trust` lists. To narrow what an unlisted file can do,
+  the script runs with `PYTHONSAFEPATH=1` (Python does not import from the script's
+  own folder), `PYTHONDONTWRITEBYTECODE=1` and `GIT_OPTIONAL_LOCKS=0`. A script that
+  calls a package runner (`uv run`, `npx`) still reads files nobody pinned; the skill
+  tells authors not to.
+- It runs the script once at launch (session start and the classic SessionStart
+  share one run), after each main-loop turn (not a subagent's), and again on
+  `/clear`, resume and compaction, where the script's `context` goes to Claude.
+  After a turn it runs in the background: the turn ends and queued messages go on
+  without waiting, and turns that end while it runs share one more run. Only the
+  classic SessionStart waits for it (at most the 5 s timeout), since it hands the
+  `context` on.
+- Subagents get neither the band nor the `context`. Each Claude Code window is its own
+  session with its own band; windows in the same checkout share one answer.
+- A side session gets nothing either: one with `CLAUDE_SIDE_SESSION` set (to any
+  non-empty value). That variable is the convention for any session a tool opens
+  beside the main one, set to the opener's name; `ticket-panes` sets it to
+  `ticket-panes` in its side panes. Processes started from such a session inherit it.
+- Errors (non-zero exit, a timeout after 5 s, bad output) show in a red band with
+  the script's stderr and a toast; a contract error also offers the skill.

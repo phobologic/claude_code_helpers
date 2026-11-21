@@ -1,0 +1,7 @@
+{
+  "name": "project-nudge",
+  "version": "0.2.0",
+  "description": "Runs a repo's own .claude/nudge/run script, once you allow that repo, and shows what it says to do next in a band above the prompt; the nudge-setup skill writes the script",
+  "author": { "name": "mike" },
+  "types": "./types/index.d.ts"
+}
