@@ -13,7 +13,10 @@ marketplace, `claude-mods`, like `languages/`.
 
 ## Install
 
-Once per machine, then once per mod. The user scope loads it in every session:
+`make install` at the repo root does this: `worktree-snapshots` and `project-nudge`
+with either toolkit, and `workflow-monitor` and `ticket-panes` with `dev` (a switch to
+`base` uninstalls those two). By hand, once per machine, then once per mod. The user
+scope loads it in every session:
 
 ```
 claude plugin marketplace add ~/git/claude_code/mods

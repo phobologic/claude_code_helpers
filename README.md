@@ -12,26 +12,49 @@ ticket runner, language plugins, tool rules, and working style rules for `~/.cla
 | `agents/` | Sub-agents: spec-critic (plan review for `/spec`), run-tickets workflow (ticket-implementer, ticket-verifier, ticket-reviewer), and design-sprint (design-designer, design-evaluator) |
 | `languages/` | Per-language Claude Code plugins (Go, Python, JS/SvelteKit) — auto-formatting hooks + coding rules |
 | `plugins/` | General-purpose Claude Code plugins — workflow automation and tool integrations |
-| `mods/` | Claude Code mods (`workflow-monitor`, `ticket-panes`, `worktree-snapshots`): hooks modules that change Claude Code's own interface or behaviour, installed from their own marketplace. See [`mods/README.md`](mods/README.md) |
+| `mods/` | Claude Code mods (`workflow-monitor`, `ticket-panes`, `worktree-snapshots`, `project-nudge`): hooks modules that change Claude Code's own interface or behaviour, installed from their own marketplace by `install.sh`. See [`mods/README.md`](mods/README.md) |
 | `optional_rules/` | Shared opt-in rules, wired into a project with `/load-shared-rule` |
 | `tools/` | Per-tool rule files (Railway, SQLAlchemy) — loaded via `.claude/rules/` symlinks |
 | `bin/` | Utility scripts: tk plugins (`tk-show-multi`, `tk-epic-status`, `tk-triage`, `tk-set`, `tk-backlog`) and `git-auto-commit.sh` |
 | `tests/` | Dependency-free tests for the `run-tickets-engine` workflow script (run in Node with fake agents), `bin/run-tickets-plan`, `bin/run-tickets-setup` and `bin/run-tickets-finish`, `bin/run-tickets-gates`, and `bin/wrap-epic-plan` |
 | `CLAUDE.dev.md` | Global rules for development machines (testing, tk, living document), loaded as `~/.claude/rules/dev.md` |
-| `install.sh` | Sets up the `~/.claude/` dev symlinks from scratch |
+| `install.sh` | Links the chosen toolkit (`base` or `dev`) into `~/.claude/` and `~/.local/bin/`, and registers the mods |
+| `Makefile` | `make install`, `make update`, `make test` |
 
 ## Installation
+
+Install the private dotfiles repo first: it writes `~/.config/machine.env`, which
+says what the machine is, and owns `~/.claude/settings.json`. Then:
 
 ```bash
 git clone https://github.com/you/claude_code ~/git/claude_code
 cd ~/git/claude_code
-./install.sh
+make install                # toolkit from CLAUDE_TOOLKIT in ~/.config/machine.env
+make install TOOLKIT=base   # or choose it for this run
 ```
 
-This creates:
+Later, `make update` pulls (only on a clean tree) and installs again. Run
+`make install` after adding or removing a skill, `bin/` script or rules file: each
+is its own link, so a new one isn't visible until then.
+
+`install.sh` stops with "install the private dotfiles repo first" when
+`machine.env` is missing. The toolkit comes from `--toolkit`, then the
+`CLAUDE_TOOLKIT` environment variable, then `machine.env`. Every run converges: a
+link the toolkit doesn't want is removed if it points into this repo, so switching
+from `dev` to `base` (or deleting a skill) cleans up. Real files and links pointing
+elsewhere are left alone.
+
+**`base`** (any machine):
+- `~/.claude/skills/herdr` → `skills/herdr`
+- the `claude-mods` marketplace, and `worktree-snapshots` and `project-nudge`
+  installed at user scope (skipped when already installed)
+
+**`dev`** (machines used for software development) adds:
 - `~/.claude/rules/dev.md` → `CLAUDE.dev.md` *(loads in every session)*
 - `~/.claude/tk.md` → `tk.md`
-- `~/.claude/skills/` → `skills/`
+- `~/.claude/skills/<name>` → `skills/<name>`, one link per skill
+  (`~/.claude/skills` is a real directory, so Claude Code's synced account skills
+  under `skills/synced` stay out of the repo)
 - `~/.claude/agents/` → `agents/`
 - `~/.claude/workflows/` → `workflows/` *(saved workflow scripts, runnable as `/<name>`)*
 - `~/.claude/optional_rules/` → `optional_rules/` *(opt-in rules for `/load-shared-rule`)*
@@ -43,23 +66,28 @@ This creates:
 - `~/.local/bin/tk-triage` → `bin/tk-triage` *(tk plugin)*
 - `~/.local/bin/tk-set` → `bin/tk-set` *(tk plugin)*
 - `~/.local/bin/tk-backlog` → `bin/tk-backlog` *(tk plugin: the repo's standing backlog epic, and duplicate search)*
+- every other `bin/` script into `~/.local/bin/` the same way
+- the `workflow-monitor` and `ticket-panes` mods at user scope (a switch to `base`
+  uninstalls them)
+- `.tickets/` in `~/.config/git/ignore`, so ticket files are never accidentally
+  committed (a switch to `base` leaves the line)
 
-It also adds `.tickets/` to `~/.config/git/ignore` so ticket files are never
-accidentally committed.
+A repo that shouldn't get the dev rules can drop them in its own
+`.claude/settings.json` with `"claudeMdExcludes": ["**/.claude/rules/dev.md"]`.
 
-**The base config is not here.** `~/.claude/settings.json`, the global
-`~/.claude/CLAUDE.md` (working-style rules for any use of Claude Code) and the hook
-scripts `settings.json` turns on live in a private dotfiles repo, which every machine
-installs, including ones not used for development. Settings can't be in a public repo:
-they hold private context (such as auto mode's description of private repos) and get
-edited in place by Claude Code itself (plugin installs, `/config`), so anything added
-later would be published too. There is no user-level `~/.claude/settings.local.json`
-for machine-only overrides: `settings.local.json` is project-scoped.
+**Settings are not here.** `~/.claude/settings.json` is an ordinary file that Claude
+Code owns and edits in place (plugin installs, `/config`). The private dotfiles repo
+tracks the pieces you choose (a base file, a home or work overlay, and a `dev`
+overlay with the plugins this toolkit's `dev` profile needs) and merges them into
+that file with a sync script, keeping what Claude Code added. Settings can't be in a
+public repo: they hold private context such as auto mode's description of private
+repos. The same repo holds the global `~/.claude/CLAUDE.md` (working-style rules for
+any use of Claude Code) and the hook scripts the settings turn on.
 
 ## Skills
 
-Skills are invoked with `/skill-name` in Claude Code. After `./install.sh` the following
-are available globally:
+Skills are invoked with `/skill-name` in Claude Code. After `make install` with the
+`dev` toolkit the following are available globally:
 
 | Skill | Description |
 |-------|-------------|
@@ -314,7 +342,7 @@ Both skills finish with an initial commit so the scaffold is ready to push.
 Language plugins provide **auto-formatting hooks** (goimports for Go, ruff for
 Python, Biome + Prettier for JS/TS/Svelte). Python and JS also run complexity
 checks on changed files (radon for Python, Biome's complexity lint for JS).
-Coding convention rules are installed globally by `./install.sh` — no extra step.
+Coding convention rules are installed globally by `make install` with the `dev` toolkit, no extra step.
 
 To activate formatting hooks in a specific project:
 

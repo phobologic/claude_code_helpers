@@ -4,19 +4,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Purpose
 
-This repository is the Claude Code development toolkit layered on top of `~/.claude/`:
-global skills, sub-agents, the run-tickets workflow, language plugins for
+This repository is the Claude Code toolkit layered on top of `~/.claude/`:
+global skills, sub-agents, the run-tickets workflow, mods, language plugins for
 auto-formatting, tool rules for deployment and database conventions, and the dev rules
-(`CLAUDE.dev.md`, linked to `~/.claude/rules/dev.md`). Its `install.sh` runs only on
-machines used for software development.
+(`CLAUDE.dev.md`, linked to `~/.claude/rules/dev.md`). `install.sh` installs one of two
+toolkits: `base` (the herdr skill and the `worktree-snapshots` and `project-nudge` mods,
+for any machine) or `dev` (everything, for machines used for software development).
 
-The base config every machine gets lives in a private base-config repo's
-`.claude_global/`, linked by that repo's `install.sh`: `settings.json`, the global
-`~/.claude/CLAUDE.md`, and the hook scripts `settings.json` turns on. A rule that applies
-to any use of Claude Code goes in the base-config repo's `CLAUDE.md`; one that only matters when writing
-software goes in `CLAUDE.dev.md`. Keep each rule in exactly one of them. Settings must stay
-in the base-config repo because this repo is public, the settings hold private context (auto mode's
-description of private repos), and Claude Code edits the file in place.
+The private dotfiles repo installs first on every machine. It writes
+`~/.config/machine.env` (`CLAUDE_TOOLKIT=base|dev` is the line this repo reads), links
+the global `~/.claude/CLAUDE.md` and the hook scripts, and owns `~/.claude/settings.json`:
+that file is a real local file Claude Code edits, and the dotfiles repo merges its tracked
+settings pieces into it with a sync script. A rule that applies to any use of Claude Code
+goes in the dotfiles repo's global `CLAUDE.md`; one that only matters when writing
+software goes in `CLAUDE.dev.md`. Keep each rule in exactly one of them. Settings must
+stay in the dotfiles repo because this repo is public and the settings hold private
+context (auto mode's description of private repos).
 
 ## Repository Structure
 
@@ -34,19 +37,37 @@ tests/          Tests for the run-tickets workflow script and planner (plain nod
 README.md       User-facing overview and skill reference
 tk.md           tk command reference, linked to ~/.claude/tk.md
 CLAUDE.dev.md   Dev rules, symlinked to ~/.claude/rules/dev.md
-install.sh      Sets up the ~/.claude/ dev symlinks from scratch
+install.sh      Links the base or dev toolkit and registers the mods; converging
+Makefile        make install / make update / make test
 ```
 
 ## Installation
 
-Run the base-config repo's `install.sh` first for the base config, then this repo's `./install.sh`:
-- `~/.claude/rules/dev.md` → `CLAUDE.dev.md`
-- `~/.claude/tk.md` → `tk.md`
-- `~/.claude/skills/` → `skills/`
-- `~/.claude/agents/` → `agents/`
-- `~/.claude/workflows/` → `workflows/`
-- `~/.claude/rules/go.md` → `languages/go/rules/CLAUDE.md`
-- `~/.claude/rules/python.md` → `languages/python/rules/CLAUDE.md`
+Install the private dotfiles repo first, then `make install` here. `make update` pulls
+(clean tree only) and installs again. `install.sh` stops if `~/.config/machine.env` is
+missing, and takes the toolkit from `--toolkit`, then `$CLAUDE_TOOLKIT`, then that file.
+
+- **base:** `~/.claude/skills/herdr`; the `claude-mods` marketplace plus
+  `worktree-snapshots` and `project-nudge` at user scope
+- **dev:** also `~/.claude/skills/<name>` per skill, `~/.claude/{tk.md,agents,workflows,optional_rules}`,
+  `bin/*` into `~/.local/bin/`, `~/.claude/rules/{dev,go,python,js}.md`, the
+  `workflow-monitor` and `ticket-panes` mods, and `.tickets/` in the global git ignore
+
+Every run converges: any symlink in those places that points into this repo and isn't
+wanted by the toolkit is removed (dev to base, a deleted skill or script). Real files and
+links elsewhere are never touched. `~/.claude/skills` is a real directory because Claude
+Code writes claude.ai account skills into `~/.claude/skills/synced`; the first run after
+the old whole-directory link moves that folder out of the repo.
+
+### Deployed by `make install`
+
+Changing any of these needs `make install` to take effect:
+- adding or removing a skill or a `bin/` script (each is its own link)
+- adding or removing a rules file (`CLAUDE.dev.md`, `languages/*/rules/CLAUDE.md`)
+- the toolkit lists in `install.sh` (what each toolkit links, which mods it installs)
+
+Edits inside an already linked file or directory show up without it, and so do new
+agents and workflows (`agents/` and `workflows/` are linked whole).
 
 To add language auto-formatting hooks to a project:
 ```
@@ -81,7 +102,7 @@ To add language auto-formatting hooks to a project:
 
 ### Mods
 - `mods/` is a plugin marketplace (`claude-mods`) of mods: hooks modules that change Claude Code's own interface or behaviour
-- Installed with `claude plugin marketplace add ~/git/claude_code/mods` once, then `claude plugin install <mod>@claude-mods --scope user` (every session) or `--scope project`
+- `make install` registers the marketplace and installs the toolkit's mods at user scope (see Installation); by hand it is `claude plugin marketplace add ~/git/claude_code/mods` once, then `claude plugin install <mod>@claude-mods --scope user` (every session) or `--scope project`
 - Installed mods are read from this folder, so an edit here takes effect with `/reload-plugins`
 - `workflow-monitor`: a live band above the prompt with the newest `/run-tickets` run this session launched, else the repo's newest (ticket state and when each current step started) and an agent count line, listing only running agents no ticket row already shows (like the integration check); shows on the first workflow agent; `/workflow-monitor` shows or hides it, and a hide lasts the session. While `ticket-panes` is loaded, each unmerged ticket's id is a button that opens the ticket through `$.ticketPanes.open`; it declares no dependency on that mod, asks `$.ticketPanes.available` at session start (and on its first draw after a reload), and draws plain rows without it. It draws only its own row of the band; Claude Code stacks each mod's row, so another mod's band shows too
 - `ticket-panes`: makes tk tickets clickable. A reply block that mentions tickets (a tk-id-shaped word with a `<tickets dir>/<word>.md`, ids only in fenced code not counted) gets a dim `tickets:` row of buttons, at most 8 then `+N more`. In a main session in herdr a button opens one side pane per session, split right, with a Claude agent for the ticket that resumes the ticket's one recorded conversation (`/clear` there starts a new one); another ticket switches the pane while its agent is idle, and toasts `click again to switch anyway` while it works. The side session shows the ticket in a band above its prompt, gets its rules and the ticket in its system prompt (not where an organization manages Claude Code: `prompt.compose` and `session.compact` hooks don't run there for a plugin a person installs), hears of ticket changes as a note on the next message, and is guarded: Edit, Write and NotebookEdit only under `.tmp/`, no commit-making git (`pull` included), and while a running `/run-tickets` run holds the ticket (`run-tickets-status --find-ticket`), tk limited to reading, notes and follow-ups under the backlog epic. In that case a pane below runs `run-tickets-status --ticket <id> --watch 30 <run-id>`. Outside herdr, and from inside a side pane, a button opens a read-only ticket pane closed with Esc. Clicks need the fullscreen layout. Other plugins open tickets with `$.ticketPanes.open({ id })`. See `mods/README.md` for the limits and what each toast means
@@ -162,7 +183,7 @@ The workflow test runs the real script with fake agents and checks scheduling (c
 
 ## Important Notes
 
-- **This repo is public on GitHub.** Keep other projects out of it: no names, paths, ticket IDs, code or data from them in files, test fixtures, or commit messages. Describe what a run or project showed in general terms instead. Private Claude config (`~/.claude/settings.json`) stays in the private base-config repo (see Repository Purpose)
-- `CLAUDE.dev.md` is symlinked to `~/.claude/rules/dev.md`. It can't be named `CLAUDE.md` here, because then it would be loaded twice when working in this repo
-- `~/.claude/settings.json`, the global `~/.claude/CLAUDE.md` and the hook scripts are not in this repo (see Repository Purpose); there is no user-level `~/.claude/settings.local.json`
+- **This repo is public on GitHub.** Keep other projects out of it: no names, paths, ticket IDs, code or data from them in files, test fixtures, or commit messages. Describe what a run or project showed in general terms instead. Private Claude config (the tracked settings pieces) stays in the private dotfiles repo (see Repository Purpose)
+- `CLAUDE.dev.md` is symlinked to `~/.claude/rules/dev.md`. It can't be named `CLAUDE.md` here, because then it would be loaded twice when working in this repo. A repo that shouldn't get it sets `"claudeMdExcludes": ["**/.claude/rules/dev.md"]` in its `.claude/settings.json` (checked: that pattern drops the user-level rules file)
+- `~/.claude/settings.json`, the global `~/.claude/CLAUDE.md` and the hook scripts are not in this repo (see Repository Purpose); there is no user-level `~/.claude/settings.local.json`. A plugin this toolkit needs enabled goes in the dotfiles repo's `dev` settings piece, not here
 - Local settings should be in `settings.local.json` (gitignored)

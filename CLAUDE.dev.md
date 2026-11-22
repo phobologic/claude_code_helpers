@@ -1,9 +1,9 @@
 # Development Rules
 
 Global rules for machines set up for software development, linked to
-`~/.claude/rules/dev.md` by this repo's `install.sh`. The base rules every
-machine gets are the global `~/.claude/CLAUDE.md`, which lives in the private
-base-config repo.
+`~/.claude/rules/dev.md` by this repo's `install.sh` with the `dev` toolkit. The
+base rules every machine gets are the global `~/.claude/CLAUDE.md`, which lives
+in the private dotfiles repo.
 
 ## Testing
 
@@ -15,10 +15,8 @@ base-config repo.
 
 ## Issue Tracking (Tickets)
 
-Use **tk** for all task tracking instead of markdown files, TodoWrite, or
-TaskCreate. The full command reference, epic/dep model, and rules live in
-`~/.claude/tk.md`; read it before any non-trivial tk work. Quick start:
-`tk ready` → `tk start <id>` → work → `tk add-note <id> "..."` → `tk close <id>`.
+Repos with a `.tickets/` directory track work in tk; read `~/.claude/tk.md`
+before using it.
 
 ## Living Document
 
