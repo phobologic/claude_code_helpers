@@ -110,8 +110,11 @@ function notebook($: Engine, path: string) {
   return $.tool.call({ tool: 'NotebookEdit', notebook_path: path, new_source: 'x' })
 }
 
+// The guard refuses at classic.PreToolUse, so a refused call ends as a session's does: an errored
+// result whose text is the reason (`{ deny }` only where a hook above answered so itself).
 function denial(result: unknown): string | undefined {
-  return (result as { deny?: string }).deny
+  const r = result as { deny?: string; isError?: boolean; text?: string }
+  return r.deny ?? (r.isError ? r.text : undefined)
 }
 
 // The deny each of `commands` meets, run one at a time (undefined for one that ran).
@@ -688,13 +691,13 @@ test('AC: in a main session every call goes on, and nothing is looked up', async
 
 test('AC: if the guard throws in a side session the call is refused; in a main session it runs', async ($, on) => {
   const w = world(on, SIDE_ENV, { isRootRefused: true })
-  expect(await write($, '/repo/.tmp/a.md')).toStrictEqual(FAILED)
-  expect(await edit($, '/repo/src/a.ts')).toStrictEqual(FAILED)
+  expect(denial(await write($, '/repo/.tmp/a.md'))).toBe(FAILED.deny)
+  expect(denial(await edit($, '/repo/src/a.ts'))).toBe(FAILED.deny)
   expect(w.ran).toStrictEqual([])
 })
 
-// The engine skips a test hook that throws, and with nothing else answering beneath the plugin,
-// the guard's `next(e)` rejects: the guard fails after it let the call through.
+// The guard answers at PreToolUse, before the tool runs: a tool that then breaks (here a test
+// hook that throws, with nothing else beneath) fails as itself, never as the guard's refusal.
 test('a failure beneath a call the guard let through is passed on, not made a refusal', async ($, on) => {
   on('tool.call', { tool: 'Write' }, () => {
     throw new Error('the tool broke')
@@ -712,7 +715,7 @@ test('a failure beneath a call the guard let through is passed on, not made a re
 
 test('a side pane that names its launch folder is still refused when the guard fails on its root', async ($, on) => {
   const w = world(on, { ...SIDE_ENV, TICKET_PANES_CWD: ROOT }, { isRootRefused: true })
-  expect(await write($, '/repo/.tmp/a.md')).toStrictEqual(FAILED)
+  expect(denial(await write($, '/repo/.tmp/a.md'))).toBe(FAILED.deny)
   expect(w.ran).toStrictEqual([])
 })
 

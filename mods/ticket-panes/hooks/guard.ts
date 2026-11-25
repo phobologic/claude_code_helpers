@@ -480,8 +480,14 @@ export async function onGuardFailure<E, R>(
 }
 
 // This module's hooks, registered by register.tsx.
+//
+// The guard stands on classic.PreToolUse, not tool.call: a tool.call (or tool.run) hook that may
+// match a tool, even one that only passes the call on, turns off moving that tool to the
+// background and its live output, and this guard is loaded in every session, main ones too.
+// PreToolUse fires before the tool runs and answers a decision, so nothing the tool sends back
+// passes through it.
 export function registerGuard(on: On): void {
-  on('tool.call', { tool: ['Edit', 'Write', 'NotebookEdit', 'Bash'] }, async ($, e, next) => {
+  on('classic.PreToolUse', { tool: ['Edit', 'Write', 'NotebookEdit', 'Bash'] }, async ($, e, next) => {
     const ticket = sideTicketOf(await role($))
     if (ticket === undefined) return next(e)
     const reason =
