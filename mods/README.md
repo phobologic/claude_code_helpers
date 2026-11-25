@@ -315,8 +315,16 @@ a session loads it from a folder you own.
   call on, turns off moving that tool to the background and its live output in every
   session the mod is installed in. A command sent to the background and an
   interrupted one are no verdict, so the owl doesn't react to them.
+- The sprite is drawn in a `Client` (`hooks/owl-client.tsx`), so it hears the mouse.
+  A left click folds him down to the top of his head (3 rows) peering over the prompt,
+  where he keeps his remarks to himself; a click on that, `/owl toggle`, or an
+  explicit `/owl say` brings him back. While the pointer is over him his pupils
+  follow it; a `Client` only hears the pointer over its own region, so he doesn't
+  track it across the screen. If the `Client` fails to load or draw, he falls back
+  to the plain drawing, which can't be clicked.
 - `/owl` lists the commands: `say` (ask Haiku now), `hush` / `unhush` (remarks off or
-  on for the session), `hide` / `show`, `config` (re-read `.claude/owl.json`).
+  on for the session), `hide` / `show`, `toggle` (fold or unfold, as a click does),
+  `config` (re-read `.claude/owl.json` and `owl.local.json`).
 - A repo can tune it with `.claude/owl.local.json` (personal, kept out of git) and
   `.claude/owl.json` (committed), read as data and never run. Each holds `voice` (a
   note about the repo, added to the Haiku prompt), `lines` (extra lines per moment),

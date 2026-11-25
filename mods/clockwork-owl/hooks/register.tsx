@@ -3,7 +3,8 @@ import type { Hook, Register } from 'claude-code'
 
 import type { Look, Mood, OwlPrefs, OwlView } from '../types'
 import { EMPTY, mergeConfigs, parseConfig, type RepoConfig, type Rule, ruleFor, subjectOf } from './config'
-import { BUBBLE_BORDER, HEIGHT, pixels, rows, WIDTH } from './sprites'
+import type { OwlClientProps } from './owl-client'
+import { BUBBLE_BORDER, FOLDED_HEIGHT, foldedPixels, HEIGHT, pixels, rows, WIDTH } from './sprites'
 import { cleanReply, isLazyPrompt, isTestCommand, type Moment, pick, pickFrom, SYSTEM } from './voice'
 
 // clockwork-owl: a brass owl floating just above the prompt's right edge. Its
@@ -21,6 +22,7 @@ const view = atom({ plugin: 'clockwork-owl', key: 'view' } as const, {
 const prefs = atom({ plugin: 'clockwork-owl', key: 'prefs' } as const, {
   isHushed: false,
   isHidden: false,
+  isFolded: false,
 } as OwlPrefs)
 
 type Dollar = Parameters<Hook<'session.start'>>[0]
@@ -38,6 +40,8 @@ const DIGEST_MAX = 40
 // Module variables: a reload starts them over, which only costs the owl its
 // short-term memory. What the drawing reads is in $.state.
 let isOff = false
+/** The owl's Client failed on this load: draw the plain sprite instead. */
+let isClientBroken = false
 let config: RepoConfig = EMPTY
 let configProblems: string[] = []
 let tick: { cancel: () => void } | null = null
@@ -93,9 +97,16 @@ function restingMood(): Mood {
 }
 
 /** `force` skips the cooldown; `asked` (an explicit /owl say) speaks while hushed too. */
+/** Folds the owl away or brings him back; folding drops a bubble he was showing. */
+async function setFolded($: Dollar, isFolded: boolean) {
+  await update($, prefs, p => ({ ...p, isFolded }))
+  if (isFolded) await setView($, { bubble: null })
+}
+
 async function say($: Dollar, line: string, force = false, asked = false): Promise<boolean> {
   const p = await read($, prefs)
-  if (isOff || p.isHidden || (p.isHushed && !asked)) return false
+  if (isOff || p.isHidden || ((p.isHushed || p.isFolded) && !asked)) return false
+  if (p.isFolded) await setFolded($, false)
   if (!force && now - lastRemark < CANNED_COOLDOWN) return false
   lastRemark = now
   turnsSinceRemark = 0
@@ -370,6 +381,7 @@ const HELP = [
   '/owl unhush     remarks back on',
   '/owl hide       hide the owl this session',
   '/owl show       show it again',
+  '/owl toggle     fold him down to his eyes, or bring him back (or click him)',
   '/owl config     re-read .claude/owl.json and owl.local.json and report what they hold',
   '',
   'To set the owl up for this repo: /clockwork-owl:owl-setup',
@@ -509,6 +521,11 @@ export const register: Register = on => {
       case 'show':
         await update($, prefs, p => ({ ...p, isHidden: false }))
         return { text: 'The owl is back.' }
+      case 'toggle': {
+        const isFolded = !(await read($, prefs)).isFolded
+        await setFolded($, isFolded)
+        return { text: isFolded ? 'The owl ducks down. Click his eyes to bring him back.' : 'The owl pops back up.' }
+      }
       case 'config':
         return { text: await loadConfig($) }
       default:
@@ -516,37 +533,58 @@ export const register: Register = on => {
     }
   })
 
+  // A click on the owl, from its Client: fold him away, or bring him back.
+  on('ui.message', async ($, e, next) => {
+    const data = e.data as { type?: unknown } | null
+    if (e.module.endsWith('owl-client.tsx') && data?.type === 'toggle') await setFolded($, !(await read($, prefs)).isFolded)
+    return next(e)
+  })
+
+  // The Client failed to load or draw: fall back to the plain drawing, which
+  // can't hear clicks (the engine draws the site again by itself).
+  on('ui.fault', async ($, e, next) => {
+    if (e.component === 'BesidePrompt') isClientBroken = true
+    return next(e)
+  })
+
   on('ui.render', { component: 'BesidePrompt' }, async ($, e, next) => {
     if (isOff || (e.surface !== 'terminal' && e.surface !== 'desktop')) return next(e)
     const p = await read($, prefs)
     if (p.isHidden) return next(e)
+    const height = p.isFolded ? FOLDED_HEIGHT : HEIGHT
     const { floatColumns, floatRows } = e.props
-    if (floatColumns < WIDTH + 2 || floatRows < HEIGHT) return next(e)
+    if (floatColumns < WIDTH + 2 || floatRows < height) return next(e)
 
     const v = await read($, view)
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Text, Client } = $.ui.resolve(e)
     const bubbleWidth = Math.min(44, floatColumns - WIDTH - 3)
-    const sprite = rows(pixels(v.mood, v.look, v.isBlinking))
+    const owl: OwlClientProps = { mood: v.mood, look: v.look, isBlinking: v.isBlinking, isFolded: p.isFolded }
+
+    const sprite = isClientBroken ? (
+      <Box flexDirection="column">
+        {rows(p.isFolded ? foldedPixels(v.mood, v.look, v.isBlinking) : pixels(v.mood, v.look, v.isBlinking)).map(row => (
+          <Text>
+            {row.map(run => (
+              <Text color={run.color} backgroundColor={run.backgroundColor}>
+                {run.text}
+              </Text>
+            ))}
+          </Text>
+        ))}
+      </Box>
+    ) : (
+      <Client key="owl" module="./owl-client.tsx" props={owl} width={WIDTH} height={height} />
+    )
 
     return (
       <Box width={0}>
         <Box position="absolute" anchor="above" right={1} flexDirection="row" alignItems="flex-end">
-          {v.bubble && bubbleWidth >= 16 ? (
+          {v.bubble && !p.isFolded && bubbleWidth >= 16 ? (
             <Box borderStyle="round" borderColor={BUBBLE_BORDER} paddingX={1} marginRight={1} width={bubbleWidth}>
               <Text>{v.bubble}</Text>
             </Box>
           ) : null}
-          <Box flexDirection="column">
-            {sprite.map(row => (
-              <Text>
-                {row.map(run => (
-                  <Text color={run.color} backgroundColor={run.backgroundColor}>
-                    {run.text}
-                  </Text>
-                ))}
-              </Text>
-            ))}
-          </Box>
+          {sprite}
         </Box>
       </Box>
     )

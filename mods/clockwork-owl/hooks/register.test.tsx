@@ -2,7 +2,8 @@ import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
 import { mergeConfigs, parseConfig, ruleFor, subjectOf } from './config'
-import { pixels } from './sprites'
+import type { Look, Mood } from '../types'
+import { foldedPixels, lookAt, pixels, rows } from './sprites'
 import { cleanReply, isLazyPrompt, isTestCommand, LINES } from './voice'
 
 const ROOT = '/repo'
@@ -60,7 +61,7 @@ test('the owl draws beside the prompt and greets, on terminal and desktop', asyn
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...CELL, surface })
-    expect(await ui.find({ type: 'Text', text: /▀/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /▀/, in: 'owl' })).toBeDefined()
     const greeting = LINES.greeting.map(l => l.replace(/[.?]/g, '\\$&')).join('|')
     expect(await bubbleText(ui, new RegExp(greeting))).toBeDefined()
     await ui.unmount()
@@ -73,7 +74,7 @@ test('the owl stays out of a side session', async ($, on) => {
   await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
 
   const ui = await $.ui.mount({ ...CELL, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /▀/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Client' })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -82,7 +83,7 @@ test('the owl hides when there is no room to float', async ($, on) => {
   await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
 
   const ui = await $.ui.mount({ ...CELL, surface: 'terminal', props: { ...CELL.props, floatColumns: 8 } })
-  expect(await ui.find({ type: 'Text', text: /▀/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Client' })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -131,7 +132,7 @@ test('while hushed, an explicit /owl say still speaks; /owl hide hides the owl',
   expect(await bubbleText(ui, /Commitment/)).toBe('Eight edits to one file. Commitment.')
 
   await $.command.run({ command: 'owl', args: 'hide' } as never)
-  expect(await ui.find({ type: 'Text', text: /▀/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Client' })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -182,6 +183,80 @@ test('with testCommands false, a failing test run leaves the mood alone', async 
   await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
   await finished($, 'Bash', { command: 'npm test' }, 'error')
   expect(w.mood).toBe('idle')
+})
+
+// ---------- clicking and the eyes ----------
+
+type Found = { props: Record<string, unknown>; text: string; children: unknown[] }
+type Mounted = {
+  findAll: (q: { type: string; in: string }) => Promise<Found[]>
+  find: (q: { type: string; key?: string; text?: RegExp; in?: string }) => Promise<Found | undefined>
+}
+
+/** The sprite the owl's Client drew, as its runs: color/background/text, row by row. */
+async function drawn(ui: Mounted): Promise<string> {
+  const leaves = (await ui.findAll({ type: 'Text', in: 'owl' })).filter(t => t.children.every(c => typeof c === 'string'))
+  return leaves.map(t => `${t.props.color}/${t.props.backgroundColor}/${t.text}`).join('|')
+}
+
+/** The same for a sprite drawn straight from the grid. */
+function expected(grid: string[]): string {
+  return rows(grid)
+    .flat()
+    .map(r => `${r.color}/${r.backgroundColor}/${r.text}`)
+    .join('|')
+}
+
+const sprite = (mood: Mood, look: Look) => expected(pixels(mood, look, false))
+
+test('clicking the owl folds him to the top of his head and hushes him; clicking again brings him back', async ($, on) => {
+  const { w, clock } = world(on)
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...CELL, surface: 'terminal' })
+  expect(await bubbleText(ui, /./)).toBeDefined() // the greeting
+  expect(await drawn(ui as never)).toBe(sprite('idle', 'center'))
+
+  await ui.pointer({ in: 'owl', type: 'down', x: 5, y: 2, button: 'left' })
+  await ui.pointer({ in: 'owl', type: 'up', x: 5, y: 2, button: 'left' })
+  expect(await drawn(ui as never)).toBe(expected(foldedPixels('idle', 'center', false)))
+  expect((await ui.find({ type: 'Client', key: 'owl' }))?.props.height).toBe(3)
+  expect(await bubbleText(ui, /\w/)).toBeUndefined()
+
+  // Folded, he keeps his remarks to himself; an explicit /owl say brings him back up to say it.
+  await $.command.run({ command: 'owl', args: 'say' } as never)
+  await clock.settle()
+  expect(w.asked.length).toBe(1)
+  expect((await ui.find({ type: 'Client', key: 'owl' }))?.props.height).toBe(6)
+
+  await $.command.run({ command: 'owl', args: 'toggle' } as never)
+  expect((await ui.find({ type: 'Client', key: 'owl' }))?.props.height).toBe(3)
+  await ui.pointer({ in: 'owl', type: 'down', x: 5, y: 1, button: 'left' })
+  expect((await ui.find({ type: 'Client', key: 'owl' }))?.props.height).toBe(6)
+  await ui.unmount()
+})
+
+test('his pupils follow the pointer over him, and go back when it leaves', async ($, on) => {
+  world(on)
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...CELL, surface: 'terminal' })
+
+  await ui.pointer({ in: 'owl', type: 'enter', x: 0, y: 2 })
+  expect(await drawn(ui as never)).toBe(sprite('idle', 'left'))
+  await ui.pointer({ in: 'owl', type: 'move', x: 11, y: 2 })
+  expect(await drawn(ui as never)).toBe(sprite('idle', 'right'))
+  await ui.pointer({ in: 'owl', type: 'move', x: 6, y: 5 })
+  expect(await drawn(ui as never)).toBe(sprite('idle', 'down'))
+  await ui.pointer({ in: 'owl', type: 'leave', x: 6, y: 5 })
+  expect(await drawn(ui as never)).toBe(sprite('idle', 'center'))
+  await ui.unmount()
+})
+
+test('lookAt: toward the pointer, or at you between his eyes', () => {
+  expect(lookAt(0, 0)).toBe('left')
+  expect(lookAt(3, 5)).toBe('left')
+  expect(lookAt(8, 0)).toBe('right')
+  expect(lookAt(5, 2)).toBe('center')
+  expect(lookAt(5, 3)).toBe('down')
 })
 
 test('sprites: every mood is 12x12 and failed flares the tufts', () => {

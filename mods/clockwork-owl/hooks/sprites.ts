@@ -57,7 +57,8 @@ function eyeFor(mood: Mood, look: Look, isBlinking: boolean): Eye {
   if (isBlinking) return ['LLL', 'DDD']
   switch (mood) {
     case 'waiting':
-      return openEye('W', 'down')
+      // Waiting, he looks down at the prompt, unless the mouse has his attention.
+      return openEye('W', look === 'center' ? 'down' : look)
     case 'failed':
       return ['DDD', 'RPR']
     case 'happy':
@@ -84,6 +85,25 @@ export function pixels(mood: Mood, look: Look, isBlinking: boolean): string[] {
     rows[1] = FLARED_TUFTS[1] as string
   }
   return rows
+}
+
+/** Terminal rows the owl takes folded: ear tufts, brow and eyes, peering over the prompt. */
+export const FOLDED_HEIGHT = 3
+
+/** The pixel grid folded: only the top of his head. */
+export function foldedPixels(mood: Mood, look: Look, isBlinking: boolean): string[] {
+  return pixels(mood, look, isBlinking).slice(0, FOLDED_HEIGHT * 2)
+}
+
+/**
+ * Where the pupils point for a pointer at column x, row y of the owl's region
+ * (12 columns; the eyes are on row 2, the left eye in columns 2-4, the right in
+ * 7-9): toward the pointer, or at you when it is between his eyes.
+ */
+export function lookAt(x: number, y: number): Look {
+  if (x <= 3) return 'left'
+  if (x >= 8) return 'right'
+  return y >= 3 ? 'down' : 'center'
 }
 
 /** A run of cells drawn the same way. */

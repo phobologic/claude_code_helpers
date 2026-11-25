@@ -18,6 +18,8 @@ export type OwlPrefs = {
   isHushed: boolean
   /** The owl is not drawn. */
   isHidden: boolean
+  /** Clicked away: only the top of his head peers over the prompt, and he keeps his remarks to himself. */
+  isFolded: boolean
 }
 
 declare module 'claude-code' {
