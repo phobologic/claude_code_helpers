@@ -1,0 +1,7 @@
+{
+  "name": "clockwork-owl",
+  "version": "0.1.0",
+  "description": "A sarcastic brass clockwork owl beside the prompt that reacts to the session and, now and then, says something about it",
+  "author": { "name": "mike" },
+  "types": "./types/index.d.ts"
+}

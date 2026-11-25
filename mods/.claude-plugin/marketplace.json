@@ -26,6 +26,11 @@
       "name": "project-nudge",
       "source": "./project-nudge",
       "description": "Runs a repo's own .claude/nudge/run script, once you allow that repo, and shows what it says to do next in a band above the prompt"
+    },
+    {
+      "name": "clockwork-owl",
+      "source": "./clockwork-owl",
+      "description": "A sarcastic brass clockwork owl beside the prompt that reacts to the session and, now and then, says something about it"
     }
   ]
 }

@@ -12,7 +12,7 @@ ticket runner, language plugins, tool rules, and working style rules for `~/.cla
 | `agents/` | Sub-agents: spec-critic (plan review for `/spec`), run-tickets workflow (ticket-implementer, ticket-verifier, ticket-reviewer), and design-sprint (design-designer, design-evaluator) |
 | `languages/` | Per-language Claude Code plugins (Go, Python, JS/SvelteKit) — auto-formatting hooks + coding rules |
 | `plugins/` | General-purpose Claude Code plugins — workflow automation and tool integrations |
-| `mods/` | Claude Code mods (`workflow-monitor`, `ticket-panes`, `worktree-snapshots`, `project-nudge`): hooks modules that change Claude Code's own interface or behaviour, installed from their own marketplace by `install.sh`. See [`mods/README.md`](mods/README.md) |
+| `mods/` | Claude Code mods (`workflow-monitor`, `ticket-panes`, `worktree-snapshots`, `project-nudge`, `clockwork-owl`): hooks modules that change Claude Code's own interface or behaviour, installed from their own marketplace by `install.sh`. See [`mods/README.md`](mods/README.md) |
 | `optional_rules/` | Shared opt-in rules, wired into a project with `/load-shared-rule` |
 | `tools/` | Per-tool rule files (Railway, SQLAlchemy) — loaded via `.claude/rules/` symlinks |
 | `bin/` | Utility scripts: tk plugins (`tk-show-multi`, `tk-epic-status`, `tk-triage`, `tk-set`, `tk-backlog`) and `git-auto-commit.sh` |

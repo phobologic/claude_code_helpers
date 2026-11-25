@@ -10,6 +10,7 @@ marketplace, `claude-mods`, like `languages/`.
 | `worktree-snapshots` | Before each Bash command, saves the session's git checkout (tracked files as they are on disk, and untracked files that are not ignored) as a snapshot, so work a command destroys can be restored. Snapshots are kept for 3 days, then git cleans them up. It never asks anything and never stops a command. The `snapshots` skill (`/worktree-snapshots:snapshots`) lists, inspects and restores them. |
 | `ticket-panes` | Makes tk tickets clickable. A reply that mentions tickets gets a dim `tickets:` row under it, a button per ticket. In a session running in herdr, a button opens a Claude agent for that ticket in a side pane to the right, with the ticket drawn in a band above its prompt and, while a `/run-tickets` run is working on the ticket, the run's live status for it in a pane below. Outside herdr, and inside a side pane, a button opens a read-only ticket pane in Claude Code instead. |
 | `project-nudge` | A band above the prompt that says what to do next in this repo, from the repo's own `.claude/nudge/run` script: a title, a few lines, and a Load button that fills the prompt with the next command. The first time, it asks before running the script, and it asks again whenever the script or a file it relies on changes. The `nudge-setup` skill (`/project-nudge:nudge-setup`) writes the script for a repo. |
+| `clockwork-owl` | A sarcastic brass owl floating above the prompt's right edge. Its mood follows the session (working, waiting on you, a failed test run, asleep), and now and then it says something in a bubble: canned lines, or a Haiku remark about what you've been doing. A repo can tune its voice and what it reacts to in `.claude/owl.json`. `/owl` hushes or hides it. |
 
 ## Install
 
@@ -24,6 +25,7 @@ claude plugin install workflow-monitor@claude-mods --scope user
 claude plugin install ticket-panes@claude-mods --scope user
 claude plugin install worktree-snapshots@claude-mods --scope user
 claude plugin install project-nudge@claude-mods --scope user
+claude plugin install clockwork-owl@claude-mods --scope user   # not in a toolkit yet
 ```
 
 `--scope project` instead installs it for one repo only. `/plugin` lists, disables and
@@ -291,3 +293,40 @@ a session loads it from a folder you own.
   `ticket-panes` in its side panes. Processes started from such a session inherit it.
 - Errors (non-zero exit, a timeout after 5 s, bad output) show in a red band with
   the script's stderr and a toast; a contract error also offers the skill.
+
+`clockwork-owl` notes:
+- A brass owl, 12 columns by 6 rows of half-block pixels, floating just above the
+  prompt's right edge (a `BesidePrompt` cell). It needs the fullscreen layout in the
+  terminal, or the desktop app's Code tab, and hides when there is no room to float.
+  It stays off in a side session (`CLAUDE_SIDE_SESSION` set).
+- Moods: idle, working (glances around now and then), waiting (a permission prompt
+  in the main loop), failed (a test run failed, held 45 s), happy (tests green again,
+  held 5 s), sleepy (nothing for 15 minutes). At rest it only blinks.
+- Remarks show in a bubble for about 10 s, at most one every 4 minutes. Canned lines
+  cover common moments (greeting, test failures, permission prompts, long turns,
+  one-word prompts, interrupts, compaction), each with odds, and no line repeats in a
+  session while others are left. After a main-loop turn, at most every 12 minutes and
+  20 times a session, Haiku gets a digest of recent activity (prompts cut to 120
+  characters, commands to 80, files edited and how often, test runs, turn lengths) and
+  answers one line or `SKIP`. Each Haiku call counts toward the session's cost.
+- It watches tool calls through `classic.PreToolUse`, `classic.PostToolUse` and
+  `classic.PostToolUseFailure` (a Bash command's nonzero exit), never a `tool.call` or
+  `tool.run` hook that may match every tool: such a hook, even one that only passes the
+  call on, turns off moving that tool to the background and its live output in every
+  session the mod is installed in. A command sent to the background and an
+  interrupted one are no verdict, so the owl doesn't react to them.
+- `/owl` lists the commands: `say` (ask Haiku now), `hush` / `unhush` (remarks off or
+  on for the session), `hide` / `show`, `config` (re-read `.claude/owl.json`).
+- A repo can tune it with `.claude/owl.local.json` (personal, kept out of git) and
+  `.claude/owl.json` (committed), read as data and never run. Each holds `voice` (a
+  note about the repo, added to the Haiku prompt), `lines` (extra lines per moment),
+  `rules` (each watches one tool, Bash by default, with a `match` regular expression
+  on its subject: a command, a skill name, a file path, or an MCP tool's arguments;
+  an optional `mood` while it runs, `pass` and `fail` lines, and a `label` for the
+  digest) and `testCommands: false` to turn off the built-in test-run detection. The
+  local file wins: its voice replaces, its lines add, its rules go first.
+- The bundled `owl-setup` skill (`/clockwork-owl:owl-setup`) surveys a repo and writes
+  the local file (the committed one only when asked, after showing the draft). It
+  tests every rule against real sample calls with the mod's `owl_check` tool
+  (`mcp__clockwork-owl__owl_check`), which also re-reads both files into the running
+  owl. `skills/owl-setup/SKILL.md` holds the full format.
