@@ -24,7 +24,10 @@ async function snapshot($: EngineInterface, command: string): Promise<string | u
 export const register: Register = (on) => {
   let warned = false
 
-  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+  // classic.PreToolUse, not tool.call: it fires at the same point, before the command runs, but a
+  // tool.call hook on Bash, even one that only passes the call on, turns off moving a running
+  // command to the background and its live output, in every session this mod is loaded in.
+  on('classic.PreToolUse', { tool: 'Bash' }, async ($, e, next) => {
     const failure = await snapshot($, String(e.command ?? ''))
     if (failure !== undefined && !warned) {
       warned = true
