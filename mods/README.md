@@ -296,8 +296,10 @@ a session loads it from a folder you own.
 
 `clockwork-owl` notes:
 - A brass owl, 12 columns by 6 rows of half-block pixels, floating just above the
-  prompt's right edge (a `BesidePrompt` cell). It needs the fullscreen layout in the
-  terminal, or the desktop app's Code tab, and hides when there is no room to float.
+  prompt, flush with the right edge (a `BesidePrompt` cell). It can't sit higher: the
+  terminal lets a float reach only 8 rows above the prompt (`floatRows`). It needs
+  the fullscreen layout in the terminal, or the desktop app's Code tab, and hides
+  when there is no room to float.
   It stays off in a side session (`CLAUDE_SIDE_SESSION` set).
 - Moods: idle, working (glances around now and then), waiting (a permission prompt
   in the main loop), failed (a test run failed, held 45 s), happy (tests green again,
@@ -316,9 +318,12 @@ a session loads it from a folder you own.
   session the mod is installed in. A command sent to the background and an
   interrupted one are no verdict, so the owl doesn't react to them.
 - The sprite is drawn in a `Client` (`hooks/owl-client.tsx`), so it hears the mouse.
-  A left click folds him down to the top of his head (3 rows) peering over the prompt,
-  where he keeps his remarks to himself; a click on that, `/owl toggle`, or an
-  explicit `/owl say` brings him back. While the pointer is over him his pupils
+  A left click folds him: he slides off the right edge upright, then his head slides
+  back in tipped on its side (the sprite turned a quarter, 7 columns showing: tufts,
+  both eyes stacked, beak tip), peeking round the edge, and he keeps his remarks to
+  himself. The slide runs on the `Client`'s own frame clock and is skipped under
+  reduced motion. A click on the peek, `/owl toggle`, or an explicit `/owl say`
+  slides him back. While the pointer is over him (upright or peeking) his pupils
   follow it; a `Client` only hears the pointer over its own region, so he doesn't
   track it across the screen. If the `Client` fails to load or draw, he falls back
   to the plain drawing, which can't be clicked.

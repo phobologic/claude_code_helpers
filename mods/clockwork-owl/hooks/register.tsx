@@ -4,7 +4,7 @@ import type { Hook, Register } from 'claude-code'
 import type { Look, Mood, OwlPrefs, OwlView } from '../types'
 import { EMPTY, mergeConfigs, parseConfig, type RepoConfig, type Rule, ruleFor, subjectOf } from './config'
 import type { OwlClientProps } from './owl-client'
-import { BUBBLE_BORDER, FOLDED_HEIGHT, foldedPixels, HEIGHT, pixels, rows, WIDTH } from './sprites'
+import { BUBBLE_BORDER, frameGrid, HEIGHT, PEEK_FRAME, rows, WIDTH } from './sprites'
 import { cleanReply, isLazyPrompt, isTestCommand, type Moment, pick, pickFrom, SYSTEM } from './voice'
 
 // clockwork-owl: a brass owl floating just above the prompt's right edge. Its
@@ -381,7 +381,7 @@ const HELP = [
   '/owl unhush     remarks back on',
   '/owl hide       hide the owl this session',
   '/owl show       show it again',
-  '/owl toggle     fold him down to his eyes, or bring him back (or click him)',
+  '/owl toggle     tuck him off the right edge to peek, or bring him back (or click him)',
   '/owl config     re-read .claude/owl.json and owl.local.json and report what they hold',
   '',
   'To set the owl up for this repo: /clockwork-owl:owl-setup',
@@ -551,9 +551,8 @@ export const register: Register = on => {
     if (isOff || (e.surface !== 'terminal' && e.surface !== 'desktop')) return next(e)
     const p = await read($, prefs)
     if (p.isHidden) return next(e)
-    const height = p.isFolded ? FOLDED_HEIGHT : HEIGHT
     const { floatColumns, floatRows } = e.props
-    if (floatColumns < WIDTH + 2 || floatRows < height) return next(e)
+    if (floatColumns < WIDTH + 2 || floatRows < HEIGHT) return next(e)
 
     const v = await read($, view)
     const { Box, Text, Client } = $.ui.resolve(e)
@@ -562,7 +561,7 @@ export const register: Register = on => {
 
     const sprite = isClientBroken ? (
       <Box flexDirection="column">
-        {rows(p.isFolded ? foldedPixels(v.mood, v.look, v.isBlinking) : pixels(v.mood, v.look, v.isBlinking)).map(row => (
+        {rows(frameGrid(v.mood, v.look, v.isBlinking, p.isFolded ? PEEK_FRAME : 0)).map(row => (
           <Text>
             {row.map(run => (
               <Text color={run.color} backgroundColor={run.backgroundColor}>
@@ -573,18 +572,31 @@ export const register: Register = on => {
         ))}
       </Box>
     ) : (
-      <Client key="owl" module="./owl-client.tsx" props={owl} width={WIDTH} height={height} />
+      <Client key="owl" module="./owl-client.tsx" props={owl} width={WIDTH} height={HEIGHT} />
     )
+
+    // The bubble floats to his left, out of the flow, rising from his feet, so
+    // his own box stays the Client's size and the peek stays on the edge.
+    const bubble =
+      v.bubble && !p.isFolded && bubbleWidth >= 16 ? (
+        <Box
+          position="absolute"
+          bottom={0}
+          right={WIDTH + 1}
+          width={bubbleWidth}
+          borderStyle="round"
+          borderColor={BUBBLE_BORDER}
+          paddingX={1}
+        >
+          <Text>{v.bubble}</Text>
+        </Box>
+      ) : null
 
     return (
       <Box width={0}>
-        <Box position="absolute" anchor="above" right={1} flexDirection="row" alignItems="flex-end">
-          {v.bubble && !p.isFolded && bubbleWidth >= 16 ? (
-            <Box borderStyle="round" borderColor={BUBBLE_BORDER} paddingX={1} marginRight={1} width={bubbleWidth}>
-              <Text>{v.bubble}</Text>
-            </Box>
-          ) : null}
+        <Box key="perch" position="absolute" anchor="above" right={0} width={WIDTH} height={HEIGHT}>
           {sprite}
+          {bubble}
         </Box>
       </Box>
     )

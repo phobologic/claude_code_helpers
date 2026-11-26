@@ -3,7 +3,7 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { mergeConfigs, parseConfig, ruleFor, subjectOf } from './config'
 import type { Look, Mood } from '../types'
-import { foldedPixels, lookAt, pixels, rows } from './sprites'
+import { frameGrid, lookAt, PEEK_COLUMNS, PEEK_FRAME, pixels, rows, tilt } from './sprites'
 import { cleanReply, isLazyPrompt, isTestCommand, LINES } from './voice'
 
 const ROOT = '/repo'
@@ -209,7 +209,9 @@ function expected(grid: string[]): string {
 
 const sprite = (mood: Mood, look: Look) => expected(pixels(mood, look, false))
 
-test('clicking the owl folds him to the top of his head and hushes him; clicking again brings him back', async ($, on) => {
+const isFolded = async (ui: Mounted) => (await ui.find({ type: 'Client', key: 'owl' }))?.props.props?.isFolded
+
+test('clicking the owl slides him off the right edge to peek sideways and hushes him; clicking again brings him back', async ($, on) => {
   const { w, clock } = world(on)
   await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...CELL, surface: 'terminal' })
@@ -218,21 +220,49 @@ test('clicking the owl folds him to the top of his head and hushes him; clicking
 
   await ui.pointer({ in: 'owl', type: 'down', x: 5, y: 2, button: 'left' })
   await ui.pointer({ in: 'owl', type: 'up', x: 5, y: 2, button: 'left' })
-  expect(await drawn(ui as never)).toBe(expected(foldedPixels('idle', 'center', false)))
-  expect((await ui.find({ type: 'Client', key: 'owl' }))?.props.height).toBe(3)
+  expect(await isFolded(ui as never)).toBe(true)
   expect(await bubbleText(ui, /\w/)).toBeUndefined()
+  await ui.advance(1000)
+  expect(await drawn(ui as never)).toBe(expected(frameGrid('idle', 'center', false, PEEK_FRAME)))
 
   // Folded, he keeps his remarks to himself; an explicit /owl say brings him back up to say it.
   await $.command.run({ command: 'owl', args: 'say' } as never)
   await clock.settle()
   expect(w.asked.length).toBe(1)
-  expect((await ui.find({ type: 'Client', key: 'owl' }))?.props.height).toBe(6)
+  expect(await isFolded(ui as never)).toBe(false)
+  await ui.advance(1000)
+  expect(await drawn(ui as never)).toBe(sprite('idle', 'center'))
 
   await $.command.run({ command: 'owl', args: 'toggle' } as never)
-  expect((await ui.find({ type: 'Client', key: 'owl' }))?.props.height).toBe(3)
-  await ui.pointer({ in: 'owl', type: 'down', x: 5, y: 1, button: 'left' })
-  expect((await ui.find({ type: 'Client', key: 'owl' }))?.props.height).toBe(6)
+  expect(await isFolded(ui as never)).toBe(true)
+  await ui.advance(1000)
+  await ui.pointer({ in: 'owl', type: 'down', x: 10, y: 1, button: 'left' })
+  expect(await isFolded(ui as never)).toBe(false)
   await ui.unmount()
+})
+
+test('he sits flush on the right edge, and a bubble beside him leaves his box the sprite size', async ($, on) => {
+  world(on)
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...CELL, surface: 'terminal' })
+  expect(await bubbleText(ui, /./)).toBeDefined() // the greeting
+  const perch = (await ui.find({ key: 'perch' }))?.props
+  expect([perch?.right, perch?.width, perch?.height]).toEqual([0, 12, 6])
+  await ui.unmount()
+})
+
+test('frameGrid: the fold slides him out upright, then back in tilted with both eyes showing', () => {
+  const up = frameGrid('idle', 'center', false, 0)
+  expect(up).toEqual(pixels('idle', 'center', false))
+  const peek = frameGrid('idle', 'center', false, PEEK_FRAME)
+  expect(peek.length).toBe(12)
+  // Only the last PEEK_COLUMNS columns are painted, and both pupils are in them.
+  for (const row of peek) expect(row.slice(0, 12 - PEEK_COLUMNS)).toBe('.'.repeat(12 - PEEK_COLUMNS))
+  expect(peek.filter(row => row.includes('P')).length).toBe(2)
+  // Tilted, a pointer below has him look down: the pupil sits on each eye's lower edge.
+  const down = tilt(pixels('idle', 'down', false, true))
+  expect(down[4]?.[4]).toBe('P')
+  expect(down[9]?.[4]).toBe('P')
 })
 
 test('his pupils follow the pointer over him, and go back when it leaves', async ($, on) => {
